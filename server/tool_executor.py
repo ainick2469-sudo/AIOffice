@@ -1,0 +1,128 @@
+"""AI Office — Tool Executor. Parses tool calls from agent messages and runs them."""
+
+import re
+import logging
+from typing import Optional
+from .tool_gateway import tool_read_file, tool_search_files, tool_run_command, tool_write_file
+from .database import insert_message
+from .websocket import manager
+
+logger = logging.getLogger("ai-office.toolexec")
+
+# Pattern: agents wrap tool calls in ```tool blocks
+# [TOOL:read] server/main.py
+# [TOOL:run] python -m pytest tests/
+# [TOOL:search] *.py
+# [TOOL:write] path/to/file
+# ```content here```
+TOOL_PATTERNS = [
+    (r'\[TOOL:read\]\s*(.+)', 'read'),
+    (r'\[TOOL:run\]\s*(.+)', 'run'),
+    (r'\[TOOL:search\]\s*(.+)', 'search'),
+    (r'\[TOOL:write\]\s*(\S+)\s*\n```[\w]*\n(.*?)```', 'write'),
+]
+
+# Alt patterns: agents sometimes use natural language
+ALT_PATTERNS = [
+    (r'(?:let me|I\'ll|going to) (?:read|look at|check|open)\s+[`"]?(\S+\.\w+)[`"]?', 'read'),
+    (r'(?:let me|I\'ll|going to) (?:run|execute)\s+[`"]?(.+?)[`"]?(?:\s|$)', 'run'),
+    (r'(?:let me|I\'ll|going to) (?:search|find|look for)\s+[`"]?(.+?)[`"]?(?:\s|$)', 'search'),
+]
+
+
+def parse_tool_calls(text: str) -> list[dict]:
+    """Extract tool calls from agent message text."""
+    calls = []
+
+    # Check explicit [TOOL:x] patterns first
+    for pattern, tool_type in TOOL_PATTERNS:
+        if tool_type == 'write':
+            matches = re.finditer(pattern, text, re.DOTALL)
+            for m in matches:
+                calls.append({"type": "write", "path": m.group(1).strip(), "content": m.group(2)})
+        else:
+            matches = re.finditer(pattern, text, re.MULTILINE)
+            for m in matches:
+                calls.append({"type": tool_type, "arg": m.group(1).strip()})
+
+    # If no explicit tool calls, check alt patterns
+    if not calls:
+        for pattern, tool_type in ALT_PATTERNS:
+            matches = re.finditer(pattern, text, re.IGNORECASE)
+            for m in matches:
+                calls.append({"type": tool_type, "arg": m.group(1).strip()})
+
+    return calls
+
+
+async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> list[dict]:
+    """Execute tool calls and broadcast results to chat."""
+    results = []
+
+    for call in calls:
+        tool_type = call["type"]
+        logger.info(f"[{agent_id}] executing {tool_type}: {call.get('arg', call.get('path', ''))[:80]}")
+
+        try:
+            if tool_type == "read":
+                result = await tool_read_file(agent_id, call["arg"])
+                if result["ok"]:
+                    # Truncate for chat display
+                    content = result["content"]
+                    if len(content) > 2000:
+                        content = content[:2000] + "\n... (truncated)"
+                    msg = f"📄 **Read `{call['arg']}`**\n```\n{content}\n```"
+                else:
+                    msg = f"❌ **Read failed:** {result['error']}"
+
+            elif tool_type == "run":
+                result = await tool_run_command(agent_id, call["arg"])
+                if result["ok"]:
+                    stdout = result.get("stdout", "").strip()
+                    if len(stdout) > 1500:
+                        stdout = stdout[:1500] + "\n... (truncated)"
+                    msg = f"⚡ **Ran `{call['arg']}`** (exit: {result['exit_code']})\n```\n{stdout}\n```"
+                else:
+                    err = result.get("error", result.get("stderr", "unknown"))
+                    msg = f"❌ **Command failed:** `{call['arg']}`\n```\n{err}\n```"
+
+            elif tool_type == "search":
+                result = await tool_search_files(agent_id, call["arg"])
+                if result["ok"]:
+                    matches = result["matches"][:20]
+                    file_list = "\n".join(f"  {f}" for f in matches)
+                    msg = f"🔍 **Found {len(result['matches'])} files matching `{call['arg']}`**\n```\n{file_list}\n```"
+                else:
+                    msg = f"❌ **Search failed:** {result['error']}"
+
+            elif tool_type == "write":
+                # Preview first (no auto-approve)
+                result = await tool_write_file(agent_id, call["path"], call["content"], approved=False)
+                if result.get("requires_approval"):
+                    diff = result.get("diff", "")
+                    if len(diff) > 1500:
+                        diff = diff[:1500] + "\n... (truncated)"
+                    msg = f"✏️ **Write preview for `{call['path']}`** ({result['size']} chars)\n```diff\n{diff}\n```\n⚠️ Requires approval to write."
+                else:
+                    msg = f"❌ **Write failed:** {result.get('error', 'unknown')}"
+            else:
+                continue
+
+            # Save and broadcast tool result
+            saved = await insert_message(
+                channel=channel,
+                sender=agent_id,
+                content=msg,
+                msg_type="tool_result",
+            )
+            await manager.broadcast(channel, {"type": "chat", "message": saved})
+            results.append({"type": tool_type, "result": result, "msg": msg})
+
+        except Exception as e:
+            logger.error(f"Tool exec error: {e}")
+            err_msg = f"❌ **Tool error:** {e}"
+            saved = await insert_message(channel=channel, sender=agent_id, content=err_msg, msg_type="tool_result")
+            await manager.broadcast(channel, {"type": "chat", "message": saved})
+            results.append({"type": tool_type, "error": str(e)})
+
+    return results

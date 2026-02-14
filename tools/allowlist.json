@@ -1,0 +1,27 @@
+{
+  "description": "AI Office Tool Gateway — Allowed commands and file patterns",
+  "allowed_commands": [
+    "python -m pytest",
+    "python -m py_compile",
+    "python -c",
+    "npm test",
+    "npm run lint",
+    "npm run build",
+    "npx vite build",
+    "dir ",
+    "type ",
+    "findstr ",
+    "git status",
+    "git log",
+    "git diff",
+    "ollama list"
+  ],
+  "readable_extensions": [
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".jsonl",
+    ".md", ".txt", ".css", ".html", ".toml", ".yaml", ".yml",
+    ".cfg", ".ini", ".sql", ".sh", ".bat", ".ps1", ".csv"
+  ],
+  "sandbox_root": "C:/AI_WORKSPACE/ai-office",
+  "max_file_read_chars": 10000,
+  "command_timeout_seconds": 30
+}
