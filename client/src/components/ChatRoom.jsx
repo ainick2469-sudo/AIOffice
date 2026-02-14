@@ -8,6 +8,7 @@ export default function ChatRoom({ channel }) {
   const [input, setInput] = useState('');
   const [agents, setAgents] = useState({});
   const [convoStatus, setConvoStatus] = useState(null);
+  const [channelName, setChannelName] = useState(null);
   const bottomRef = useRef(null);
   const statusInterval = useRef(null);
 
@@ -19,6 +20,23 @@ export default function ChatRoom({ channel }) {
       setAgents(map);
     });
   }, []);
+
+  // Fetch custom channel name
+  useEffect(() => {
+    setChannelName(null);
+    fetch('/api/channels').then(r => r.json()).then(chs => {
+      const ch = chs.find(c => c.id === channel);
+      if (ch) setChannelName(ch.name);
+    });
+    // Re-check every 15s for auto-renames
+    const interval = setInterval(() => {
+      fetch('/api/channels').then(r => r.json()).then(chs => {
+        const ch = chs.find(c => c.id === channel);
+        if (ch) setChannelName(ch.name);
+      });
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [channel]);
 
   // Load history on channel switch
   useEffect(() => {
@@ -77,9 +95,9 @@ export default function ChatRoom({ channel }) {
     return 'msg-agent';
   };
 
-  const channelLabel = channel === 'main'
-    ? '# Main Room'
-    : `DM: ${agents[channel.replace('dm:', '')]?.display_name || channel}`;
+  const channelLabel = channelName
+    ? (channel === 'main' ? `# ${channelName}` : channelName)
+    : (channel === 'main' ? '# Main Room' : `DM: ${agents[channel.replace('dm:', '')]?.display_name || channel}`);
 
   const isActive = convoStatus?.active;
 

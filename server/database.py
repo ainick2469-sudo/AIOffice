@@ -52,6 +52,12 @@ CREATE TABLE IF NOT EXISTS tool_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS channel_names (
+    channel_id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
@@ -180,5 +186,36 @@ async def get_agent(agent_id: str) -> Optional[dict]:
         row = await db.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
         result = await row.fetchone()
         return dict(result) if result else None
+    finally:
+        await db.close()
+
+
+async def get_channel_name(channel_id: str) -> Optional[str]:
+    db = await get_db()
+    try:
+        row = await db.execute("SELECT display_name FROM channel_names WHERE channel_id = ?", (channel_id,))
+        result = await row.fetchone()
+        return result["display_name"] if result else None
+    finally:
+        await db.close()
+
+
+async def set_channel_name(channel_id: str, display_name: str):
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT OR REPLACE INTO channel_names (channel_id, display_name, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+            (channel_id, display_name))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_all_channel_names() -> dict:
+    db = await get_db()
+    try:
+        rows = await db.execute("SELECT channel_id, display_name FROM channel_names")
+        results = await rows.fetchall()
+        return {r["channel_id"]: r["display_name"] for r in results}
     finally:
         await db.close()

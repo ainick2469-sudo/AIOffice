@@ -5,9 +5,16 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick 
   const [channels, setChannels] = useState([]);
   const [agents, setAgents] = useState([]);
 
-  useEffect(() => {
+  const loadChannels = () => {
     fetchChannels().then(setChannels).catch(console.error);
+  };
+
+  useEffect(() => {
+    loadChannels();
     fetchAgents().then(setAgents).catch(console.error);
+    // Poll channels every 10s to pick up auto-renames
+    const interval = setInterval(loadChannels, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   const agentMap = {};
@@ -17,7 +24,7 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick 
     <div className="sidebar">
       <div className="sidebar-header">
         <h2>🏢 AI Office</h2>
-        <span className="version">v0.2</span>
+        <span className="version">v0.3</span>
       </div>
 
       <div className="channel-section">
@@ -27,6 +34,7 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick 
             key={ch.id}
             className={`channel-btn ${currentChannel === ch.id ? 'active' : ''}`}
             onClick={() => onSelectChannel(ch.id)}
+            title={ch.name}
           >
             # {ch.name}
           </button>

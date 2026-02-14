@@ -32,15 +32,29 @@ async def get_messages(channel: str, limit: int = 50, before_id: Optional[int] =
 async def list_channels():
     """List available channels: main + dm:<agent_id> for each active agent."""
     agents = await db.get_agents(active_only=True)
-    channels = [{"id": "main", "name": "Main Room", "type": "group"}]
+    custom_names = await db.get_all_channel_names()
+
+    main_name = custom_names.get("main", "Main Room")
+    channels = [{"id": "main", "name": main_name, "type": "group"}]
     for a in agents:
+        dm_id = f"dm:{a['id']}"
         channels.append({
-            "id": f"dm:{a['id']}",
-            "name": f"DM: {a['display_name']}",
+            "id": dm_id,
+            "name": custom_names.get(dm_id, f"DM: {a['display_name']}"),
             "type": "dm",
             "agent_id": a["id"],
         })
     return channels
+
+
+@router.patch("/channels/{channel_id}/name")
+async def rename_channel(channel_id: str, body: dict):
+    """Manually rename a channel."""
+    name = body.get("name", "").strip()
+    if not name:
+        return {"error": "Name required"}
+    await db.set_channel_name(channel_id, name)
+    return {"ok": True, "channel": channel_id, "name": name}
 
 
 @router.post("/tasks")

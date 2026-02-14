@@ -24,6 +24,7 @@ Team:
 - lore: storytelling, narrative, world-building, creative writing
 - director: big decisions, strategy, task assignment, leadership, complex problems
 - researcher: research, documentation, best practices, fact-checking, "how should we"
+- sage: scope check, focus, "are we overbuilding?", priorities, shipping, realism, big picture
 
 Rules:
 - ALWAYS select 2-4 agents, never just 1
@@ -32,9 +33,12 @@ Rules:
 - For design: uiux, art
 - For general/greeting: producer, spark
 - For "what should we build": spark, architect, producer, director
-- For complex decisions or strategy: director, architect
+- For complex decisions or strategy: director, architect, sage
 - For "how to" or "best way": researcher, architect
 - For research/docs: researcher
+- For scope/focus/priority questions: sage, producer, director
+- When many features are discussed: ALWAYS include sage
+- For "are we done" or "what's left" or "ship it": sage, producer
 
 /no_think
 Respond ONLY with JSON: {"agents": ["id1", "id2", "id3"]}"""
@@ -81,6 +85,22 @@ KEYWORD_MAP = {
     "hard": ["director", "researcher"],
     "nova": ["director"],
     "scout": ["researcher"],
+    "sage": ["sage"],
+    "scope": ["sage", "producer", "director"],
+    "focus": ["sage", "producer"],
+    "priority": ["sage", "producer", "director"],
+    "ship": ["sage", "producer"],
+    "done": ["sage", "producer"],
+    "too many": ["sage", "producer"],
+    "feature creep": ["sage", "director"],
+    "mvp": ["sage", "architect", "producer"],
+    "bloat": ["sage", "reviewer"],
+    "realistic": ["sage", "reviewer"],
+    "overbuil": ["sage", "reviewer"],
+    "big picture": ["sage", "director"],
+    "step back": ["sage", "director"],
+    "are we": ["sage", "producer"],
+    "what's left": ["sage", "producer"],
 }
 
 # Default for anything unmatched — get the conversation started
@@ -134,7 +154,7 @@ def _parse_router_response(text: str) -> Optional[list[str]]:
     return None
 
 
-VALID_IDS = {"spark", "architect", "builder", "reviewer", "qa", "uiux", "art", "producer", "lore", "director", "researcher"}
+VALID_IDS = {"spark", "architect", "builder", "reviewer", "qa", "uiux", "art", "producer", "lore", "director", "researcher", "sage"}
 
 
 async def route(message: str) -> list[str]:

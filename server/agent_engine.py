@@ -11,7 +11,7 @@ import re
 from typing import Optional
 from . import ollama_client
 from .router_agent import route
-from .database import get_agent, get_agents, get_messages, insert_message
+from .database import get_agent, get_agents, get_messages, insert_message, get_channel_name, set_channel_name
 from .websocket import manager
 from .memory import read_all_memory_for_agent
 from .distiller import maybe_distill
@@ -30,12 +30,12 @@ _active: dict[str, bool] = {}
 _msg_count: dict[str, int] = {}
 _user_interrupt: dict[str, str] = {}
 
-ALL_AGENT_IDS = ["spark", "architect", "builder", "reviewer", "qa", "uiux", "art", "producer", "lore", "director", "researcher"]
+ALL_AGENT_IDS = ["spark", "architect", "builder", "reviewer", "qa", "uiux", "art", "producer", "lore", "director", "researcher", "sage"]
 AGENT_NAMES = {
     "spark": "Spark", "architect": "Ada", "builder": "Max",
     "reviewer": "Rex", "qa": "Quinn", "uiux": "Uma",
     "art": "Iris", "producer": "Pam", "lore": "Leo",
-    "director": "Nova", "researcher": "Scout",
+    "director": "Nova", "researcher": "Scout", "sage": "Sage",
 }
 
 
@@ -352,9 +352,65 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
         _msg_count.pop(channel, None)
 
 
+_user_msg_count: dict[str, int] = {}  # track user messages per channel for auto-naming
+_named_channels: set = set()  # channels that have been auto-named
+
+
+async def _auto_name_channel(channel: str):
+    """After 3 user messages, auto-generate a topic name for the channel."""
+    if channel in _named_channels or channel.startswith("dm:"):
+        return
+
+    count = _user_msg_count.get(channel, 0)
+    if count < 3:
+        return
+
+    # Check if already named in DB
+    existing = await get_channel_name(channel)
+    if existing:
+        _named_channels.add(channel)
+        return
+
+    # Get recent messages to summarize
+    messages = await get_messages(channel, limit=10)
+    if not messages:
+        return
+
+    transcript = "\n".join(f"{m['sender']}: {m['content'][:100]}" for m in messages)
+
+    try:
+        name = await ollama_client.generate(
+            model="qwen3:1.7b",
+            prompt=f"Read this conversation and write a SHORT topic name (3-6 words max, no quotes, no punctuation). Examples: 'Game Audio Architecture', 'Login Page Redesign', 'API Rate Limiting Plan'.\n\n{transcript}\n\n/no_think\nTopic name:",
+            system="You generate short topic names. Reply with ONLY the topic name, nothing else. No quotes. No explanation.",
+            temperature=0.3,
+            max_tokens=20,
+        )
+        if name:
+            name = name.strip().strip('"').strip("'").strip()
+            # Remove think tags if present
+            name = re.sub(r'<think>.*?</think>', '', name, flags=re.DOTALL).strip()
+            if 2 < len(name) < 60:
+                await set_channel_name(channel, name)
+                _named_channels.add(channel)
+                # Broadcast rename to all clients
+                await manager.broadcast(channel, {
+                    "type": "channel_rename",
+                    "channel": channel,
+                    "name": name,
+                })
+                logger.info(f"Auto-named #{channel} -> '{name}'")
+    except Exception as e:
+        logger.error(f"Auto-name failed: {e}")
+
+
 async def process_message(channel: str, user_message: str):
     """Main entry: start or interrupt a conversation."""
     logger.info(f"Processing: [{channel}] {user_message[:80]}")
+
+    # Track user messages for auto-naming
+    _user_msg_count[channel] = _user_msg_count.get(channel, 0) + 1
+    asyncio.create_task(_auto_name_channel(channel))
 
     # DM: simple 1-on-1
     if channel.startswith("dm:"):
