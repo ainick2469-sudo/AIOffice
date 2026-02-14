@@ -698,3 +698,106 @@ body {
 .staff-emoji { font-size: 14px; margin-right: 2px; }
 .staff-badge { font-size: 10px; margin-left: auto; }
 .staff-item:hover { background: rgba(255,255,255,0.04); border-radius: 4px; }
+
+
+/* ── Multi-Room Chat ─────────────────── */
+.section-header { display: flex; justify-content: space-between; align-items: center; }
+.section-header h3 { margin: 0; }
+.add-room-btn {
+  background: none; border: 1px solid var(--border); color: var(--text-secondary);
+  width: 22px; height: 22px; border-radius: 4px; cursor: pointer;
+  font-size: 16px; line-height: 1; display: flex; align-items: center; justify-content: center;
+}
+.add-room-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
+
+.create-room {
+  display: flex; gap: 4px; padding: 4px 0; margin-bottom: 4px;
+}
+.create-room input {
+  flex: 1; background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 8px; color: var(--text-primary);
+  font-size: 12px; font-family: inherit;
+}
+.create-room button {
+  padding: 4px 8px; border-radius: 4px; border: none;
+  background: var(--accent); color: white; cursor: pointer; font-size: 11px;
+}
+
+.channel-row {
+  display: flex; align-items: center; position: relative;
+}
+.channel-row .channel-btn { flex: 1; }
+.channel-row.active { background: rgba(255,255,255,0.06); border-radius: 4px; }
+.delete-room-btn {
+  background: none; border: none; color: var(--text-muted);
+  cursor: pointer; font-size: 16px; padding: 2px 6px;
+  opacity: 0; transition: opacity 0.15s;
+}
+.channel-row:hover .delete-room-btn { opacity: 1; }
+.delete-room-btn:hover { color: var(--offline); }
+
+.delete-confirm-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6); display: flex;
+  align-items: center; justify-content: center; z-index: 200;
+}
+.delete-confirm-box {
+  background: var(--bg-sidebar); border: 1px solid var(--border);
+  border-radius: 10px; padding: 20px; width: 320px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+}
+.delete-confirm-box p { margin: 0 0 14px 0; font-size: 14px; color: var(--text-primary); }
+.del-btn {
+  display: block; width: 100%; padding: 8px; border-radius: 6px;
+  border: none; cursor: pointer; font-size: 13px; margin-bottom: 6px;
+  font-family: inherit;
+}
+.del-all { background: #DC2626; color: white; }
+.del-all:hover { background: #B91C1C; }
+.del-keep { background: rgba(255,255,255,0.08); color: var(--text-primary); }
+.del-keep:hover { background: rgba(255,255,255,0.12); }
+.del-cancel { background: none; color: var(--text-muted); }
+.del-cancel:hover { color: var(--text-primary); }
+
+
+/* ── Memory UI in Agent Profile ──────── */
+.ap-memories-section { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.ap-mem-header { display: flex; justify-content: space-between; align-items: center; }
+.ap-mem-header h4 { margin: 0; }
+.ap-cleanup-btn {
+  background: none; border: 1px solid var(--border); color: var(--text-secondary);
+  padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 11px;
+}
+.ap-cleanup-btn:hover { background: rgba(255,255,255,0.08); }
+
+.ap-mem-filters {
+  display: flex; gap: 4px; flex-wrap: wrap; margin: 6px 0;
+}
+.ap-mem-filters button {
+  background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+  color: var(--text-secondary); padding: 2px 8px; border-radius: 12px;
+  cursor: pointer; font-size: 11px; text-transform: capitalize;
+}
+.ap-mem-filters button.active { color: white; border-color: var(--accent); background: rgba(99,102,241,0.2); }
+.ap-mem-filters button:hover { background: rgba(255,255,255,0.1); }
+
+.ap-memory-scroll {
+  flex: 1; overflow-y: auto; max-height: 300px;
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px; background: rgba(0,0,0,0.15);
+}
+.ap-memory-scroll::-webkit-scrollbar { width: 6px; }
+.ap-memory-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.ap-memory {
+  display: flex; align-items: flex-start; gap: 6px; padding: 5px 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 12px;
+}
+.ap-memory:last-child { border-bottom: none; }
+.ap-memory-type {
+  flex-shrink: 0; padding: 1px 6px; border-radius: 4px;
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+}
+.ap-memory-content { flex: 1; color: var(--text-primary); line-height: 1.4; }
+.ap-memory-time { flex-shrink: 0; color: var(--text-muted); font-size: 10px; margin-top: 2px; }
+.ap-mem-empty { color: var(--text-muted); text-align: center; padding: 20px; font-size: 13px; }

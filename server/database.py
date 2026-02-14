@@ -8,6 +8,13 @@ from typing import Optional
 DB_PATH = Path(__file__).parent.parent / "data" / "office.db"
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS channels (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT DEFAULT 'group',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL,
@@ -91,6 +98,7 @@ async def init_db():
     try:
         await db.executescript(SCHEMA)
         await _seed_agents(db)
+        await _seed_channels(db)
         await db.commit()
     finally:
         await db.close()
@@ -127,6 +135,60 @@ async def _seed_agents(db: aiosqlite.Connection):
                 agent.get("system_prompt", ""),
             ),
         )
+
+
+async def _seed_channels(db: aiosqlite.Connection):
+    """Create default main channel if it doesn't exist."""
+    existing = await db.execute("SELECT id FROM channels WHERE id = ?", ("main",))
+    if not await existing.fetchone():
+        await db.execute(
+            "INSERT INTO channels (id, name, type) VALUES (?, ?, ?)",
+            ("main", "Main Room", "group"))
+
+
+# ── Channel CRUD ───────────────────────────────────────────
+
+async def get_channels() -> list[dict]:
+    db = await get_db()
+    try:
+        rows = await db.execute("SELECT * FROM channels ORDER BY created_at")
+        return [dict(r) for r in await rows.fetchall()]
+    finally:
+        await db.close()
+
+
+async def create_channel(channel_id: str, name: str, ch_type: str = "group") -> dict:
+    db = await get_db()
+    try:
+        await db.execute(
+            "INSERT INTO channels (id, name, type) VALUES (?, ?, ?)",
+            (channel_id, name, ch_type))
+        await db.commit()
+        row = await db.execute("SELECT * FROM channels WHERE id = ?", (channel_id,))
+        return dict(await row.fetchone())
+    finally:
+        await db.close()
+
+
+async def delete_channel(channel_id: str, delete_messages: bool = True):
+    db = await get_db()
+    try:
+        if delete_messages:
+            await db.execute("DELETE FROM messages WHERE channel = ?", (channel_id,))
+        await db.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
+        await db.execute("DELETE FROM channel_names WHERE channel_id = ?", (channel_id,))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def rename_channel_db(channel_id: str, name: str):
+    db = await get_db()
+    try:
+        await db.execute("UPDATE channels SET name = ? WHERE id = ?", (name, channel_id))
+        await db.commit()
+    finally:
+        await db.close()
 
 
 # ── Query helpers ──────────────────────────────────────────

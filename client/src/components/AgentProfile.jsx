@@ -2,16 +2,48 @@ import { useState, useEffect } from 'react';
 
 export default function AgentProfile({ agentId, onClose }) {
   const [profile, setProfile] = useState(null);
+  const [memories, setMemories] = useState([]);
+  const [memFilter, setMemFilter] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!agentId) return;
     setLoading(true);
-    fetch(`/api/agents/${agentId}/profile`)
-      .then(r => r.json())
-      .then(data => { setProfile(data); setLoading(false); })
-      .catch(() => setLoading(false));
+    setMemFilter(null);
+    Promise.all([
+      fetch(`/api/agents/${agentId}/profile`).then(r => r.json()),
+      fetch(`/api/agents/${agentId}/memories?limit=100`).then(r => r.json()),
+    ]).then(([prof, mems]) => {
+      setProfile(prof);
+      setMemories(Array.isArray(mems) ? mems : []);
+      setLoading(false);
+    }).catch(() => setLoading(false));
   }, [agentId]);
+
+  const loadMemories = (type) => {
+    setMemFilter(type);
+    const url = type
+      ? `/api/agents/${agentId}/memories?limit=100&type=${type}`
+      : `/api/agents/${agentId}/memories?limit=100`;
+    fetch(url).then(r => r.json()).then(m => setMemories(Array.isArray(m) ? m : []));
+  };
+
+  const cleanupMemories = () => {
+    fetch(`/api/agents/${agentId}/memory/cleanup`, { method: 'POST' })
+      .then(r => r.json())
+      .then(() => loadMemories(memFilter));
+  };
+
+  const typeColors = {
+    decision: '#F59E0B', preference: '#8B5CF6', constraint: '#EF4444',
+    fact: '#3B82F6', todo: '#10B981', lore: '#EC4899',
+  };
+
+  const formatTime = (ts) => {
+    if (!ts) return '';
+    try { return new Date(ts).toLocaleDateString(); }
+    catch { return ''; }
+  };
 
   if (!agentId) return null;
   if (loading) return <div className="agent-profile-modal"><div className="ap-loading">Loading...</div></div>;
@@ -35,7 +67,7 @@ export default function AgentProfile({ agentId, onClose }) {
             <span className="ap-stat-label">Messages</span>
           </div>
           <div className="ap-stat">
-            <span className="ap-stat-num">{profile.memories?.length || 0}</span>
+            <span className="ap-stat-num">{memories.length}</span>
             <span className="ap-stat-label">Memories</span>
           </div>
           <div className="ap-stat">
@@ -49,19 +81,34 @@ export default function AgentProfile({ agentId, onClose }) {
           <code className="inline-code">{profile.model}</code>
         </div>
 
-        {profile.memories && profile.memories.length > 0 && (
-          <div className="ap-section">
-            <h4>Memories ({profile.memories.length})</h4>
-            <div className="ap-memory-list">
-              {profile.memories.slice(0, 10).map((m, i) => (
-                <div key={i} className="ap-memory">
-                  <span className="ap-memory-type">{m.type || 'fact'}</span>
-                  <span>{m.content}</span>
-                </div>
-              ))}
-            </div>
+        <div className="ap-section ap-memories-section">
+          <div className="ap-mem-header">
+            <h4>Memories ({memories.length})</h4>
+            <button className="ap-cleanup-btn" onClick={cleanupMemories} title="Remove duplicates">🧹 Clean</button>
           </div>
-        )}
+          <div className="ap-mem-filters">
+            <button className={!memFilter ? 'active' : ''} onClick={() => loadMemories(null)}>All</button>
+            {['decision','fact','todo','preference','constraint','lore'].map(t => (
+              <button key={t} className={memFilter === t ? 'active' : ''} onClick={() => loadMemories(t)}
+                style={memFilter === t ? { background: typeColors[t] + '33', borderColor: typeColors[t] } : {}}>
+                {t}
+              </button>
+            ))}
+          </div>
+          <div className="ap-memory-scroll">
+            {memories.length === 0 && (
+              <div className="ap-mem-empty">No memories yet. Start chatting to build memory.</div>
+            )}
+            {memories.map((m, i) => (
+              <div key={i} className="ap-memory">
+                <span className="ap-memory-type" style={{ background: (typeColors[m.type] || '#6B7280') + '25',
+                  color: typeColors[m.type] || '#6B7280' }}>{m.type || 'fact'}</span>
+                <span className="ap-memory-content">{m.content}</span>
+                {m.timestamp && <span className="ap-memory-time">{formatTime(m.timestamp)}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
 
         {profile.recent_messages && profile.recent_messages.length > 0 && (
           <div className="ap-section">

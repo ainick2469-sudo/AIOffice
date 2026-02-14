@@ -30,21 +30,54 @@ async def get_messages(channel: str, limit: int = 50, before_id: Optional[int] =
 
 @router.get("/channels")
 async def list_channels():
-    """List available channels: main + dm:<agent_id> for each active agent."""
+    """List all channels: group rooms + DMs for each active agent."""
+    channels = await db.get_channels()
     agents = await db.get_agents(active_only=True)
     custom_names = await db.get_all_channel_names()
 
-    main_name = custom_names.get("main", "Main Room")
-    channels = [{"id": "main", "name": main_name, "type": "group"}]
+    result = []
+    for ch in channels:
+        name = custom_names.get(ch["id"], ch["name"])
+        result.append({"id": ch["id"], "name": name, "type": ch["type"]})
+
+    # Add DM channels (virtual, not stored in DB)
     for a in agents:
         dm_id = f"dm:{a['id']}"
-        channels.append({
+        result.append({
             "id": dm_id,
             "name": custom_names.get(dm_id, f"DM: {a['display_name']}"),
             "type": "dm",
             "agent_id": a["id"],
         })
-    return channels
+    return result
+
+
+@router.post("/channels")
+async def create_channel_route(body: dict):
+    """Create a new chat room."""
+    name = body.get("name", "").strip()
+    if not name:
+        return {"error": "Name required"}
+    # Generate ID from name
+    import re
+    ch_id = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+    if not ch_id:
+        ch_id = f"room-{int(__import__('time').time())}"
+    # Check for duplicates
+    existing = await db.get_channels()
+    if any(c["id"] == ch_id for c in existing):
+        ch_id = f"{ch_id}-{int(__import__('time').time()) % 10000}"
+    ch = await db.create_channel(ch_id, name, "group")
+    return ch
+
+
+@router.delete("/channels/{channel_id}")
+async def delete_channel_route(channel_id: str, delete_messages: bool = True):
+    """Delete a chat room and optionally its messages."""
+    if channel_id == "main":
+        return {"error": "Cannot delete Main Room"}
+    await db.delete_channel(channel_id, delete_messages)
+    return {"ok": True, "deleted": channel_id, "messages_deleted": delete_messages}
 
 
 @router.patch("/channels/{channel_id}/name")
@@ -54,6 +87,7 @@ async def rename_channel(channel_id: str, body: dict):
     if not name:
         return {"error": "Name required"}
     await db.set_channel_name(channel_id, name)
+    await db.rename_channel_db(channel_id, name)
     return {"ok": True, "channel": channel_id, "name": name}
 
 
@@ -311,3 +345,35 @@ async def get_decisions(limit: int = 50):
         return [dict(r) for r in await rows.fetchall()]
     finally:
         await conn.close()
+
+
+@router.post("/agents/{agent_id}/memory/cleanup")
+async def cleanup_agent_memory(agent_id: str):
+    """Remove duplicate memories for an agent."""
+    from .memory import cleanup_memories
+    removed = cleanup_memories(agent_id)
+    shared_removed = cleanup_memories(None)
+    return {"ok": True, "removed": removed, "shared_removed": shared_removed}
+
+
+@router.get("/agents/{agent_id}/memories")
+async def get_agent_memories(agent_id: str, limit: int = 100, type: str = None):
+    """Get paginated memories for an agent."""
+    from .memory import read_all_memory_for_agent, read_memory
+    if type:
+        personal = read_memory(agent_id, limit=limit, type_filter=type)
+        shared = read_memory(None, limit=limit, type_filter=type)
+        # Deduplicate
+        seen = set()
+        combined = []
+        for entry in personal + shared:
+            key = entry.get("content", "").lower().strip()
+            if key not in seen:
+                seen.add(key)
+                combined.append(entry)
+        combined.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        return combined[:limit]
+    else:
+        memories = read_all_memory_for_agent(agent_id, limit=limit)
+        memories.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        return memories
