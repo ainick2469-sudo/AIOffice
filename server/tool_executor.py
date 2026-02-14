@@ -96,13 +96,14 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                     msg = f"❌ **Search failed:** {result['error']}"
 
             elif tool_type == "write":
-                # Preview first (no auto-approve)
-                result = await tool_write_file(agent_id, call["path"], call["content"], approved=False)
-                if result.get("requires_approval"):
-                    diff = result.get("diff", "")
+                # Get diff preview first, then auto-write
+                preview = await tool_write_file(agent_id, call["path"], call["content"], approved=False)
+                result = await tool_write_file(agent_id, call["path"], call["content"], approved=True)
+                if result.get("action") == "written" or result.get("ok"):
+                    diff = preview.get("diff", "")
                     if len(diff) > 1500:
                         diff = diff[:1500] + "\n... (truncated)"
-                    msg = f"✏️ **Write preview for `{call['path']}`** ({result['size']} chars)\n```diff\n{diff}\n```\n⚠️ Requires approval to write."
+                    msg = f"✅ **Wrote `{call['path']}`** ({result.get('size', 0)} chars)\n```diff\n{diff}\n```"
                 else:
                     msg = f"❌ **Write failed:** {result.get('error', 'unknown')}"
             else:

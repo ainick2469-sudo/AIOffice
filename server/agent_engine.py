@@ -6,8 +6,10 @@ User can jump in anytime. Cap at 1000 messages.
 
 import asyncio
 import logging
+import os
 import random
 import re
+from pathlib import Path
 from typing import Optional
 from . import ollama_client
 from .router_agent import route
@@ -37,6 +39,34 @@ AGENT_NAMES = {
     "art": "Iris", "producer": "Pam", "lore": "Leo",
     "director": "Nova", "researcher": "Scout", "sage": "Sage",
 }
+
+# Cache project tree (refreshed every 60s)
+_project_tree_cache = {"tree": "", "time": 0}
+
+def _get_project_tree() -> str:
+    """Get real project file tree for grounding agents."""
+    import time
+    now = time.time()
+    if _project_tree_cache["tree"] and now - _project_tree_cache["time"] < 60:
+        return _project_tree_cache["tree"]
+    sandbox = Path("C:/AI_WORKSPACE/ai-office")
+    skip = {"node_modules", ".git", "__pycache__", "client-dist", ".venv", "data"}
+    lines = []
+    for root, dirs, files in os.walk(sandbox):
+        dirs[:] = [d for d in dirs if d not in skip]
+        depth = str(Path(root)).replace(str(sandbox), "").count(os.sep)
+        if depth > 3:
+            continue
+        rel = Path(root).relative_to(sandbox)
+        indent = "  " * depth
+        if rel != Path("."):
+            lines.append(f"{indent}{rel.name}/")
+        for f in sorted(files)[:15]:
+            lines.append(f"{indent}  {f}")
+    tree = "\n".join(lines[:80])
+    _project_tree_cache["tree"] = tree
+    _project_tree_cache["time"] = now
+    return tree
 
 
 async def _build_context(channel: str) -> str:
@@ -84,6 +114,11 @@ def _build_system(agent: dict, channel: str, is_followup: bool) -> str:
             s += "\n  ```"
         s += "\nUse tools when the team is discussing something you can look up or verify."
         s += "\nDon't just talk about code — read it, check it, reference real files."
+        s += "\nAll file paths are relative to the project root (C:/AI_WORKSPACE/ai-office)."
+        s += "\nHere are the REAL files in this project right now:"
+        s += f"\n```\n{_get_project_tree()}\n```"
+        s += "\nONLY reference files that actually exist above, or create new ones with [TOOL:write]."
+        s += "\nWhen creating new files for a project, put them in a subfolder (e.g. app/, src/, etc)."
 
     # Memory
     memories = read_all_memory_for_agent(agent["id"], limit=12)
@@ -134,6 +169,11 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
 
         if response.upper().strip() in ("PASS", "[PASS]", "PASS."):
             return None
+        # Strip leading PASS if followed by real content
+        if response.upper().startswith("PASS"):
+            response = re.sub(r'^PASS\.?\s*\n*', '', response, flags=re.IGNORECASE).strip()
+            if not response or len(response) < 3:
+                return None
         if len(response.strip()) < 3:
             return None
 

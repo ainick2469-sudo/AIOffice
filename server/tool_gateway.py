@@ -63,10 +63,21 @@ READABLE_EXTENSIONS = {
 def _is_safe_path(filepath: str) -> bool:
     """Check path is within sandbox."""
     try:
-        resolved = Path(filepath).resolve()
+        p = Path(filepath)
+        if not p.is_absolute():
+            p = SANDBOX / p
+        resolved = p.resolve()
         return str(resolved).startswith(str(SANDBOX.resolve()))
     except Exception:
         return False
+
+
+def _resolve_path(filepath: str) -> Path:
+    """Resolve a filepath relative to sandbox."""
+    p = Path(filepath)
+    if not p.is_absolute():
+        p = SANDBOX / p
+    return p.resolve()
 
 
 def _is_command_allowed(command: str) -> bool:
@@ -115,7 +126,7 @@ async def tool_read_file(agent_id: str, filepath: str) -> dict:
                          output=result["error"], exit_code=-1)
         return result
 
-    resolved = Path(filepath).resolve()
+    resolved = _resolve_path(filepath)
 
     if not resolved.exists():
         result = {"ok": False, "error": f"File not found: {filepath}"}
@@ -149,15 +160,23 @@ async def tool_read_file(agent_id: str, filepath: str) -> dict:
 async def tool_search_files(agent_id: str, pattern: str, directory: str = ".") -> dict:
     """Search for files matching a glob pattern within sandbox."""
     base = SANDBOX / directory if not Path(directory).is_absolute() else Path(directory)
-
-    if not _is_safe_path(str(base)):
+    if not str(base.resolve()).startswith(str(SANDBOX.resolve())):
         return {"ok": False, "error": "Directory outside sandbox"}
 
     try:
         matches = []
+        # Try the pattern directly first
         for p in base.rglob(pattern):
             if p.is_file() and len(matches) < 50:
                 matches.append(str(p.relative_to(SANDBOX)))
+
+        # If no matches and pattern has a directory component, try just the filename
+        if not matches and "/" in pattern:
+            filename = pattern.split("/")[-1]
+            if filename:
+                for p in base.rglob(filename):
+                    if p.is_file() and len(matches) < 50:
+                        matches.append(str(p.relative_to(SANDBOX)))
 
         await _audit_log(agent_id, "read", f"search: {pattern} in {directory}",
                          output=f"{len(matches)} matches", exit_code=0)
@@ -212,11 +231,11 @@ async def tool_run_command(agent_id: str, command: str) -> dict:
 
 async def tool_write_file(agent_id: str, filepath: str, content: str,
                           approved: bool = False) -> dict:
-    """Write a file with diff preview. Requires approval."""
+    """Write a file with diff preview. Auto-approved for sandboxed writes."""
     if not _is_safe_path(filepath):
         return {"ok": False, "error": f"Path outside sandbox: {filepath}"}
 
-    resolved = Path(filepath).resolve()
+    resolved = _resolve_path(filepath)
     ext = resolved.suffix.lower()
     if ext not in READABLE_EXTENSIONS:
         return {"ok": False, "error": f"Cannot write to extension: {ext}"}

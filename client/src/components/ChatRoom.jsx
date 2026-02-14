@@ -137,7 +137,7 @@ export default function ChatRoom({ channel }) {
                   {sender.name}
                 </span>
                 <span className="msg-time">
-                  {new Date(msg.created_at).toLocaleTimeString()}
+                  {new Date(msg.created_at + 'Z').toLocaleTimeString()}
                 </span>
               </div>
               <div className="msg-body"><MessageContent content={msg.content} /></div>
