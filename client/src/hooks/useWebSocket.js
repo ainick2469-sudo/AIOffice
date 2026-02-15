@@ -5,7 +5,9 @@ export default function useWebSocket(channel) {
   const [connected, setConnected] = useState(false);
   const [messages, setMessages] = useState([]);
   const [typingAgents, setTypingAgents] = useState([]);
+  const [lastEvent, setLastEvent] = useState(null);
   const reconnectTimer = useRef(null);
+  const reconnectFnRef = useRef(() => {});
   const typingTimers = useRef({});
 
   const connect = useCallback(() => {
@@ -23,6 +25,7 @@ export default function useWebSocket(channel) {
     ws.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
+        setLastEvent(data);
         if (data.type === 'chat' && data.message) {
           setMessages(prev => [...prev, data.message]);
           // Clear typing for this agent
@@ -57,7 +60,9 @@ export default function useWebSocket(channel) {
     ws.onclose = () => {
       setConnected(false);
       console.log(`WS disconnected: #${channel}`);
-      reconnectTimer.current = setTimeout(connect, 2000);
+      reconnectTimer.current = setTimeout(() => {
+        reconnectFnRef.current();
+      }, 2000);
     };
 
     ws.onerror = () => ws.close();
@@ -65,7 +70,10 @@ export default function useWebSocket(channel) {
   }, [channel]);
 
   useEffect(() => {
-    setMessages([]);
+    reconnectFnRef.current = connect;
+  }, [connect]);
+
+  useEffect(() => {
     connect();
     return () => {
       clearTimeout(reconnectTimer.current);
@@ -73,16 +81,17 @@ export default function useWebSocket(channel) {
     };
   }, [channel, connect]);
 
-  const send = useCallback((content, msgType = 'message') => {
+  const send = useCallback((content, msgType = 'message', parentId = null) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'chat',
         channel,
         content,
         msg_type: msgType,
+        parent_id: parentId,
       }));
     }
   }, [channel]);
 
-  return { connected, messages, setMessages, send, typingAgents };
+  return { connected, messages, setMessages, send, typingAgents, lastEvent };
 }

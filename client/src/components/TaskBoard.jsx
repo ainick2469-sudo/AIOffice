@@ -1,8 +1,20 @@
 import { useState, useEffect } from 'react';
 
-const STATUSES = ['backlog', 'in_progress', 'review', 'done'];
-const STATUS_LABELS = { backlog: '📋 Backlog', in_progress: '🔨 In Progress', review: '🔍 Review', done: '✅ Done' };
-const STATUS_COLORS = { backlog: '#6B7280', in_progress: '#F59E0B', review: '#8B5CF6', done: '#10B981' };
+const STATUSES = ['backlog', 'in_progress', 'review', 'blocked', 'done'];
+const STATUS_LABELS = {
+  backlog: '📋 Backlog',
+  in_progress: '🔨 In Progress',
+  review: '🔍 Review',
+  blocked: '⛔ Blocked',
+  done: '✅ Done',
+};
+const STATUS_COLORS = {
+  backlog: '#6B7280',
+  in_progress: '#F59E0B',
+  review: '#8B5CF6',
+  blocked: '#EF4444',
+  done: '#10B981',
+};
 
 export default function TaskBoard() {
   const [tasks, setTasks] = useState([]);

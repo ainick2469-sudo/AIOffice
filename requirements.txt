@@ -5,3 +5,7 @@ pydantic==2.11.4
 aiosqlite==0.21.0
 httpx==0.28.1
 python-dotenv==1.1.0
+pywebview>=6.1,<7
+pystray==0.19.5
+Pillow==10.4.0
+python-multipart==0.0.9

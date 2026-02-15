@@ -11,6 +11,10 @@ logger = logging.getLogger("ai-office.claude")
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = "claude-sonnet-4-20250514"
 API_URL = "https://api.anthropic.com/v1/messages"
+MODEL_RATES_PER_1K = {
+    "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+    "claude-3-5-sonnet": {"input": 0.003, "output": 0.015},
+}
 
 def _load_key():
     """Try to load key from .env file if not in environment."""
@@ -35,12 +39,19 @@ def is_available() -> bool:
     return bool(API_KEY)
 
 
+def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    rates = MODEL_RATES_PER_1K.get(model or "", MODEL_RATES_PER_1K["claude-sonnet-4-20250514"])
+    return (input_tokens / 1000.0) * rates["input"] + (output_tokens / 1000.0) * rates["output"]
+
+
 async def chat(
     messages: list[dict],
     system: str = "",
     temperature: float = 0.7,
     max_tokens: int = 1024,
     model: str = None,
+    channel: str = None,
+    project_name: str = None,
 ) -> Optional[str]:
     """Call Claude API. Returns response text or None on error."""
     if not API_KEY:
@@ -96,6 +107,23 @@ async def chat(
                 return None
 
             data = resp.json()
+            usage = data.get("usage") or {}
+            try:
+                from . import database as db
+                input_tokens = int(usage.get("input_tokens", 0) or 0)
+                output_tokens = int(usage.get("output_tokens", 0) or 0)
+                await db.log_api_usage(
+                    provider="claude",
+                    model=use_model,
+                    prompt_tokens=input_tokens,
+                    completion_tokens=output_tokens,
+                    total_tokens=input_tokens + output_tokens,
+                    estimated_cost=_estimate_cost(use_model, input_tokens, output_tokens),
+                    channel=channel,
+                    project_name=project_name,
+                )
+            except Exception:
+                pass
             content_blocks = data.get("content", [])
             text_parts = [b["text"] for b in content_blocks if b.get("type") == "text"]
             return "\n".join(text_parts) if text_parts else None

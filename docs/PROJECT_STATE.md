@@ -1,64 +1,103 @@
-# AI OFFICE — Project State (Canonical)
+# AI Office - Project State
 
-> Last updated: 2026-02-14 (All 5 phases complete)
+Last updated: 2026-02-15
 
-## Current Phase: ALL PHASES COMPLETE
-## Status: MVP FUNCTIONAL
+## Status
 
-## Environment
-- Python 3.12.10 ✅ | Node.js v25.2.1 ✅ | Ollama ✅
-- Models: qwen3:1.7b, qwen2.5:14b, qwen2.5-coder:32b, qwen2.5:32b
+- Stage 0 baseline commit/tag: pending in this shell because `git` is not installed/visible.
+- Stage 1 Collab Core: implemented (`/meeting`, `/vote`, reactions, decisions persistence, collab status surfaces).
+- Stage 1.5 Execution Engine: implemented (project workspaces, channel tool scoping, file context injection, build/test/fix loop, task-tag automation, escalation logic).
+- Stage 2 core: implemented (`/work`, web research tools, Git panel/APIs, inline code execute endpoint + UI).
+- Stage 3 partial: implemented export/templates/performance/cost tracking/branch context/theme/startup selector; remaining work is deeper multi-branch task orchestration polish.
 
-## Completed
-- [x] Phase 1: Backend + Frontend
-  - FastAPI + SQLite + WebSocket backend
-  - React/Vite dark-themed chat UI
-  - Main room + DM channels
-  - Message persistence + auto-reconnect
-- [x] Phase 2: Agent Routing + Ollama Responses
-  - Router: qwen3:1.7b LLM + keyword fallback
-  - 9 agents with distinct roles/voices
-  - Concurrent responses, typing indicators
-  - DM auto-routing, main room multi-agent
-- [x] Phase 3: Memory System
-  - JSONL shared + per-agent memory
-  - Distiller extracts facts every 5 messages
-  - Memory injected into agent system prompts
-- [x] Phase 4: Tool Gateway
-  - Sandboxed read/search/run/write tools
-  - Allowlist + blocklist + path sandboxing
-  - Write requires diff preview + approval
-  - Full audit logging to SQLite
-  - Audit Log panel in frontend
-- [x] Phase 5: Release Gate + Pulse
-  - Multi-agent review pipeline (6 roles)
-  - Improvement sweeps (2 passes)
-  - Producer final sign-off
-  - Office Pulse scheduler (configurable)
-  - Controls panel in frontend
+## Runtime Baseline (Windows)
 
-## Server Files (19 routes)
-- /api/health, /api/agents, /api/agents/{id}
-- /api/messages/{channel}, /api/channels
-- /api/tasks (GET + POST)
-- /api/memory/shared, /api/memory/{agent_id}
-- /api/audit
-- /api/tools/read, /api/tools/search, /api/tools/run, /api/tools/write
-- /api/release-gate (POST), /api/release-gate/history
-- /api/pulse/start, /api/pulse/stop, /api/pulse/status
+- Python: `C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe`
+- Frontend wrappers:
+  - `C:\AI_WORKSPACE\ai-office\client\dev-build.cmd`
+  - `C:\AI_WORKSPACE\ai-office\client\dev-lint.cmd`
+  - `C:\AI_WORKSPACE\ai-office\client\tools\with-node.cmd`
+- Root wrapper: `C:\AI_WORKSPACE\ai-office\with-runtime.cmd`
 
-## How to Run
-```
-cd C:\AI_WORKSPACE\ai-office
-python start.py
-```
+## Current Staff / Backends
 
-## Known Issues
-- Clear __pycache__ if routes 404 after edits
-- Stale pycache from auto-reloader can hide new routes
+- Total agents configured: 17 (including router)
+- Backends:
+  - Ollama: core local team
+  - Claude: `director`, `researcher`
+  - OpenAI: `codex`
+- Canonical source: `C:\AI_WORKSPACE\ai-office\agents\registry.json`
 
-## Remaining (Nice-to-Have)
-- [ ] Desktop app wrapper (Electron/PyWebView)
-- [ ] Startup mode selector (web vs desktop)
-- [ ] Task board panel in frontend
-- [ ] Project State viewer panel
+## Key UI Surfaces
+
+- Home dashboard (conversations/tasks/decisions/performance/cost)
+- Chat (threads, reactions, collab mode badge, active project badge, work indicator)
+- Tasks
+- Files
+- Search
+- Decisions
+- Audit
+- Controls (app builder, model readiness, API budget)
+- Projects
+- Git
+- Agents (config editor)
+
+## Key APIs (Expanded)
+
+- Collaboration:
+  - `POST /api/messages/{message_id}/reactions`
+  - `GET /api/messages/{message_id}/reactions`
+  - `GET /api/collab-mode/{channel}`
+- Projects:
+  - `POST /api/projects`
+  - `GET /api/projects`
+  - `POST /api/projects/switch`
+  - `GET /api/projects/active/{channel}`
+  - `DELETE /api/projects/{name}`
+  - `GET /api/projects/status/{channel}`
+- Build:
+  - `GET /api/projects/{name}/build-config`
+  - `PUT /api/projects/{name}/build-config`
+  - `POST /api/projects/{name}/build`
+  - `POST /api/projects/{name}/test`
+  - `POST /api/projects/{name}/run`
+- Work mode:
+  - `POST /api/work/start`
+  - `POST /api/work/stop`
+  - `GET /api/work/status/{channel}`
+- Web tools:
+  - `POST /api/tools/web`
+  - `POST /api/tools/fetch`
+- Git:
+  - `GET /api/projects/{name}/git/status`
+  - `GET /api/projects/{name}/git/log`
+  - `GET /api/projects/{name}/git/diff`
+  - `POST /api/projects/{name}/git/commit`
+  - `POST /api/projects/{name}/git/branch`
+  - `POST /api/projects/{name}/git/merge`
+- Execute:
+  - `POST /api/execute`
+- Usage/perf:
+  - `GET /api/performance/agents`
+  - `GET /api/usage`
+  - `GET /api/usage/summary`
+  - `GET /api/usage/budget`
+  - `PUT /api/usage/budget`
+
+## Verification Snapshot
+
+Most recent checks in this sprint run:
+
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `python -m compileall server` PASS
+- `python -m pytest tests -q` PASS
+- `tools/runtime_smoke.py` PASS
+- `tools/startup_smoke.py` PASS
+- `tools/desktop_smoke.py` PASS
+- `tools/toolchain_smoke.py` PASS
+- `tools/personality_smoke.py` PASS
+
+## Security Reminder
+
+If an API key appears in chat/logs/screenshots/commits, rotate immediately and replace in `C:\AI_WORKSPACE\ai-office\.env`.

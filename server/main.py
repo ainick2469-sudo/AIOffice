@@ -94,6 +94,10 @@ async def websocket_endpoint(ws: WebSocket, channel: str):
 
 
 # ── Static files (frontend) ───────────────────────────────
+uploads_dir = Path(__file__).parent.parent / "uploads"
+uploads_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
+
 client_dist = Path(__file__).parent.parent / "client-dist"
 if client_dist.exists():
     app.mount("/", StaticFiles(directory=str(client_dist), html=True), name="static")

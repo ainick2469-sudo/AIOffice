@@ -1,7 +1,6 @@
 """AI Office — Ollama HTTP client."""
 
 import httpx
-import json
 import logging
 from typing import Optional
 
@@ -83,3 +82,50 @@ async def is_available() -> bool:
             return resp.status_code == 200
     except Exception:
         return False
+
+
+async def list_models() -> list[str]:
+    """Return installed Ollama model names."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{OLLAMA_BASE}/api/tags")
+            resp.raise_for_status()
+            data = resp.json() or {}
+            models = data.get("models", [])
+            names = [m.get("name", "").strip() for m in models if m.get("name")]
+            # Deduplicate while preserving order
+            seen = set()
+            ordered = []
+            for name in names:
+                if name not in seen:
+                    ordered.append(name)
+                    seen.add(name)
+            return ordered
+    except Exception:
+        return []
+
+
+async def pull_model(model: str) -> dict:
+    """Pull one model via Ollama HTTP API."""
+    model_name = (model or "").strip()
+    if not model_name:
+        return {"ok": False, "model": model_name, "error": "Model name is required."}
+
+    try:
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            resp = await client.post(
+                f"{OLLAMA_BASE}/api/pull",
+                json={"name": model_name, "stream": False},
+            )
+            resp.raise_for_status()
+            payload = resp.json() if resp.content else {}
+            return {
+                "ok": True,
+                "model": model_name,
+                "status": payload.get("status", "success"),
+                "response": payload,
+            }
+    except httpx.ConnectError:
+        return {"ok": False, "model": model_name, "error": "Ollama not reachable on 127.0.0.1:11434."}
+    except Exception as e:
+        return {"ok": False, "model": model_name, "error": str(e)}

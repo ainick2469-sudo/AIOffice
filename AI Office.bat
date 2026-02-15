@@ -1,4 +1,4 @@
 @echo off
-title AI Office
 cd /d "%~dp0"
-python app.py
+call "%~dp0desktop-launch.cmd"
+exit /b %ERRORLEVEL%

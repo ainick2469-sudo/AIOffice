@@ -4,20 +4,28 @@ export default function AgentProfile({ agentId, onClose }) {
   const [profile, setProfile] = useState(null);
   const [memories, setMemories] = useState([]);
   const [memFilter, setMemFilter] = useState(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!agentId) return;
-    setLoading(true);
-    setMemFilter(null);
+    let cancelled = false;
+
     Promise.all([
       fetch(`/api/agents/${agentId}/profile`).then(r => r.json()),
       fetch(`/api/agents/${agentId}/memories?limit=100`).then(r => r.json()),
     ]).then(([prof, mems]) => {
+      if (cancelled) return;
       setProfile(prof);
       setMemories(Array.isArray(mems) ? mems : []);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+      setMemFilter(null);
+    }).catch(() => {
+      if (cancelled) return;
+      setProfile({ error: 'Load failed' });
+      setMemories([]);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [agentId]);
 
   const loadMemories = (type) => {
@@ -44,6 +52,9 @@ export default function AgentProfile({ agentId, onClose }) {
     try { return new Date(ts).toLocaleDateString(); }
     catch { return ''; }
   };
+
+  const loading = profile === null;
+  const perf = profile?.performance || {};
 
   if (!agentId) return null;
   if (loading) return <div className="agent-profile-modal"><div className="ap-loading">Loading...</div></div>;
@@ -73,6 +84,36 @@ export default function AgentProfile({ agentId, onClose }) {
           <div className="ap-stat">
             <span className="ap-stat-num">{profile.backend}</span>
             <span className="ap-stat-label">Backend</span>
+          </div>
+        </div>
+
+        <div className="ap-stats">
+          <div className="ap-stat">
+            <span className="ap-stat-num">{perf.tool_calls || 0}</span>
+            <span className="ap-stat-label">Tool Calls</span>
+          </div>
+          <div className="ap-stat">
+            <span className="ap-stat-num">{perf.tasks_done || 0}</span>
+            <span className="ap-stat-label">Tasks Done</span>
+          </div>
+          <div className="ap-stat">
+            <span className="ap-stat-num">{perf.tasks_blocked || 0}</span>
+            <span className="ap-stat-label">Blocked</span>
+          </div>
+        </div>
+
+        <div className="ap-stats">
+          <div className="ap-stat">
+            <span className="ap-stat-num">{perf.build_pass || 0}</span>
+            <span className="ap-stat-label">Build Pass</span>
+          </div>
+          <div className="ap-stat">
+            <span className="ap-stat-num">{perf.build_fail || 0}</span>
+            <span className="ap-stat-label">Build Fail</span>
+          </div>
+          <div className="ap-stat">
+            <span className="ap-stat-num">{perf.tests_pass || 0}/{perf.tests_fail || 0}</span>
+            <span className="ap-stat-label">Tests P/F</span>
           </div>
         </div>
 

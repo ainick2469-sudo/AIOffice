@@ -17,6 +17,8 @@ async def generate(
     temperature: float = 0.7,
     max_tokens: int = 1024,
     model: str = None,
+    channel: str = None,
+    project_name: str = None,
 ) -> Optional[str]:
     """Generate using Claude API — matches ollama_client.generate interface."""
     messages = [{"role": "user", "content": prompt}]
@@ -26,4 +28,6 @@ async def generate(
         temperature=temperature,
         max_tokens=max_tokens,
         model=model,
+        channel=channel,
+        project_name=project_name,
     )

@@ -4,15 +4,29 @@ export default function AuditLog() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const fetchAuditLogs = () => fetch('/api/audit?limit=30').then(r => r.json());
+
   const refresh = () => {
     setLoading(true);
-    fetch('/api/audit?limit=30')
-      .then(r => r.json())
-      .then(data => { setLogs(data); setLoading(false); })
-      .catch(() => setLoading(false));
+    fetchAuditLogs()
+      .then((data) => { setLogs(data); })
+      .finally(() => setLoading(false));
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    fetchAuditLogs()
+      .then((data) => {
+        if (cancelled) return;
+        setLogs(data);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="panel audit-panel">

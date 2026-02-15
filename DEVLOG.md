@@ -1,0 +1,622 @@
+# AI OFFICE — Development Log
+# Complete changelog from project inception to current state
+# Last updated: 2026-02-15
+
+---
+
+## SESSION 7 - Hardening + Agent Config (2026-02-15)
+
+### Security and Key Hygiene
+- [x] Added explicit key-rotation warning in docs.
+- [x] Added `tools/set_openai_key.py --clear` mode to remove OpenAI key from `.env`.
+- [x] Updated OpenAI config checker to use masked, live key detection.
+
+### Runtime and Launch Repro
+- [x] Added root runtime wrapper: `with-runtime.cmd` (prepends Windows/Python/Node paths).
+- [x] Updated `start.py` to avoid PATH-fragile `npx vite` launch.
+- [x] Updated `app.py` build path to use `client/dev-build.cmd` instead of raw `npx vite build`.
+
+### Frontend Lint Refactor (react-hooks/set-state-in-effect)
+- [x] Refactored:
+  - `client/src/components/AgentProfile.jsx`
+  - `client/src/components/AuditLog.jsx`
+  - `client/src/components/FileViewer.jsx`
+  - `client/src/components/Sidebar.jsx`
+  - `client/src/hooks/useWebSocket.js`
+- [x] Removed unused `node` arg in `client/src/components/MessageContent.jsx`.
+
+### Codex as First-Class Staff
+- [x] Added `codex` to `agents/registry.json` as canonical source.
+- [x] Kept DB fallback seeding for backward compatibility.
+- [x] Preserved router/engine Codex routing and OpenAI backend support.
+
+### Agent Config Feature Delivery
+- [x] Added backend update API: `PATCH /api/agents/{agent_id}`.
+- [x] Added DB update path for editable fields:
+  - `display_name`, `role`, `backend`, `model`, `permissions`, `active`, `color`, `emoji`, `system_prompt`.
+- [x] Enforced backend enum (`ollama`, `claude`, `openai`) via pydantic request model.
+- [x] Added new frontend panel: `client/src/components/AgentConfig.jsx`.
+- [x] Wired panel into tabs in `client/src/App.jsx`.
+- [x] Added live refresh signaling so sidebar staff view updates without page reload.
+
+---
+
+## SESSION 8 - Launch + Toolchain Reliability (2026-02-15)
+
+### Standalone Desktop Behavior
+- [x] Added `pywebview` dependency declaration in `requirements.txt`.
+- [x] Removed browser fallback from `app.py`; desktop mode now fails fast if pywebview is missing.
+- [x] Added `desktop-launch.cmd` for double-click standalone launch.
+- [x] Added smoke validation for desktop launch path: `tools/desktop_smoke.py`.
+
+### Tool Call and Tool Creation Reliability
+- [x] Fixed tool run PATH inheritance in `server/tool_gateway.py` so `python`/`npm` commands work reliably.
+- [x] Added end-to-end toolchain smoke test:
+  - `tools/toolchain_smoke.py` verifies read/search/run/write/task.
+  - Includes generated tool-file creation and cleanup.
+- [x] Added runtime/startup smoke scripts:
+  - `tools/runtime_smoke.py`
+  - `tools/startup_smoke.py`
+
+---
+
+## PROJECT OVERVIEW
+- **Name:** AI Office
+- **Location:** C:\AI_WORKSPACE\ai-office
+- **GitHub:** https://github.com/ainick2469-sudo/AIOffice.git
+- **Stack:** FastAPI + SQLite + WebSocket (backend), React/Vite (frontend), PyWebView (desktop), Ollama + Claude API (AI)
+- **Models:** qwen3:1.7b (router), qwen2.5:14b (most agents), qwen2.5-coder:32b (Max), Claude Sonnet (Nova, Scout)
+
+---
+
+## PHASE 1 — Foundation (Session 1)
+**Date:** 2026-02-14 ~11:00 AM
+**Commit:** Part of initial commit
+
+### Backend
+- [x] FastAPI server with uvicorn (server/main.py)
+- [x] SQLite database via aiosqlite (server/database.py)
+- [x] Schema: messages, tasks, decisions, tool_logs, agents tables
+- [x] WebSocket manager for real-time broadcast (server/websocket.py)
+- [x] REST API endpoints: /api/health, /api/agents, /api/messages/{channel}, /api/channels
+- [x] Message persistence (insert, query, pagination)
+- [x] Agent registry loaded from agents/registry.json into DB on startup
+
+### Frontend
+- [x] React + Vite project scaffolded (client/)
+- [x] Dark theme CSS (Discord-inspired color scheme)
+- [x] Sidebar component: channels list, DM list, staff roster with roles/colors
+- [x] ChatRoom component: message list, input box, send button
+- [x] Main Room + DM channels (dm:<agent_id>)
+- [x] WebSocket hook (useWebSocket.js) with auto-reconnect
+- [x] Message history loaded on channel switch
+- [x] Auto-scroll to bottom on new messages
+
+### Initial Agents (9)
+| ID | Name | Role | Model |
+|----|------|------|-------|
+| router | Router | Message classifier | qwen3:1.7b |
+| architect | Ada | System Architect | qwen2.5:14b |
+| builder | Max | Builder / Programmer | qwen2.5-coder:32b |
+| reviewer | Rex | Code Reviewer / Security | qwen2.5:14b |
+| qa | Quinn | QA / Testing | qwen2.5:14b |
+| uiux | Uma | UI/UX Designer | qwen2.5:14b |
+| art | Iris | Art / Visual Design | qwen2.5:14b |
+| producer | Pam | Producer / Project Manager | qwen2.5:14b |
+| lore | Leo | Lore / Narrative | qwen2.5:14b |
+
+### Launchers
+- [x] start.py — single-command launcher (starts backend + frontend)
+- [x] run.py — alternative launcher
+- [x] AI Office.bat — batch file shortcut
+
+### Docs Created
+- docs/SYSTEM_OVERVIEW.md — full architecture diagram + data flow
+- docs/ARCHITECTURE.md — technical architecture details
+- docs/DECISIONS.md — locked architectural decisions
+- docs/MVP_MILESTONES.md — phase milestones
+- docs/SECURITY.md — safety model + sandbox rules
+- docs/STYLE_GUIDE.md — code style conventions
+- docs/PROJECT_STATE.md — canonical project status
+
+---
+
+## PHASE 2 — Agent Routing + Ollama Responses (Session 1)
+**Date:** 2026-02-14 ~12:00 PM
+
+- [x] Router agent (server/router_agent.py): LLM-based classification via qwen3:1.7b
+- [x] Keyword fallback routing when LLM fails or returns invalid JSON
+- [x] Ollama client (server/ollama_client.py): HTTP calls to localhost:11434
+- [x] Agent engine v1 (server/agent_engine.py): route → generate → broadcast
+- [x] Concurrent agent responses (asyncio.gather for multiple agents)
+- [x] Typing indicators ("X is thinking..." broadcast via WebSocket)
+- [x] DM auto-routing: dm:<agent_id> channels respond with just that agent
+- [x] Main room multi-agent: router selects 2-4 agents per message
+- [x] System prompts per agent with role-specific instructions
+- [x] Context window: last 10 messages included in each generation
+
+---
+
+## PHASE 3 — Memory System (Session 1)
+**Date:** 2026-02-14 ~1:00 PM
+
+- [x] JSONL-based memory storage (memory/ directory)
+- [x] Shared memory file (memory/shared_memory.jsonl) — project-wide facts
+- [x] Per-agent memory files (memory/agents/<agent_id>.jsonl)
+- [x] Memory module (server/memory.py): read/write/query memories
+- [x] Distiller (server/distiller.py): extracts durable facts after every 5 messages
+- [x] Memory injection: agent system prompts include relevant memories
+- [x] Memory viewer in agent profiles (scrollable)
+
+---
+
+## PHASE 4 — Tool Gateway (Session 1-2)
+**Date:** 2026-02-14 ~2:00 PM
+
+- [x] Tool gateway (server/tool_gateway.py): sandboxed file/command execution
+- [x] READ tools: read file contents within sandbox
+- [x] SEARCH tools: grep/find within project directory
+- [x] RUN tools: execute commands with allowlist validation
+- [x] WRITE tools: create/modify files with diff preview + approval flow
+- [x] Allowlist (tools/allowlist.json): permitted commands
+- [x] Path sandboxing: all operations restricted to C:\AI_WORKSPACE\ai-office
+- [x] Audit logging: every tool call logged to SQLite (who/when/what/output)
+- [x] Audit Log panel in frontend (AuditLog.jsx)
+- [x] REST endpoints: /api/tools/read, /api/tools/search, /api/tools/run, /api/tools/write
+- [x] Tool executor (server/tool_executor.py): parses [TOOL:read/run/search/write] from agent messages
+
+---
+
+## PHASE 5 — Release Gate + Office Pulse (Session 2)
+**Date:** 2026-02-14 ~3:00 PM
+
+- [x] Release gate (server/release_gate.py): multi-agent review pipeline
+  - 6 review roles: architecture, code quality, security, testing, UX, overall
+  - 2 improvement sweep passes
+  - Producer final sign-off
+- [x] Office Pulse scheduler (server/pulse.py): timed agent check-ins
+  - Configurable intervals
+  - Max 1 message per agent per pulse (no infinite loops)
+  - Start/stop/status API endpoints
+- [x] Controls panel in frontend (Controls.jsx): pulse start/stop, config
+- [x] REST endpoints: /api/release-gate, /api/release-gate/history, /api/pulse/start, /api/pulse/stop, /api/pulse/status
+
+---
+
+## SESSION 3 — Agent-to-Agent Conversation + UI Overhaul (Session 3)
+**Date:** 2026-02-14 ~5:00 PM
+**Key change:** Agents now talk to EACH OTHER, not just respond to user
+
+### Agent-to-Agent Conversation Engine
+- [x] Agent engine v2 rewrite: living conversation loop
+- [x] After agents respond to user, others react to what was said
+- [x] Follow-up rounds: agents build on each other's messages
+- [x] Hard cap: 1000 messages max per conversation
+- [x] User can jump in anytime — agents pivot to respond
+- [x] Stop button: force-end conversation via API
+- [x] Conversation status tracking: active/message_count/max_messages
+- [x] REST endpoints: /api/conversation/{channel}, /api/conversation/{channel}/stop
+- [x] Frontend: "💬 Active (X msgs)" badge + ⏹ Stop button in chat header
+
+### New Agent: Spark (💡 Creative Ideator)
+- [x] Added to registry: brainstorming, wild ideas, riffs off others
+- [x] Router updated: brainstorming → Spark + others
+
+### Conversation Loop Fixes
+- [x] Router fixed: now always picks 2-4 agents (was sending everything to just Pam)
+- [x] Message format fixed: agents no longer prefix with [producer]: or similar
+- [x] Self-prefixing cleanup: strips "[agent_id]: " and "Name: " prefixes
+- [x] PASS handling: agents return None for PASS/[PASS] responses
+- [x] Conversation continuation: _invites_response() detects questions/mentions
+- [x] _pick_next(): selects follow-up agents based on last message content
+- [x] _mentions(): detects when agents reference each other by name
+
+### Markdown Rendering
+- [x] MessageContent.jsx component with react-markdown + react-syntax-highlighter
+- [x] Syntax-highlighted code blocks (remark-gfm for GitHub-flavored markdown)
+- [x] npm packages: react-markdown, react-syntax-highlighter, remark-gfm
+
+### CSS Fixes
+- [x] Message list overflow-y scroll fix
+- [x] min-height: 0 on flex children for proper scrolling
+- [x] Code block styling (dark theme, copy-friendly)
+
+---
+
+## SESSION 4 — Desktop App + Task Board + File Viewer + Claude API (Session 4)
+**Date:** 2026-02-14 ~7:00 PM
+
+### Desktop App
+- [x] app.py: PyWebView wrapper (opens browser window pointing to localhost)
+- [x] Single-process launch: starts backend + frontend + opens window
+- [x] client-dist/ for production builds
+
+### Task Board
+- [x] TaskBoard.jsx: Kanban board with 4 columns (Backlog → In Progress → Review → Done)
+- [x] Create task form in UI
+- [x] Click to move tasks between columns
+- [x] REST endpoint: PATCH /api/tasks/{id}/status
+- [x] Task board CSS: column layout, cards, priority indicators
+
+### File Viewer
+- [x] FileViewer.jsx: browse project files, click to view with syntax highlighting
+- [x] Directory navigation with back button and path breadcrumbs
+- [x] File icons by extension (🐍 .py, 📜 .js, ⚛️ .jsx, etc.)
+- [x] File size display
+- [x] REST endpoints: /api/files/tree, /api/files/read
+- [x] File viewer CSS: split pane (tree + preview)
+
+### Claude API Integration
+- [x] claude_client.py: Anthropic API client (auth, message formatting, alternating roles)
+- [x] claude_adapter.py: wraps claude_client to match ollama_client interface
+- [x] .env file with ANTHROPIC_API_KEY
+- [x] .env.example template
+- [x] Engine routes to Claude when agent backend="claude"
+- [x] REST endpoint: /api/claude/status
+
+### New Agents: Nova + Scout
+| ID | Name | Role | Backend |
+|----|------|------|---------|
+| director | Nova (🧠) | Director / Tech Lead | Claude API |
+| researcher | Scout (🔭) | Deep Researcher | Claude API |
+
+- [x] Added to registry with Claude backend
+- [x] Router updated with director/researcher keywords + system prompt
+
+### Frontend Tab System
+- [x] App.jsx: 5 tabs — Chat, Tasks, Files, Audit, Controls
+- [x] All components wired and rendering
+
+---
+
+## SESSION 5 — Personality Overhaul + Memory Wipe + Sage + GitHub (Session 5)
+**Date:** 2026-02-14 ~9:30 PM
+**Commit:** 1495283 "Initial commit: AI Office v0.2"
+
+### GitHub
+- [x] Git initialized, .gitignore configured
+- [x] Initial commit: 67 files, 10,039 lines
+- [x] Pushed to https://github.com/ainick2469-sudo/AIOffice.git
+
+### New Agent: Sage (🌿 Scope Guardian)
+- [x] Added to registry: sees big picture, calls out scope creep
+- [x] Personality: "You see the forest when everyone else is staring at trees"
+- [x] Added to engine ALL_AGENT_IDS + AGENT_NAMES
+- [x] Added to router VALID_IDS
+- [x] Added to router system prompt + keyword map (scope, focus, priority, shipping, etc.)
+- [x] Memory file created: memory/agents/sage.jsonl
+
+### Deep Personality Rewrite (All 13 Agents)
+- [x] Every agent got a SPECIFIC communication style, not just role description
+- [x] Rex: skeptical by default, finds problems, dry sarcasm
+- [x] Quinn: methodical skeptic, "what if this breaks?"
+- [x] Spark: chaotic creative, wild ideas that might be terrible
+- [x] Ada: methodical, slows things down to think properly
+- [x] Pam: pragmatic, cuts through nonsense, focuses on shipping
+- [x] Nova: makes hard calls, decides when team can't agree
+- [x] Sage: wise realist, "Do we actually need this?"
+- [x] Anti-sycophancy rules: no more "fantastic suggestion!" — real debate, real friction
+- [x] DISAGREE instructions: each agent told HOW to disagree (directly, with data, etc.)
+
+### Memory Wipe
+- [x] All stale/hallucinated memories cleared (old AR app references)
+- [x] Database wiped: fresh start, no "Echo" conversations
+- [x] Memory files reset to 0-1 lines each
+
+### Channel Auto-Naming
+- [x] Channels auto-rename based on conversation topic
+- [x] Uses Ollama to summarize first few messages into a short topic title
+- [x] Broadcasts channel_renamed event via WebSocket
+- [x] Frontend sidebar updates channel names in real-time
+
+### Search Panel
+- [x] SearchPanel.jsx: search messages across all channels
+- [x] REST endpoint: /api/search?q=...&channel=...
+- [x] Results show channel, sender, timestamp, content snippet
+
+### Agent Profile Panel
+- [x] AgentProfile.jsx: click agent → see role, memory, recent activity
+- [x] Scrollable memory viewer
+- [x] Agent stats display
+
+### Decision Log Panel
+- [x] DecisionLog.jsx: view locked decisions from DB
+- [x] Shows decision content, who made it, when
+
+---
+
+## SESSION 6 — v0.6 Fixes (Session 6)
+**Date:** 2026-02-14 ~11:30 PM
+**Commit:** a5a437d
+
+### Interrupt System Rewrite
+- [x] Interrupt checks between EVERY agent response (not just between rounds)
+- [x] Immediate re-routing when user sends new message during active conversation
+- [x] Clean interrupt: current agent finishes, then new message gets routed
+
+### Task Tool ([TOOL:task])
+- [x] Pattern: [TOOL:task] Title | assigned_to | priority
+- [x] Parser in tool_executor.py: extracts title, assigned_to, priority
+- [x] DB insert on parse: creates task in backlog
+- [x] Broadcast: task_created event via WebSocket
+- [x] UI: TaskBoard auto-refreshes (5-second polling)
+
+### PASS Filtering
+- [x] Leading AND trailing PASS occurrences stripped via regex
+- [x] Handles: "PASS", "[PASS]", "PASS.", and PASS buried in response text
+
+### Write Tool Format Flexibility
+- [x] write_noblock pattern: allows write tool calls without strict content block format
+- [x] Warnings logged for missing content blocks but execution continues
+
+### Full Task CRUD
+- [x] GET /api/tasks — list all tasks
+- [x] POST /api/tasks — create task
+- [x] PATCH /api/tasks/{id}/status — update status (backlog/in_progress/review/done)
+- [x] Task board UI with drag-to-update columns
+
+---
+
+## CURRENT STATE — v0.8 (as of 2026-02-15)
+
+### Platform Status
+- Runtime hardening added for Windows shell PATH issues.
+- Root wrapper: `with-runtime.cmd`
+- Frontend wrappers: `client/dev-build.cmd`, `client/dev-lint.cmd`
+- Launchers updated to avoid raw `npx` dependency paths.
+
+### Agent and API Status
+- Agent roster is now 14 total, including `codex` (OpenAI backend).
+- `agents/registry.json` is canonical for Codex; DB fallback remains.
+- New endpoint: `PATCH /api/agents/{agent_id}` for agent config updates.
+- Existing status endpoints: `/api/ollama/status`, `/api/claude/status`, `/api/openai/status`.
+
+### UI Status
+- Implemented and live:
+  - Dashboard home
+  - Unread badges + sound notifications
+  - Thread replies + timestamp grouping
+  - File uploads in chat
+  - Staff online/offline backend badges
+  - Agent Config tab for editing agent settings
+
+### Remaining Gaps
+- Meeting mode
+- Voting / consensus workflow
+- Message reactions
+- Router and follow-up quality tuning
+
+### How to Run (Windows)
+```bat
+cd C:\AI_WORKSPACE\ai-office
+C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe start.py
+```
+
+Desktop mode:
+```bat
+cd C:\AI_WORKSPACE\ai-office
+C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
+```
+
+### Security Reminder
+- If any key was exposed in chat/logs/screenshots, rotate it immediately and replace it in `.env`.
+
+---
+
+## SESSION 9 - Full App Builder Enablement (2026-02-15)
+
+### Goal
+- Enable AI Office to build complete applications end-to-end with structured orchestration, not just ad-hoc chat responses.
+
+### Delivered
+- Added App Builder orchestration module:
+  - `server/app_builder.py`
+  - Structured kickoff prompt with milestones, tool usage requirements, and final handoff requirements.
+  - Automatic seed tasks for architecture, implementation, QA/review, and release summary.
+- Added API endpoint:
+  - `POST /api/app-builder/start`
+  - Implemented in `server/routes_api.py` with `AppBuilderStartIn` model in `server/models.py`.
+- Added Controls UI for App Builder:
+  - `client/src/components/Controls.jsx`
+  - Fields for app name, goal, stack profile, target directory, include-tests toggle.
+  - Status feedback after kickoff.
+- Expanded tool-run reliability for real app builds:
+  - `server/tool_gateway.py` now supports:
+    - `@subdir` command targeting (example: `@client npm run build`)
+    - broader safe command allowlist (npm install/ci/dev/build/test, scaffold commands)
+    - shell-operator blocking (`&&`, `||`, `|`, redirection, etc.)
+    - longer adaptive timeouts for install/scaffold/build commands
+    - injected Git path for command execution.
+- Added run-result cwd visibility in chat tool output:
+  - `server/tool_executor.py`
+- Improved routing for full-app requests:
+  - `server/router_agent.py` keyword map expanded for "full app", "from scratch", and production-ready asks.
+
+### Verification
+- `tools/toolchain_smoke.py` PASS (includes `@client npm -v` run path check)
+- `tools/runtime_smoke.py` PASS (includes app-builder endpoint check)
+- `tools/startup_smoke.py` PASS
+- `tools/desktop_smoke.py` PASS
+- `tools/personality_smoke.py` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+
+## SESSION 10 - Staff Expansion + Model Readiness (2026-02-15)
+
+### Added staff
+- `ops` (DevOps / Reliability Engineer)
+- `scribe` (Technical Writer / Documentation)
+- `critic` (Formal Critic / Red Team)
+
+### Routing and engine updates
+- Added new IDs and display names to conversation engine:
+  - `server/agent_engine.py`
+- Extended router team map, keywords, and validation set:
+  - `server/router_agent.py`
+- Added adversarial/anti-groupthink routing priority with `critic` in major decisions.
+
+### Ollama model management feature
+- Added model management APIs:
+  - `GET /api/ollama/models/recommendations`
+  - `POST /api/ollama/models/pull`
+- Implemented in:
+  - `server/ollama_client.py`
+  - `server/routes_api.py`
+  - `server/models.py` (`OllamaPullIn`)
+- Added Controls UI panel to:
+  - refresh model readiness
+  - pull missing recommended models
+  - inspect model-to-staff mapping
+  - Files: `client/src/components/Controls.jsx`, `client/src/App.css`, `client/src/api.js`
+
+### CLI helper
+- Added `tools/pull_staff_models.py` to pull recommended Ollama models directly.
+
+### Validation
+- `tools/runtime_smoke.py` PASS
+- `tools/startup_smoke.py` PASS
+- `tools/desktop_smoke.py` PASS
+- `tools/toolchain_smoke.py` PASS
+- `tools/personality_smoke.py` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+
+### Notes
+- Model pull was attempted, but skipped in this environment because Ollama was not reachable at `127.0.0.1:11434`.
+
+---
+
+## SESSION 11 - Collab Core + Execution Engine (2026-02-15)
+
+### Collaboration core
+- [x] Added message reactions persistence:
+  - DB table: `message_reactions`
+  - APIs:
+    - `POST /api/messages/{message_id}/reactions`
+    - `GET /api/messages/{message_id}/reactions`
+  - WebSocket fanout event: `reaction_update`
+- [x] Added deterministic collab commands:
+  - `/meeting` (structured mode)
+  - `/vote` (deterministic option selection and tally)
+- [x] Vote results now persist to `decisions`.
+- [x] Chat header now shows collab mode status.
+
+### Execution engine foundations
+- [x] Added project workspace manager:
+  - `server/project_manager.py`
+  - `PROJECTS_ROOT = C:/AI_WORKSPACE/projects`
+  - create/list/switch/status/delete with two-step delete confirmation token.
+- [x] Added project APIs:
+  - `POST /api/projects`
+  - `GET /api/projects`
+  - `POST /api/projects/switch`
+  - `GET /api/projects/active/{channel}`
+  - `DELETE /api/projects/{name}`
+  - `GET /api/projects/status/{channel}`
+- [x] Tool gateway now uses channel-aware sandbox roots.
+- [x] Added build runner:
+  - `server/build_runner.py`
+  - config path: `.ai-office/config.json`
+  - auto-detects Node/Python/Rust/Go/CMake commands
+  - APIs for config/build/test/run.
+- [x] Added `/build` command family in engine:
+  - `/build config`
+  - `/build set-build <cmd>`
+  - `/build set-test <cmd>`
+  - `/build set-run <cmd>`
+  - `/build run`
+  - `/test run`
+  - `/run start`
+- [x] Added post-write build/test/fix loop:
+  - auto-runs after write tool calls when build config exists
+  - up to 3 fix attempts
+  - escalates to Nova on repeated failure.
+- [x] Added file context injection in prompts:
+  - README/manifests
+  - user referenced paths
+  - recent file references
+  - assigned task references.
+- [x] Added task status tag automation:
+  - `[TASK:start] #id`
+  - `[TASK:done] #id - summary`
+  - `[TASK:blocked] #id - reason`
+
+### UI
+- [x] Added Projects tab:
+  - `client/src/components/ProjectPanel.jsx`
+- [x] Added active project badge to chat header.
+- [x] Added reactions UI in chat messages.
+
+---
+
+## SESSION 12 - Stage 2/3 Completion Pass (2026-02-15)
+
+### Stage 2 features
+- [x] Added autonomous work mode:
+  - `server/autonomous_worker.py`
+  - APIs:
+    - `POST /api/work/start`
+    - `POST /api/work/stop`
+    - `GET /api/work/status/{channel}`
+  - Commands:
+    - `/work start`
+    - `/work stop`
+    - `/work status`
+- [x] Added web research:
+  - `server/web_search.py`
+  - provider order:
+    - SearXNG (if configured)
+    - Tavily (if configured)
+  - explicit unavailable response when neither exists
+  - tools: `[TOOL:web]`, `[TOOL:fetch]` (restricted by role).
+- [x] Added Git integration:
+  - `server/git_tools.py`
+  - APIs:
+    - `/api/projects/{name}/git/status|log|diff|commit|branch|merge`
+  - Commands:
+    - `/git status`, `/git log`, `/git commit <msg>`, `/git branch <name>`
+    - `/branch <name>`, `/merge <name>`
+  - UI panel: `client/src/components/GitPanel.jsx`
+- [x] Added inline code execution:
+  - API: `POST /api/execute` (`python`, `javascript`, `bash`, 30s timeout)
+  - Message code blocks now include Run button in `MessageContent.jsx`.
+
+### Stage 3 features
+- [x] Added `/export` transcript writing to active project:
+  - `docs/exports/<channel>-<timestamp>.md`
+- [x] Added project templates:
+  - `/project create <name> --template react|python|rust`
+  - API body supports `template`.
+- [x] Added performance tracking:
+  - DB table: `build_results`
+  - API: `GET /api/performance/agents`
+  - Agent profile now surfaces build/tool/task metrics.
+- [x] Added API usage/cost tracking + budget:
+  - DB table: `api_usage`
+  - budget persisted in `settings` (`api_budget_usd`)
+  - APIs:
+    - `GET /api/usage`
+    - `GET /api/usage/summary`
+    - `GET /api/usage/budget`
+    - `PUT /api/usage/budget`
+  - stop-warning behavior for hosted backends when budget is exceeded.
+- [x] Added dark/light theme toggle in UI.
+- [x] Added startup mode selector (`start.py --mode web|desktop`).
+- [x] Hardened tool creation workflow by auto-compiling newly written `tools/*.py` scripts.
+
+### Tests and verification
+- [x] Added tests:
+  - `tests/test_projects_api.py`
+  - `tests/test_build_runner.py`
+  - `tests/test_task_tag_updates.py`
+  - `tests/test_execute_api.py`
+  - `tests/test_git_api.py`
+- [x] Verification run:
+  - `python -m pytest tests -q` PASS
+  - `client/dev-lint.cmd` PASS
+  - `client/dev-build.cmd` PASS
+  - `tools/runtime_smoke.py` PASS
+  - `tools/startup_smoke.py` PASS
+  - `tools/desktop_smoke.py` PASS
+  - `tools/toolchain_smoke.py` PASS
+  - `tools/personality_smoke.py` PASS

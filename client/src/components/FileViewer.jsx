@@ -13,20 +13,38 @@ export default function FileViewer() {
   const [pathStack, setPathStack] = useState(['.']);
   const [fileContent, setFileContent] = useState(null);
   const [fileName, setFileName] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const fetchDirectory = (path) => fetch(`/api/files/tree?path=${encodeURIComponent(path)}`).then(r => r.json());
 
   const loadDir = (path) => {
     setLoading(true);
-    fetch(`/api/files/tree?path=${encodeURIComponent(path)}`)
-      .then(r => r.json())
-      .then(data => { setTree(Array.isArray(data) ? data : []); setLoading(false); })
-      .catch(() => setLoading(false));
+    fetchDirectory(path)
+      .then((data) => {
+        setTree(Array.isArray(data) ? data : []);
+      })
+      .finally(() => setLoading(false));
   };
 
-  useEffect(() => { loadDir(currentPath); }, [currentPath]);
+  useEffect(() => {
+    let cancelled = false;
+    fetchDirectory(currentPath)
+      .then((data) => {
+        if (cancelled) return;
+        setTree(Array.isArray(data) ? data : []);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPath]);
 
   const openDir = (path) => {
     setFileContent(null);
+    setLoading(true);
     setCurrentPath(path);
     setPathStack(prev => [...prev, path]);
   };
@@ -37,6 +55,7 @@ export default function FileViewer() {
     newStack.pop();
     const prev = newStack[newStack.length - 1];
     setPathStack(newStack);
+    setLoading(true);
     setCurrentPath(prev);
     setFileContent(null);
   };

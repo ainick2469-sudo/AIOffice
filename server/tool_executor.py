@@ -4,8 +4,9 @@ import re
 import logging
 from typing import Optional
 from .tool_gateway import tool_read_file, tool_search_files, tool_run_command, tool_write_file
-from .database import insert_message, get_db
+from .database import insert_message, get_db, update_task_from_tag, get_agent
 from .websocket import manager
+from . import web_search
 
 logger = logging.getLogger("ai-office.toolexec")
 
@@ -23,7 +24,14 @@ TOOL_PATTERNS = [
     (r'\[TOOL:write\]\s*(\S+)\s*\n```[\w]*\n(.*?)```', 'write'),
     (r'\[TOOL:write\]\s*(\S+)', 'write_noblock'),  # Agent forgot content block
     (r'\[TOOL:task\]\s*(.+)', 'task'),
+    (r'\[TOOL:web\]\s*(.+)', 'web'),
+    (r'\[TOOL:fetch\]\s*(.+)', 'fetch'),
 ]
+
+TASK_TAG_PATTERN = re.compile(
+    r"\[TASK:(start|done|blocked)\]\s*#(\d+)(?:\s*[—\-]\s*(.+))?",
+    re.IGNORECASE,
+)
 
 # Alt patterns for natural language
 ALT_PATTERNS = [
@@ -68,6 +76,17 @@ def parse_tool_calls(text: str) -> list[dict]:
             for m in matches:
                 calls.append({"type": tool_type, "arg": m.group(1).strip()})
 
+    for match in TASK_TAG_PATTERN.finditer(text):
+        status = match.group(1).strip().lower()
+        task_id = int(match.group(2))
+        summary = (match.group(3) or "").strip()
+        calls.append({
+            "type": "task_tag",
+            "status": status,
+            "task_id": task_id,
+            "summary": summary,
+        })
+
     return calls
 
 
@@ -100,14 +119,18 @@ async def _create_task(agent_id: str, task_text: str) -> dict:
 async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> list[dict]:
     """Execute tool calls and broadcast results to chat."""
     results = []
+    agent = await get_agent(agent_id)
+    role = (agent or {}).get("role", "").lower()
+    can_research = agent_id in {"researcher", "director"} or "research" in role or "director" in role
 
     for call in calls:
         tool_type = call["type"]
+        result = {}
         logger.info(f"[{agent_id}] executing {tool_type}: {call.get('arg', call.get('path', ''))[:80]}")
 
         try:
             if tool_type == "read":
-                result = await tool_read_file(agent_id, call["arg"])
+                result = await tool_read_file(agent_id, call["arg"], channel=channel)
                 if result["ok"]:
                     content = result["content"]
                     if len(content) > 2000:
@@ -117,18 +140,20 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                     msg = f"❌ **Read failed:** {result['error']}"
 
             elif tool_type == "run":
-                result = await tool_run_command(agent_id, call["arg"])
+                result = await tool_run_command(agent_id, call["arg"], channel=channel)
                 if result["ok"]:
                     stdout = result.get("stdout", "").strip()
                     if len(stdout) > 1500:
                         stdout = stdout[:1500] + "\n... (truncated)"
-                    msg = f"⚡ **Ran `{call['arg']}`** (exit: {result['exit_code']})\n```\n{stdout}\n```"
+                    cwd_note = f" @ `{result['cwd']}`" if result.get("cwd") else ""
+                    msg = f"⚡ **Ran `{call['arg']}`{cwd_note} (exit: {result['exit_code']})\n```\n{stdout}\n```"
                 else:
                     err = result.get("error", result.get("stderr", "unknown"))
-                    msg = f"❌ **Command failed:** `{call['arg']}`\n```\n{err}\n```"
+                    cwd_note = f" @ `{result['cwd']}`" if result.get("cwd") else ""
+                    msg = f"❌ **Command failed:** `{call['arg']}`{cwd_note}\n```\n{err}\n```"
 
             elif tool_type == "search":
-                result = await tool_search_files(agent_id, call["arg"])
+                result = await tool_search_files(agent_id, call["arg"], channel=channel)
                 if result["ok"]:
                     matches = result["matches"][:20]
                     file_list = "\n".join(f"  {f}" for f in matches)
@@ -138,13 +163,34 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
 
             elif tool_type == "write":
                 # Get diff preview first, then auto-write
-                preview = await tool_write_file(agent_id, call["path"], call["content"], approved=False)
-                result = await tool_write_file(agent_id, call["path"], call["content"], approved=True)
+                preview = await tool_write_file(
+                    agent_id,
+                    call["path"],
+                    call["content"],
+                    approved=False,
+                    channel=channel,
+                )
+                result = await tool_write_file(
+                    agent_id,
+                    call["path"],
+                    call["content"],
+                    approved=True,
+                    channel=channel,
+                )
                 if result.get("action") == "written" or result.get("ok"):
                     diff = preview.get("diff", "")
                     if len(diff) > 1500:
                         diff = diff[:1500] + "\n... (truncated)"
                     msg = f"✅ **Wrote `{call['path']}`** ({result.get('size', 0)} chars)\n```diff\n{diff}\n```"
+                    path_lower = call["path"].replace("\\", "/").lower()
+                    if path_lower.startswith("tools/") and path_lower.endswith(".py"):
+                        compile_cmd = f"python -m py_compile {call['path']}"
+                        compile_result = await tool_run_command(agent_id, compile_cmd, channel=channel)
+                        if compile_result.get("ok"):
+                            msg += "\n🧪 Tool script compile check: pass."
+                        else:
+                            err_text = compile_result.get("stderr") or compile_result.get("error") or "compile failed"
+                            msg += f"\n⚠️ Tool script compile check failed:\n```text\n{err_text[:600]}\n```"
                 else:
                     msg = f"❌ **Write failed:** {result.get('error', 'unknown')}"
 
@@ -162,6 +208,58 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                     await manager.broadcast(channel, {"type": "task_created", "task": task})
                 else:
                     msg = f"❌ **Task creation failed:** {result.get('error', 'unknown')}"
+            elif tool_type == "task_tag":
+                db_status = "in_progress" if call["status"] == "start" else call["status"]
+                updated = await update_task_from_tag(
+                    call["task_id"],
+                    db_status,
+                    agent_id,
+                    call.get("summary"),
+                )
+                if updated:
+                    summary_suffix = f" ({call.get('summary')})" if call.get("summary") else ""
+                    msg = (
+                        f"🧩 **Task update:** #{updated['id']} -> `{updated['status']}`"
+                        f"{summary_suffix}"
+                    )
+                    await manager.broadcast(channel, {"type": "task_updated", "task": updated})
+                    result = {"ok": True, "task": updated}
+                else:
+                    result = {"ok": False, "error": "Task not found or invalid status"}
+                    msg = f"❌ **Task update failed:** {result['error']}"
+            elif tool_type == "web":
+                if not can_research:
+                    result = {"ok": False, "error": "Web tools are restricted to researcher/director roles."}
+                    msg = f"⛔ **Web search blocked:** {result['error']}"
+                else:
+                    result = await web_search.search_web(call["arg"], limit=6)
+                    if result.get("ok"):
+                        items = result.get("results", [])
+                        if not items:
+                            msg = "🔎 **Web search returned no results.**"
+                        else:
+                            lines = [f"🔎 **Web results** via `{result.get('provider')}`:"]
+                            for item in items:
+                                lines.append(f"- [{item['title']}]({item['url']}) — {item.get('snippet', '')}")
+                            msg = "\n".join(lines)
+                    else:
+                        msg = f"❌ **Web search failed:** {result.get('error', 'unknown error')}"
+            elif tool_type == "fetch":
+                if not can_research:
+                    result = {"ok": False, "error": "Fetch tool is restricted to researcher/director roles."}
+                    msg = f"⛔ **Fetch blocked:** {result['error']}"
+                else:
+                    result = await web_search.fetch_url(call["arg"])
+                    if result.get("ok"):
+                        snippet = (result.get("content") or "").strip()
+                        if len(snippet) > 1800:
+                            snippet = snippet[:1800] + "\n... (truncated)"
+                        msg = (
+                            f"🌐 **Fetched** {result.get('url')} (status {result.get('status_code')})\n"
+                            f"```text\n{snippet}\n```"
+                        )
+                    else:
+                        msg = f"❌ **Fetch failed:** {result.get('error', 'unknown error')}"
             else:
                 continue
 
@@ -173,7 +271,7 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                 msg_type="tool_result",
             )
             await manager.broadcast(channel, {"type": "chat", "message": saved})
-            results.append({"type": tool_type, "result": result if 'result' in dir() else {}, "msg": msg})
+            results.append({"type": tool_type, "result": result, "msg": msg})
 
         except Exception as e:
             logger.error(f"Tool exec error: {e}")

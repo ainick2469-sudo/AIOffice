@@ -1,168 +1,186 @@
-# 🏢 AI Office
+# AI Office
 
-A multi-agent AI team workspace where autonomous agents collaborate, debate, and build projects together. Think Slack meets an AI dev team.
+AI Office is a local multi-agent workspace that feels like a real staff room: agents debate, route work, run tools, create tasks, and respond in real time.
 
-## What Is This?
+## Security Note
 
-AI Office is a desktop application that simulates a full software development team powered by AI agents. Each agent has a distinct personality, role, and expertise. They don't just answer your questions — they talk to each other, disagree, build on ideas, use tools, and actually write code.
+If any API key was ever pasted into chat, logs, screenshots, or commits, treat it as exposed. Rotate it immediately and replace `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in `C:\AI_WORKSPACE\ai-office\.env`.
 
-## The Team (12 Agents)
+## Stack
 
-| Agent | Role | Backend | Personality |
-|-------|------|---------|-------------|
-| 💡 Spark | Creative Ideator | Ollama | Wild ideas, blue-sky thinking |
-| 🏗️ Ada | System Architect | Ollama | Structure, scalability, design patterns |
-| 🔨 Max | Builder / Programmer | Ollama | Writes code, debugs, implements |
-| 🔍 Rex | Code Reviewer / Security | Ollama | Finds flaws, security issues |
-| 🧪 Quinn | QA / Testing | Ollama | Edge cases, testing, quality |
-| 🎨 Uma | UI/UX Designer | Ollama | User experience, interface design |
-| 🖼️ Iris | Art / Visual Design | Ollama | Colors, typography, visual style |
-| 📋 Pam | Producer / Project Manager | Ollama | Coordination, timelines, priorities |
-| 📖 Leo | Lore / Narrative | Ollama | Storytelling, creative writing |
-| ⭐ Nova | Director / Tech Lead | Claude | Big decisions, strategy, leadership |
-| 🔭 Scout | Deep Researcher | Claude | Research, best practices, documentation |
-| 🤖 Router | Message Classifier | Ollama | Routes messages to the right agents |
+- Backend: Python 3.12, FastAPI, SQLite, WebSocket
+- Frontend: React 19, Vite 7, ESLint 9
+- Desktop: PyWebView + system tray (pystray, Pillow)
+- AI backends: Ollama, Anthropic, OpenAI
 
-## Features
+## Team
 
-### Chat System
-- **Living conversations** — agents respond to you AND to each other
-- **Multi-agent discussions** — 2-4+ agents per conversation
-- **Tool execution** — agents can read files, run commands, search code
-- **Markdown rendering** with syntax-highlighted code blocks
+17 staff members are currently supported.
 
-### Project Management
-- **Task Board** — Kanban board (Backlog → In Progress → Review → Done)
-- **Decision Log** — tracks all team decisions
-- **Audit Log** — every tool use is logged
+- `router` (Router)
+- `spark` (Creative Ideator)
+- `architect` (System Architect)
+- `builder` (Builder)
+- `reviewer` (Reviewer/Security)
+- `qa` (QA)
+- `uiux` (UI/UX)
+- `art` (Visual Design)
+- `producer` (PM)
+- `lore` (Narrative)
+- `director` (Claude)
+- `researcher` (Claude)
+- `sage` (Scope Guardian)
+- `codex` (OpenAI implementation overseer)
+- `ops` (DevOps / Reliability)
+- `scribe` (Technical Writer)
+- `critic` (Formal Critic / Red Team)
 
-### Workspace
-- **File Viewer** — browse and read project files with syntax highlighting
-- **Message Search** — search across all channels
-- **Agent Profiles** — click any agent to see stats, memories, recent activity
+Registry source of truth: `C:\AI_WORKSPACE\ai-office\agents\registry.json`
 
-### Desktop App
-- **One-click launch** — double-click shortcut to start everything
-- **Close to stop** — closing the window stops all services
-- **No terminal needed** — runs as a native desktop window
+## Current Features
 
-## Tech Stack
+- Real-time multi-channel chat with WebSocket
+- Agent-to-agent continuation loops with interrupt handling
+- Thread replies, reactions, message grouping, and unread badges
+- Structured collaboration commands: `/meeting`, `/vote`
+- Task board with auto task-tag updates (`[TASK:start|done|blocked]`)
+- Channel-scoped project workspaces with `/project` lifecycle commands
+- Channel-scoped tool sandbox root for read/search/run/write
+- File context injection before agent code generation
+- Build/test/run command config (`.ai-office/config.json`) + auto-detect presets
+- Post-write build/test/fix loop with deterministic Nova escalation
+- `/work` autonomous background execution mode
+- Web research tools (`[TOOL:web]`, `[TOOL:fetch]`) with provider fallback
+- Git panel + `/git` and `/branch`/`/merge` commands
+- Inline code execution for code blocks (`python`, `javascript`, `bash`)
+- Conversation export to `docs/exports/` via `/export`
+- Project templates (`react`, `python`, `rust`)
+- Agent performance metrics and API usage/cost tracking
+- Budget threshold and stop-warning behavior for hosted API backends
+- Theme toggle (dark/light) and startup mode selector (web/desktop)
+- App Builder control to launch full multi-agent app delivery runs
+- Desktop app launcher with tray controls and standalone native window mode
 
-- **Backend**: Python, FastAPI, SQLite, WebSockets
-- **Frontend**: React, Vite, react-markdown, react-syntax-highlighter
-- **AI**: Ollama (local models) + Anthropic Claude API (premium agents)
-- **Desktop**: PyWebView
-- **Local Models**: qwen2.5:14b (via Ollama)
+## API Highlights
 
-## Quick Start
+- `GET /api/agents`
+- `PATCH /api/agents/{agent_id}`
+- `POST /api/messages/{message_id}/reactions`
+- `GET /api/messages/{message_id}/reactions`
+- `GET /api/claude/status`
+- `GET /api/ollama/status`
+- `GET /api/openai/status`
+- `POST /api/app-builder/start`
+- `GET /api/ollama/models/recommendations`
+- `POST /api/ollama/models/pull`
+- `GET /api/messages/{channel}`
+- `GET /api/messages/search`
+- `GET /api/tasks`
+- `POST /api/tasks`
+- `PATCH /api/tasks/{task_id}/status`
+- `POST /api/files/upload`
+- `GET /api/files/tree`
+- `GET /api/files/read`
+- `POST /api/projects`
+- `GET /api/projects`
+- `POST /api/projects/switch`
+- `GET /api/projects/active/{channel}`
+- `DELETE /api/projects/{name}`
+- `GET /api/projects/{name}/build-config`
+- `PUT /api/projects/{name}/build-config`
+- `POST /api/projects/{name}/build`
+- `POST /api/projects/{name}/test`
+- `POST /api/projects/{name}/run`
+- `GET /api/projects/{name}/git/status`
+- `GET /api/projects/{name}/git/log`
+- `GET /api/projects/{name}/git/diff`
+- `POST /api/projects/{name}/git/commit`
+- `POST /api/projects/{name}/git/branch`
+- `POST /api/projects/{name}/git/merge`
+- `POST /api/work/start`
+- `POST /api/work/stop`
+- `GET /api/work/status/{channel}`
+- `POST /api/tools/web`
+- `POST /api/tools/fetch`
+- `POST /api/execute`
+- `GET /api/performance/agents`
+- `GET /api/usage`
+- `GET /api/usage/summary`
+- `GET /api/usage/budget`
+- `PUT /api/usage/budget`
 
-### Prerequisites
-- Python 3.12+
-- Node.js 18+
-- Ollama with `qwen2.5:14b` and `qwen3:1.7b` models
-- (Optional) Anthropic API key for Nova and Scout
+## Windows Reproducible Commands
 
-### Install
-```bash
-# Clone
-git clone https://github.com/ainick2469-sudo/AIOffice.git
-cd AIOffice
+Run these from `C:\AI_WORKSPACE\ai-office`.
 
-# Backend dependencies
-pip install fastapi uvicorn aiosqlite httpx webview
+1. Install backend deps
 
-# Frontend dependencies
-cd client && npm install && cd ..
-
-# Build frontend
-cd client && npx vite build && cd ..
-
-# Configure (optional — for Claude-powered agents)
-cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
+```bat
+C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe -m pip install -r requirements.txt
 ```
 
-### Run
-```bash
-# Desktop app (recommended)
-python app.py
+2. Frontend checks (PATH-safe wrappers)
 
-# Or use the desktop shortcut after first run
+```bat
+cd /d C:\AI_WORKSPACE\ai-office\client
+dev-build.cmd
+dev-lint.cmd
 ```
 
-### Development Mode
-```bash
-# Terminal 1: Backend
-python run.py
+3. Start app (PATH-safe launcher with mode selector)
 
-# Terminal 2: Frontend (with hot reload)
-cd client && npx vite
+```bat
+cd /d C:\AI_WORKSPACE\ai-office
+C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe start.py --mode web
 ```
 
-## Architecture
+4. Desktop mode
 
-```
-ai-office/
-├── app.py                  # Desktop app launcher
-├── run.py                  # Dev server launcher
-├── server/
-│   ├── main.py             # FastAPI app + WebSocket
-│   ├── agent_engine.py     # Conversation loop + agent orchestration
-│   ├── router_agent.py     # Message routing to agents
-│   ├── claude_client.py    # Anthropic API client
-│   ├── claude_adapter.py   # Claude → Ollama interface adapter
-│   ├── ollama_client.py    # Ollama API client
-│   ├── tool_executor.py    # Parse + execute tool calls from agents
-│   ├── tool_gateway.py     # Sandboxed file/command tools
-│   ├── database.py         # SQLite operations
-│   ├── memory.py           # JSONL memory system
-│   ├── distiller.py        # Extract facts from conversations
-│   ├── websocket.py        # WebSocket connection manager
-│   ├── routes_api.py       # REST API endpoints
-│   └── models.py           # Pydantic models
-├── agents/
-│   └── registry.json       # Agent definitions + system prompts
-├── client/
-│   ├── src/
-│   │   ├── App.jsx         # Main app with panel tabs
-│   │   ├── components/
-│   │   │   ├── ChatRoom.jsx
-│   │   │   ├── MessageContent.jsx
-│   │   │   ├── TaskBoard.jsx
-│   │   │   ├── FileViewer.jsx
-│   │   │   ├── SearchPanel.jsx
-│   │   │   ├── DecisionLog.jsx
-│   │   │   ├── AgentProfile.jsx
-│   │   │   ├── Sidebar.jsx
-│   │   │   ├── AuditLog.jsx
-│   │   │   └── Controls.jsx
-│   │   ├── hooks/
-│   │   │   └── useWebSocket.js
-│   │   └── api.js
-│   └── package.json
-└── data/                   # SQLite DB + JSONL memories (gitignored)
+```bat
+cd /d C:\AI_WORKSPACE\ai-office
+C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe start.py --mode desktop
 ```
 
-## API Endpoints
+Or double-click:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | /api/health | Health check |
-| GET | /api/agents | List all agents |
-| GET | /api/channels | List channels |
-| GET | /api/messages/{channel} | Get messages |
-| GET | /api/messages/search?q= | Search messages |
-| GET | /api/tasks | Get tasks |
-| POST | /api/tasks | Create task |
-| PATCH | /api/tasks/{id}/status | Update task status |
-| GET | /api/decisions | Get decision log |
-| GET | /api/agents/{id}/profile | Agent profile + stats |
-| GET | /api/files/tree | Browse project files |
-| GET | /api/files/read | Read file content |
-| GET | /api/audit | Audit log |
-| GET | /api/claude/status | Claude API status |
-| WS | /ws/{channel} | WebSocket for real-time chat |
+```bat
+C:\AI_WORKSPACE\ai-office\desktop-launch.cmd
+```
 
-## License
+Desktop mode requires `pywebview` and runs as a standalone native window (not browser fallback).
 
-MIT
+## Full App Build Workflow
+
+Use the Controls tab and start **App Builder** with:
+- app name
+- build goal
+- stack profile
+- target directory
+
+The backend endpoint is `POST /api/app-builder/start`. It seeds delivery tasks, posts a structured kickoff message, and starts the multi-agent build loop in chat.
+
+For command execution in subdirectories, agents can use:
+
+```text
+[TOOL:run] @client npm run build
+```
+
+## Key Management Helpers
+
+- Set/replace OpenAI key:
+
+```bat
+C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe tools\set_openai_key.py sk-...
+```
+
+- Clear OpenAI key:
+
+```bat
+C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe tools\set_openai_key.py --clear
+```
+
+- Check config (masked output):
+
+```bat
+C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe tools\check_openai_config.py
+```
