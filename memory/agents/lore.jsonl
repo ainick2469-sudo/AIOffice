@@ -1,1 +1,6 @@
 
+{"type": "decision", "content": "builder will set up a basic Flask prototype with error handling and integration for speech-to-text and emotion detection APIs", "source": "audio", "timestamp": "2026-02-14T16:17:51.299204", "agent": "lore"}
+{"type": "constraint", "content": "the app must include comprehensive error handling from the beginning to ensure scalability and robustness", "source": "audio", "timestamp": "2026-02-14T16:17:51.377870", "agent": "lore"}
+{"type": "preference", "content": "uiux prefers users can easily navigate between different features without feeling overwhelmed", "source": "audio", "timestamp": "2026-02-14T16:17:51.487537", "agent": "lore"}
+{"type": "decision", "content": "art suggests using a soothing yet vibrant color palette for the UI, such as soft blues and greens", "source": "audio", "timestamp": "2026-02-14T16:17:51.593209", "agent": "lore"}
+{"type": "todo", "content": "producer asks Uma to remind them about wireframes once they're ready today", "source": "audio", "timestamp": "2026-02-14T16:17:51.686160", "agent": "lore"}

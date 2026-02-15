@@ -87,38 +87,43 @@ async def _build_context(channel: str) -> str:
 def _build_system(agent: dict, channel: str, is_followup: bool) -> str:
     """Build system prompt. Tells agent to be themselves, not a bot."""
     s = agent.get("system_prompt", "You are a helpful team member.")
-    s += "\n\nYou are in a team chat with other AI agents and a human user."
-    s += "\nWrite naturally — just your message, no name prefix, no brackets."
-    s += "\nDO NOT start your message with your name or role in brackets."
-    s += "\nRefer to teammates by name: 'I like Spark's idea' or 'Ada, what about...'"
-    s += "\nKeep it concise: 2-4 sentences unless detail is needed."
+
+    # CRITICAL: Read user messages
+    s += "\n\n=== CRITICAL RULES ==="
+    s += "\n1. READ THE USER'S MESSAGES CAREFULLY. The user is your boss. If they give direction, FOLLOW IT."
+    s += "\n2. If the user corrects you or the team, ACKNOWLEDGE IT and CHANGE COURSE immediately."
+    s += "\n3. Do NOT repeat ideas the user has already rejected."
+    s += "\n4. Keep responses SHORT: 2-4 sentences. No essays."
+    s += "\n5. Write naturally — no name prefix, no brackets at the start."
+    s += "\n6. Refer to teammates by name when relevant."
 
     if is_followup:
-        s += "\n\nYou're following up on an ongoing conversation."
-        s += "\nOnly speak if you have something NEW to add — a different angle, a question, a concern, or building on what someone said."
-        s += "\nIf you have nothing meaningful to add, respond with exactly: PASS"
-        s += "\nDo NOT just agree or restate what was already said."
+        s += "\n\n=== FOLLOWUP RULES ==="
+        s += "\nOnly speak if you have something NEW to add. A different angle, question, or concern."
+        s += "\nIf you have nothing new, respond with exactly: PASS"
+        s += "\nDo NOT just agree or restate what others said. Do NOT be sycophantic."
 
-    # Tool instructions for agents with permissions
+    # Tool instructions
     perms = agent.get("permissions", "read")
     if perms in ("read", "run", "write"):
-        s += "\n\nYou have access to tools. Use them when it would help the conversation:"
+        s += "\n\n=== TOOLS ==="
         s += "\n  [TOOL:read] path/to/file — Read a file"
         s += "\n  [TOOL:search] *.py — Search for files"
+        s += "\n  [TOOL:task] Task title | assigned_to — Create a task on the board"
         if perms in ("run", "write"):
-            s += "\n  [TOOL:run] command — Run an allowed command (pytest, git status, npm test, etc)"
+            s += "\n  [TOOL:run] command — Run a command (pytest, git status, etc)"
         if perms == "write":
             s += "\n  [TOOL:write] path/to/file"
             s += "\n  ```"
             s += "\n  file content here"
             s += "\n  ```"
-        s += "\nUse tools when the team is discussing something you can look up or verify."
-        s += "\nDon't just talk about code — read it, check it, reference real files."
-        s += "\nAll file paths are relative to the project root (C:/AI_WORKSPACE/ai-office)."
-        s += "\nHere are the REAL files in this project right now:"
+            s += "\n  IMPORTANT: You MUST include the ``` content block when writing files."
+        s += "\nUse [TOOL:task] to create real tasks on the task board when work is planned."
+        s += "\nDon't just say 'I'll create a task' — actually use [TOOL:task] to create it."
+        s += "\nFile paths are relative to C:/AI_WORKSPACE/ai-office."
+        s += "\nReal project files:"
         s += f"\n```\n{_get_project_tree()}\n```"
-        s += "\nONLY reference files that actually exist above, or create new ones with [TOOL:write]."
-        s += "\nWhen creating new files for a project, put them in a subfolder (e.g. app/, src/, etc)."
+        s += "\nOnly reference files that exist above, or create new ones with [TOOL:write]."
 
     # Memory
     memories = read_all_memory_for_agent(agent["id"], limit=12)
@@ -134,7 +139,18 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
     context = await _build_context(channel)
     system = _build_system(agent, channel, is_followup)
 
-    prompt = f"Here's the conversation so far:\n\n{context}\n\nNow respond as {agent['display_name']}:"
+    # Find latest user message to highlight
+    messages = await get_messages(channel, limit=CONTEXT_WINDOW)
+    latest_user_msg = None
+    for msg in reversed(messages):
+        if msg["sender"] == "user":
+            latest_user_msg = msg["content"]
+            break
+
+    prompt = f"Here's the conversation so far:\n\n{context}\n\n"
+    if latest_user_msg:
+        prompt += f">>> THE USER'S LATEST MESSAGE (this is what you should respond to): \"{latest_user_msg}\"\n\n"
+    prompt += f"Now respond as {agent['display_name']}. Remember: respond to what the USER said, not just what other agents said."
 
     backend = agent.get("backend", "ollama")
 
@@ -174,7 +190,9 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
             response = re.sub(r'^PASS\.?\s*\n*', '', response, flags=re.IGNORECASE).strip()
             if not response or len(response) < 3:
                 return None
-        if len(response.strip()) < 3:
+        # Strip trailing PASS
+        response = re.sub(r'\n\s*PASS\.?\s*$', '', response, flags=re.IGNORECASE).strip()
+        if not response or len(response) < 3:
             return None
 
         return response.strip()
@@ -250,6 +268,58 @@ def _pick_next(last_sender: str, last_text: str, already_spoke: set) -> list[str
     return candidates[:3]
 
 
+async def _check_interrupt(channel: str) -> bool:
+    """Check if user interrupted. Returns True if interrupted."""
+    return channel in _user_interrupt
+
+
+async def _handle_interrupt(channel: str, spoke_set: set) -> int:
+    """Handle user interrupt: re-route and respond to new message. Returns msg count."""
+    new_msg = _user_interrupt.pop(channel)
+    logger.info(f"⚡ User interrupt: {new_msg[:60]}")
+    new_agents = await route(new_msg)
+    spoke_set.clear()
+    count = 0
+    for aid in new_agents:
+        if not _active.get(channel) or await _check_interrupt(channel):
+            break
+        agent = await get_agent(aid)
+        if not agent or not agent.get("active"):
+            continue
+        await _typing(agent, channel)
+        response = await _generate(agent, channel, is_followup=False)
+        if response:
+            await _send(agent, channel, response)
+            spoke_set.add(aid)
+            count += 1
+            await asyncio.sleep(PAUSE_BETWEEN_AGENTS)
+    return count
+
+
+async def _respond_agents(channel: str, agent_ids: list[str], spoke_set: set, is_followup: bool = False) -> int:
+    """Have a list of agents respond, checking for interrupts between each. Returns msg count."""
+    count = 0
+    for aid in agent_ids:
+        if not _active.get(channel):
+            return count
+        # Check for interrupt BEFORE each agent responds
+        if await _check_interrupt(channel):
+            count += await _handle_interrupt(channel, spoke_set)
+            return count
+
+        agent = await get_agent(aid)
+        if not agent or not agent.get("active"):
+            continue
+        await _typing(agent, channel)
+        response = await _generate(agent, channel, is_followup=is_followup)
+        if response:
+            await _send(agent, channel, response)
+            spoke_set.add(aid)
+            count += 1
+            await asyncio.sleep(PAUSE_BETWEEN_AGENTS)
+    return count
+
+
 async def _conversation_loop(channel: str, initial_agents: list[str]):
     """The living conversation. Agents respond, then react to each other."""
     count = 0
@@ -257,121 +327,58 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
     _msg_count[channel] = 0
 
     try:
-        # ROUND 1: Initial responders (to user's message)
         spoke_this_convo = set()
-        for aid in initial_agents:
-            if not _active.get(channel):
-                return
-            if channel in _user_interrupt:
-                break
 
-            agent = await get_agent(aid)
-            if not agent or not agent.get("active"):
-                continue
+        # ROUND 1: Initial responders (with interrupt checking between each)
+        added = await _respond_agents(channel, initial_agents, spoke_this_convo, is_followup=False)
+        count += added
+        _msg_count[channel] = count
 
-            await _typing(agent, channel)
-            response = await _generate(agent, channel, is_followup=False)
-
-            if response:
-                await _send(agent, channel, response)
-                spoke_this_convo.add(aid)
-                count += 1
-                _msg_count[channel] = count
-                await asyncio.sleep(PAUSE_BETWEEN_AGENTS)
-
-        # CONTINUATION ROUNDS: Agents respond to each other
+        # CONTINUATION ROUNDS
         consecutive_silence = 0
-        max_silence = 2  # Stop after 2 rounds where nobody has anything to say
+        max_silence = 2
 
         while count < MAX_MESSAGES and _active.get(channel) and consecutive_silence < max_silence:
             await asyncio.sleep(PAUSE_BETWEEN_ROUNDS)
 
             # Check for user interrupt
-            if channel in _user_interrupt:
-                new_msg = _user_interrupt.pop(channel)
-                logger.info(f"User jumped in: {new_msg[:60]}")
-                # Re-route for user's new message
-                new_agents = await route(new_msg)
-                spoke_this_convo.clear()  # Reset — fresh round
-                for aid in new_agents:
-                    if not _active.get(channel):
-                        return
-                    if channel in _user_interrupt:
-                        break
-                    agent = await get_agent(aid)
-                    if not agent or not agent.get("active"):
-                        continue
-                    await _typing(agent, channel)
-                    response = await _generate(agent, channel, is_followup=False)
-                    if response:
-                        await _send(agent, channel, response)
-                        spoke_this_convo.add(aid)
-                        count += 1
-                        _msg_count[channel] = count
-                        await asyncio.sleep(PAUSE_BETWEEN_AGENTS)
+            if await _check_interrupt(channel):
+                added = await _handle_interrupt(channel, spoke_this_convo)
+                count += added
+                _msg_count[channel] = count
                 consecutive_silence = 0
                 continue
 
-            # Get last message to decide who follows up
             recent = await get_messages(channel, limit=3)
             if not recent:
                 break
 
             last = recent[-1]
 
-            # If user was the last speaker, wait — they might keep typing
+            # If user was last speaker, wait then respond
             if last["sender"] == "user":
                 await asyncio.sleep(2)
                 recent2 = await get_messages(channel, limit=1)
                 if recent2 and recent2[-1]["sender"] == "user":
                     new_agents = await route(recent2[-1]["content"])
                     spoke_this_convo.clear()
-                    for aid in new_agents:
-                        if not _active.get(channel):
-                            return
-                        agent = await get_agent(aid)
-                        if not agent or not agent.get("active"):
-                            continue
-                        await _typing(agent, channel)
-                        response = await _generate(agent, channel, is_followup=False)
-                        if response:
-                            await _send(agent, channel, response)
-                            spoke_this_convo.add(aid)
-                            count += 1
-                            _msg_count[channel] = count
-                            await asyncio.sleep(PAUSE_BETWEEN_AGENTS)
+                    added = await _respond_agents(channel, new_agents, spoke_this_convo, is_followup=False)
+                    count += added
+                    _msg_count[channel] = count
                     consecutive_silence = 0
                     continue
 
             # Pick who responds next
             next_agents = _pick_next(last["sender"], last["content"], spoke_this_convo)
+            added = await _respond_agents(channel, next_agents, spoke_this_convo, is_followup=True)
+            count += added
+            _msg_count[channel] = count
 
-            anyone_spoke = False
-            for aid in next_agents:
-                if not _active.get(channel):
-                    return
-                if channel in _user_interrupt:
-                    break
-
-                agent = await get_agent(aid)
-                if not agent or not agent.get("active"):
-                    continue
-
-                await _typing(agent, channel)
-                response = await _generate(agent, channel, is_followup=True)
-
-                if response:
-                    await _send(agent, channel, response)
-                    spoke_this_convo.add(aid)
-                    count += 1
-                    _msg_count[channel] = count
-                    anyone_spoke = True
-                    consecutive_silence = 0
-                    await asyncio.sleep(PAUSE_BETWEEN_AGENTS)
-
-            if not anyone_spoke:
+            if added == 0:
                 consecutive_silence += 1
                 logger.info(f"Round quiet ({consecutive_silence}/{max_silence})")
+            else:
+                consecutive_silence = 0
 
             # Distill every 8 messages
             if count % 8 == 0 and count > 0:
