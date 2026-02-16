@@ -58,6 +58,13 @@ def _safe_filename(name: str) -> str:
     return cleaned[:120] or "upload.bin"
 
 
+def _normalize_timestamp(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    text = value.strip().replace("T", " ").replace("Z", "")
+    return text or None
+
+
 def _registry_agents() -> list[dict]:
     registry_path = PROJECT_ROOT / "agents" / "registry.json"
     if not registry_path.exists():
@@ -551,19 +558,96 @@ async def get_agent_memory(agent_id: str, limit: int = 50):
 
 
 @router.get("/audit")
-async def get_audit_logs(limit: int = 50, agent_id: Optional[str] = None):
+async def get_audit_logs(
+    limit: int = 200,
+    agent_id: Optional[str] = None,
+    tool_type: Optional[str] = None,
+    q: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+):
     conn = await db.get_db()
     try:
+        where = []
+        params = []
         if agent_id:
-            rows = await conn.execute(
-                "SELECT * FROM tool_logs WHERE agent_id = ? ORDER BY id DESC LIMIT ?",
-                (agent_id, limit))
-        else:
-            rows = await conn.execute(
-                "SELECT * FROM tool_logs ORDER BY id DESC LIMIT ?", (limit,))
+            where.append("agent_id = ?")
+            params.append(agent_id)
+        if tool_type:
+            where.append("tool_type = ?")
+            params.append(tool_type)
+        if q:
+            where.append("(command LIKE ? OR args LIKE ? OR output LIKE ?)")
+            like = f"%{q}%"
+            params.extend([like, like, like])
+        start_ts = _normalize_timestamp(date_from)
+        end_ts = _normalize_timestamp(date_to)
+        if start_ts:
+            where.append("created_at >= ?")
+            params.append(start_ts)
+        if end_ts:
+            where.append("created_at <= ?")
+            params.append(end_ts)
+
+        sql = "SELECT * FROM tool_logs"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        safe_limit = max(1, min(int(limit), 1000))
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(safe_limit)
+        rows = await conn.execute(sql, tuple(params))
         results = [dict(r) for r in await rows.fetchall()]
         results.reverse()
         return results
+    finally:
+        await conn.close()
+
+
+@router.get("/audit/count")
+async def get_audit_count():
+    conn = await db.get_db()
+    try:
+        row = await conn.execute("SELECT COUNT(*) AS c FROM tool_logs")
+        result = await row.fetchone()
+        return {"count": int(result["c"] if result else 0)}
+    finally:
+        await conn.close()
+
+
+@router.delete("/audit/logs")
+async def clear_audit_logs():
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute("DELETE FROM tool_logs")
+        await conn.commit()
+        return {"ok": True, "deleted_logs": int(cursor.rowcount or 0)}
+    finally:
+        await conn.close()
+
+
+@router.delete("/audit/decisions")
+async def clear_audit_decisions():
+    conn = await db.get_db()
+    try:
+        cursor = await conn.execute("DELETE FROM decisions")
+        await conn.commit()
+        return {"ok": True, "deleted_decisions": int(cursor.rowcount or 0)}
+    finally:
+        await conn.close()
+
+
+@router.delete("/audit/all")
+async def clear_audit_all():
+    conn = await db.get_db()
+    try:
+        logs_cursor = await conn.execute("DELETE FROM tool_logs")
+        decisions_cursor = await conn.execute("DELETE FROM decisions")
+        await conn.commit()
+        return {
+            "ok": True,
+            "deleted_logs": int(logs_cursor.rowcount or 0),
+            "deleted_decisions": int(decisions_cursor.rowcount or 0),
+        }
     finally:
         await conn.close()
 

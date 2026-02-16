@@ -20,6 +20,14 @@ export default function App() {
   const [profileAgent, setProfileAgent] = useState(null);
   const [agents, setAgents] = useState({});
   const [theme, setTheme] = useState(() => localStorage.getItem('ai-office-theme') || 'dark');
+  const [auditCount, setAuditCount] = useState(0);
+
+  const refreshAuditCount = () => {
+    fetch('/api/audit/count')
+      .then(r => (r.ok ? r.json() : { count: 0 }))
+      .then(payload => setAuditCount(Number(payload?.count || 0)))
+      .catch(() => setAuditCount(0));
+  };
 
   useEffect(() => {
     fetch('/api/agents')
@@ -37,6 +45,12 @@ export default function App() {
     document.body.setAttribute('data-theme', theme);
     localStorage.setItem('ai-office-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    refreshAuditCount();
+    const interval = setInterval(refreshAuditCount, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div className="app">
@@ -72,7 +86,7 @@ export default function App() {
             Decisions
           </button>
           <button className={panel === 'audit' ? 'active' : ''} onClick={() => setPanel('audit')}>
-            Audit
+            Audit ({auditCount})
           </button>
           <button className={panel === 'controls' ? 'active' : ''} onClick={() => setPanel('controls')}>
             Controls
@@ -111,7 +125,7 @@ export default function App() {
           />
         )}
         {panel === 'decisions' && <DecisionLog />}
-        {panel === 'audit' && <AuditLog />}
+        {panel === 'audit' && <AuditLog onAuditChanged={refreshAuditCount} />}
         {panel === 'controls' && <Controls />}
         {panel === 'projects' && <ProjectPanel channel={channel} />}
         {panel === 'git' && <GitPanel channel={channel} />}

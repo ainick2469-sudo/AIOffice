@@ -1047,3 +1047,41 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - [x] `python -m pytest tests -q` PASS (`17 passed`)
 - [x] `client/dev-lint.cmd` PASS
 - [x] `client/dev-build.cmd` PASS
+
+---
+
+## SESSION 25 - Step 7 Audit Log Overhaul (2026-02-16)
+
+### Backend audit APIs
+- [x] Expanded `GET /api/audit` filters in `server/routes_api.py`:
+  - `agent_id`
+  - `tool_type`
+  - `q` (search in command/args/output)
+  - `date_from`
+  - `date_to`
+- [x] Added `GET /api/audit/count` for tab badge count.
+- [x] Added clear endpoints:
+  - `DELETE /api/audit/logs`
+  - `DELETE /api/audit/decisions`
+  - `DELETE /api/audit/all`
+
+### Frontend audit UX
+- [x] Rebuilt `client/src/components/AuditLog.jsx` with:
+  - filter/search/date bar
+  - clear buttons (logs / decisions / all) with confirmation
+  - grouped entries by time bucket (collapsible)
+  - severity color coding:
+    - read/search = green
+    - write/task = yellow
+    - run = orange
+    - non-zero exit = red
+  - long output truncation with show more/show less.
+- [x] Updated `client/src/App.jsx`:
+  - Audit tab now shows badge count: `Audit (<count>)`
+  - periodic refresh from `/api/audit/count`.
+- [x] Updated `client/src/App.css` audit styles for new layout.
+
+### Verification
+- [x] `python -m pytest tests -q` PASS (`17 passed`)
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
