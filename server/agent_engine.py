@@ -40,7 +40,8 @@ from . import git_tools
 logger = logging.getLogger("ai-office.engine")
 
 CONTEXT_WINDOW = 20
-MAX_MESSAGES = 1000
+MAX_MESSAGES = 8  # Max agent messages per user message (prevents 17-agent snowball)
+MAX_FOLLOWUP_ROUNDS = 2  # Max continuation rounds after initial responses
 PAUSE_BETWEEN_AGENTS = 1.5  # seconds — feels natural
 PAUSE_BETWEEN_ROUNDS = 3.0  # seconds — breathing room
 
@@ -661,6 +662,10 @@ def _build_system(
     s += "\n7. Codex is an additional technical teammate and can be asked for implementation help."
     s += "\n8. If anyone proposes a risky shortcut (skip tests, ignore security, hardcode secrets, bypass requirements), challenge it and propose a safer path."
     s += "\n9. Respectful disagreement is required when logic is weak. Do not rubber-stamp bad ideas."
+    s += "\n10. NEVER respond with generic greetings like 'How can I help?' or 'What can I assist you with?' — you are a team member, not a customer service bot."
+    s += "\n11. If the user says hi or asks how you're doing, respond IN CHARACTER with what you're actually working on or thinking about. Be specific to YOUR role."
+    s += "\n12. NEVER use the same phrasing as another team member. Read their messages above and say something DIFFERENT."
+    s += "\n13. In group conversations, RESPOND TO what others said — agree, disagree, build on it. Don't just give your own unrelated take."
 
     if agent.get("id") in {"reviewer", "sage", "codex", "critic"}:
         s += "\n\n=== CRITICAL VOICE MODE ==="
@@ -982,7 +987,7 @@ def _invites_response(text: str) -> bool:
 
 
 def _pick_next(last_sender: str, last_text: str, already_spoke: set) -> list[str]:
-    """Pick who talks next. Deterministic + some randomness."""
+    """Pick who talks next. Only agents who were mentioned or have a specific reason to respond."""
     candidates = []
 
     # Mentioned agents always get to talk
@@ -990,21 +995,40 @@ def _pick_next(last_sender: str, last_text: str, already_spoke: set) -> list[str
         if aid != last_sender and aid not in already_spoke:
             candidates.append(aid)
 
-    # If the message invites response, add more
-    if _invites_response(last_text) or not candidates:
-        pool = [a for a in ALL_AGENT_IDS if a != last_sender and a not in already_spoke and a != "router"]
-        random.shuffle(pool)
-        for a in pool[:2]:
-            if a not in candidates:
-                candidates.append(a)
-
-    if _looks_risky(last_text):
-        for counter_voice in ("reviewer", "sage", "codex", "critic", "ops"):
+    # If someone was directly asked a question, only they respond
+    # Do NOT randomly pull from the full agent pool — that causes snowball
+    if _looks_risky(last_text) and not candidates:
+        for counter_voice in ("reviewer", "sage", "critic"):
             if counter_voice != last_sender and counter_voice not in already_spoke and counter_voice not in candidates:
                 candidates.insert(0, counter_voice)
                 break
 
-    return candidates[:3]
+    # Only add 1 random follow-up if nobody was mentioned AND the message
+    # contains a genuine question directed at the team (not just "how can I help?")
+    if not candidates and _invites_response(last_text):
+        # Only pick from agents with a DIFFERENT role type than who already spoke
+        technical = {"builder", "reviewer", "qa", "architect", "codex", "ops"}
+        creative = {"spark", "lore", "art", "uiux"}
+        management = {"producer", "director", "sage", "scribe", "critic"}
+        
+        spoke_types = set()
+        for s in already_spoke:
+            if s in technical: spoke_types.add("technical")
+            if s in creative: spoke_types.add("creative")
+            if s in management: spoke_types.add("management")
+        
+        # Pick from underrepresented type
+        pool = []
+        if "technical" not in spoke_types:
+            pool = [a for a in technical if a not in already_spoke and a != last_sender]
+        elif "management" not in spoke_types:
+            pool = [a for a in management if a not in already_spoke and a != last_sender]
+        
+        if pool:
+            random.shuffle(pool)
+            candidates.append(pool[0])
+
+    return candidates[:2]  # Max 2 follow-up agents per round
 
 
 async def _check_interrupt(channel: str) -> bool:
@@ -1094,8 +1118,9 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
         # CONTINUATION ROUNDS
         consecutive_silence = 0
         max_silence = 2
+        followup_rounds = 0
 
-        while count < MAX_MESSAGES and _active.get(channel) and consecutive_silence < max_silence:
+        while count < MAX_MESSAGES and _active.get(channel) and consecutive_silence < max_silence and followup_rounds < MAX_FOLLOWUP_ROUNDS:
             await asyncio.sleep(PAUSE_BETWEEN_ROUNDS)
 
             # Check for user interrupt
@@ -1104,6 +1129,7 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
                 count += added
                 _msg_count[channel] = count
                 consecutive_silence = 0
+                followup_rounds = 0  # Reset for new user message
                 continue
 
             recent = await get_messages(channel, limit=3)
@@ -1123,6 +1149,7 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
                     count += added
                     _msg_count[channel] = count
                     consecutive_silence = 0
+                    followup_rounds = 0  # Reset for new user message
                     continue
 
             # Pick who responds next
@@ -1136,6 +1163,8 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
                 logger.info(f"Round quiet ({consecutive_silence}/{max_silence})")
             else:
                 consecutive_silence = 0
+                followup_rounds += 1
+                logger.info(f"Follow-up round {followup_rounds}/{MAX_FOLLOWUP_ROUNDS}")
 
             # Distill every 8 messages
             if count % 8 == 0 and count > 0:
