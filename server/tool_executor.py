@@ -4,7 +4,7 @@ import re
 import logging
 from typing import Optional
 from .tool_gateway import tool_read_file, tool_search_files, tool_run_command, tool_write_file
-from .database import insert_message, get_db, update_task_from_tag, get_agent
+from .database import insert_message, update_task_from_tag, get_agent, create_task_record
 from .websocket import manager
 from . import web_search
 
@@ -96,24 +96,27 @@ async def _create_task(agent_id: str, task_text: str) -> dict:
     title = parts[0] if parts else task_text
     assigned = parts[1] if len(parts) > 1 else agent_id
     try:
-        priority = int(parts[2]) if len(parts) > 2 else 0
+        priority = int(parts[2]) if len(parts) > 2 else 2
     except ValueError:
-        priority = 0
+        priority = 2
 
-    db = await get_db()
     try:
-        cursor = await db.execute(
-            "INSERT INTO tasks (title, assigned_to, created_by, priority, status) VALUES (?, ?, ?, ?, 'backlog')",
-            (title, assigned, agent_id, priority),
+        task = await create_task_record(
+            {
+                "title": title,
+                "description": "",
+                "assigned_to": assigned or None,
+                "created_by": agent_id,
+                "priority": max(1, min(3, priority)),
+                "subtasks": [],
+                "linked_files": [],
+                "depends_on": [],
+                "status": "backlog",
+            }
         )
-        await db.commit()
-        row = await db.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,))
-        task = dict(await row.fetchone())
         return {"ok": True, "task": task}
     except Exception as e:
         return {"ok": False, "error": str(e)}
-    finally:
-        await db.close()
 
 
 async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> list[dict]:

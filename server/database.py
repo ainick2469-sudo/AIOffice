@@ -45,8 +45,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     description TEXT,
     status TEXT DEFAULT 'backlog',
     assigned_to TEXT,
+    subtasks TEXT DEFAULT '[]',
+    linked_files TEXT DEFAULT '[]',
+    depends_on TEXT DEFAULT '[]',
     created_by TEXT,
-    priority INTEGER DEFAULT 0,
+    priority INTEGER DEFAULT 2,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -168,6 +171,40 @@ async def init_db():
 async def _run_migrations(db: aiosqlite.Connection):
     """Non-destructive schema migrations for existing local DBs."""
     await _ensure_column(db, "tasks", "assigned_by", "TEXT")
+    await _ensure_column(db, "tasks", "subtasks", "TEXT DEFAULT '[]'")
+    await _ensure_column(db, "tasks", "linked_files", "TEXT DEFAULT '[]'")
+    await _ensure_column(db, "tasks", "depends_on", "TEXT DEFAULT '[]'")
+
+    await db.execute("UPDATE tasks SET subtasks = '[]' WHERE subtasks IS NULL OR subtasks = ''")
+    await db.execute("UPDATE tasks SET linked_files = '[]' WHERE linked_files IS NULL OR linked_files = ''")
+    await db.execute("UPDATE tasks SET depends_on = '[]' WHERE depends_on IS NULL OR depends_on = ''")
+    await db.execute("UPDATE tasks SET priority = 2 WHERE priority IS NULL OR priority < 1 OR priority > 3")
+
+
+def _json_dumps(value, fallback):
+    try:
+        return json.dumps(value if value is not None else fallback)
+    except Exception:
+        return json.dumps(fallback)
+
+
+def _json_loads(value, fallback):
+    if value in (None, ""):
+        return fallback
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return fallback
+    return parsed if isinstance(parsed, type(fallback)) else fallback
+
+
+def _normalize_task_row(row: dict) -> dict:
+    data = dict(row)
+    data["priority"] = max(1, min(3, int(data.get("priority", 2) or 2)))
+    data["subtasks"] = _json_loads(data.get("subtasks"), [])
+    data["linked_files"] = _json_loads(data.get("linked_files"), [])
+    data["depends_on"] = _json_loads(data.get("depends_on"), [])
+    return data
 
 
 async def _ensure_column(db: aiosqlite.Connection, table: str, column: str, column_def: str):
@@ -333,6 +370,134 @@ async def get_message_by_id(message_id: int) -> Optional[dict]:
         row = await db.execute("SELECT * FROM messages WHERE id = ?", (message_id,))
         result = await row.fetchone()
         return dict(result) if result else None
+    finally:
+        await db.close()
+
+
+async def create_task_record(task: dict) -> dict:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO tasks (
+                   title, description, status, assigned_to, subtasks, linked_files,
+                   depends_on, created_by, priority
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                (task.get("title") or "").strip(),
+                (task.get("description") or "").strip(),
+                task.get("status", "backlog"),
+                (task.get("assigned_to") or "").strip() or None,
+                _json_dumps(task.get("subtasks"), []),
+                _json_dumps(task.get("linked_files"), []),
+                _json_dumps(task.get("depends_on"), []),
+                (task.get("created_by") or "user").strip() or "user",
+                max(1, min(3, int(task.get("priority", 2) or 2))),
+            ),
+        )
+        await db.commit()
+        row = await db.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,))
+        result = await row.fetchone()
+        return _normalize_task_row(result) if result else {}
+    finally:
+        await db.close()
+
+
+async def get_task(task_id: int) -> Optional[dict]:
+    db = await get_db()
+    try:
+        row = await db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+        result = await row.fetchone()
+        return _normalize_task_row(result) if result else None
+    finally:
+        await db.close()
+
+
+async def list_tasks(status: Optional[str] = None) -> list[dict]:
+    db = await get_db()
+    try:
+        if status:
+            rows = await db.execute(
+                "SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, updated_at DESC",
+                (status,),
+            )
+        else:
+            rows = await db.execute("SELECT * FROM tasks ORDER BY priority DESC, updated_at DESC")
+        results = await rows.fetchall()
+        return [_normalize_task_row(r) for r in results]
+    finally:
+        await db.close()
+
+
+async def update_task(task_id: int, updates: dict) -> Optional[dict]:
+    allowed = {
+        "title",
+        "description",
+        "status",
+        "assigned_to",
+        "subtasks",
+        "linked_files",
+        "depends_on",
+        "priority",
+    }
+    fields = {k: v for k, v in updates.items() if k in allowed}
+    if not fields:
+        return await get_task(task_id)
+
+    params: list = []
+    assignments: list[str] = []
+
+    if "title" in fields:
+        assignments.append("title = ?")
+        params.append((fields["title"] or "").strip())
+    if "description" in fields:
+        assignments.append("description = ?")
+        params.append((fields["description"] or "").strip())
+    if "status" in fields:
+        status = str(fields["status"]).strip().lower()
+        if status not in TASK_STATUSES:
+            return None
+        assignments.append("status = ?")
+        params.append(status)
+    if "assigned_to" in fields:
+        assignments.append("assigned_to = ?")
+        params.append((fields["assigned_to"] or "").strip() or None)
+    if "subtasks" in fields:
+        assignments.append("subtasks = ?")
+        params.append(_json_dumps(fields.get("subtasks"), []))
+    if "linked_files" in fields:
+        assignments.append("linked_files = ?")
+        params.append(_json_dumps(fields.get("linked_files"), []))
+    if "depends_on" in fields:
+        assignments.append("depends_on = ?")
+        params.append(_json_dumps(fields.get("depends_on"), []))
+    if "priority" in fields:
+        assignments.append("priority = ?")
+        params.append(max(1, min(3, int(fields["priority"] or 2))))
+
+    assignments.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(task_id)
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            f"UPDATE tasks SET {', '.join(assignments)} WHERE id = ?",
+            tuple(params),
+        )
+        await db.commit()
+        if cursor.rowcount == 0:
+            return None
+    finally:
+        await db.close()
+
+    return await get_task(task_id)
+
+
+async def delete_task(task_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        await db.commit()
+        return cursor.rowcount > 0
     finally:
         await db.close()
 
@@ -545,7 +710,7 @@ async def get_tasks_for_agent(agent_id: str) -> list[dict]:
                ORDER BY priority DESC, updated_at DESC""",
             (agent_id,),
         )
-        return [dict(r) for r in await rows.fetchall()]
+        return [_normalize_task_row(r) for r in await rows.fetchall()]
     finally:
         await db.close()
 
@@ -580,7 +745,7 @@ async def update_task_from_tag(
         await db.commit()
         row = await db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
         result = await row.fetchone()
-        return dict(result) if result else None
+        return _normalize_task_row(result) if result else None
     finally:
         await db.close()
 

@@ -620,3 +620,52 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
   - `tools/desktop_smoke.py` PASS
   - `tools/toolchain_smoke.py` PASS
   - `tools/personality_smoke.py` PASS
+
+---
+
+## SESSION 13 - Segment 1 Task Board Overhaul (2026-02-15)
+
+### Backend task schema + API
+- [x] Extended `tasks` schema for structured workflow fields:
+  - `subtasks` (JSON text)
+  - `linked_files` (JSON text)
+  - `depends_on` (JSON text)
+  - normalized `priority` default to 2 (range 1-3)
+- [x] Added non-destructive migrations in `server/database.py` for legacy DBs.
+- [x] Added normalized task helpers in `server/database.py`:
+  - `create_task_record`, `get_task`, `list_tasks`, `update_task`, `delete_task`
+- [x] Added/updated task endpoints in `server/routes_api.py`:
+  - `GET /api/tasks/{id}`
+  - `PUT /api/tasks/{id}`
+  - `DELETE /api/tasks/{id}`
+  - existing `POST /api/tasks`, `GET /api/tasks`, `PATCH /api/tasks/{id}/status` now use shared normalized task logic.
+- [x] Updated task models in `server/models.py`:
+  - `TaskIn` supports structured fields + priority validation
+  - new `TaskUpdateIn`
+  - `TaskOut` includes structured fields.
+
+### Tooling and data cleanup
+- [x] Added `tools/clean_test_data.py`:
+  - deletes smoke/test junk tasks with `--dry-run` support
+  - supports `--all` for full task wipe when needed.
+- [x] Updated `server/tool_executor.py` task creation to use structured DB helper and priority range 1-3.
+
+### Frontend Task Board rewrite
+- [x] Rebuilt `client/src/components/TaskBoard.jsx`:
+  - filterable board (search, assignee, priority, status)
+  - stronger priority indicators (P1/P2/P3)
+  - clear back/next move controls
+  - task detail modal with editable fields
+  - subtask management in modal
+  - linked file management in modal
+  - task deletion from modal.
+- [x] Updated `client/src/App.css` with Task Board/modal styles for desktop + mobile.
+
+### Regression fix during segment
+- [x] Fixed `/api/execute` runtime executable resolution in `server/routes_api.py` so python/node/bash execution works even when PATH is fragile.
+
+### Verification
+- [x] `python -m pytest tests -q` PASS (`9 passed`)
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
+- [x] Direct startup validation via `python start.py --mode web` + `/api/health` check PASS (`START_OK`)

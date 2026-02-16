@@ -55,7 +55,22 @@ class TaskIn(BaseModel):
     title: str
     description: Optional[str] = None
     assigned_to: Optional[str] = None
-    priority: int = 0
+    priority: int = Field(default=2, ge=1, le=3)
+    subtasks: list[dict] = Field(default_factory=list)
+    linked_files: list[str] = Field(default_factory=list)
+    depends_on: list[int] = Field(default_factory=list)
+    created_by: Optional[str] = "user"
+
+
+class TaskUpdateIn(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[Literal["backlog", "in_progress", "review", "blocked", "done"]] = None
+    assigned_to: Optional[str] = None
+    priority: Optional[int] = Field(default=None, ge=1, le=3)
+    subtasks: Optional[list[dict]] = None
+    linked_files: Optional[list[str]] = None
+    depends_on: Optional[list[int]] = None
 
 
 class TaskOut(BaseModel):
@@ -66,6 +81,9 @@ class TaskOut(BaseModel):
     assigned_to: Optional[str]
     created_by: Optional[str]
     priority: int
+    subtasks: list[dict] = Field(default_factory=list)
+    linked_files: list[str] = Field(default_factory=list)
+    depends_on: list[int] = Field(default_factory=list)
     created_at: str
     updated_at: str
 

@@ -2,6 +2,8 @@
 
 import json
 import re
+import shutil
+import os
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
@@ -18,12 +20,37 @@ from .models import (
     ProjectSwitchIn,
     ReactionToggleIn,
     TaskIn,
+    TaskUpdateIn,
 )
 
 router = APIRouter(prefix="/api", tags=["api"])
 PROJECT_ROOT = Path("C:/AI_WORKSPACE/ai-office")
 UPLOADS_DIR = PROJECT_ROOT / "uploads"
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _resolve_executable(name: str, candidates: list[str]) -> str:
+    found = shutil.which(name)
+    if found:
+        return found
+    for path in candidates:
+        if Path(path).exists():
+            return path
+    return name
+
+
+def _runtime_env() -> dict:
+    env = os.environ.copy()
+    path_prefix = [
+        r"C:\Windows\System32",
+        r"C:\Windows",
+        r"C:\Program Files\Git\cmd",
+        r"C:\Program Files\Git\bin",
+        r"C:\Program Files\nodejs",
+        r"C:\Users\nickb\AppData\Local\Programs\Python\Python312",
+    ]
+    env["PATH"] = ";".join(path_prefix + [env.get("PATH", "")])
+    return env
 
 
 def _safe_filename(name: str) -> str:
@@ -330,11 +357,31 @@ async def execute_code(body: ExecuteCodeIn):
     if "&&" in code or "||" in code:
         raise HTTPException(400, "Shell chaining is not allowed.")
 
+    python_exe = _resolve_executable(
+        "python",
+        [
+            r"C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe",
+            r"C:\Program Files\Python312\python.exe",
+        ],
+    )
+    node_exe = _resolve_executable(
+        "node",
+        [
+            r"C:\Program Files\nodejs\node.exe",
+        ],
+    )
+    bash_exe = _resolve_executable(
+        "bash",
+        [
+            r"C:\Program Files\Git\bin\bash.exe",
+        ],
+    )
+
     suffix_map = {"python": ".py", "javascript": ".js", "bash": ".sh"}
     run_map = {
-        "python": ["cmd", "/c", "python", "{file}"],
-        "javascript": ["cmd", "/c", "node", "{file}"],
-        "bash": ["cmd", "/c", "bash", "{file}"],
+        "python": [python_exe, "{file}"],
+        "javascript": [node_exe, "{file}"],
+        "bash": [bash_exe, "{file}"],
     }
 
     with tempfile.TemporaryDirectory(prefix="ai-office-exec-") as tmp:
@@ -346,6 +393,7 @@ async def execute_code(body: ExecuteCodeIn):
             proc = subprocess.run(
                 args,
                 cwd=tmp,
+                env=_runtime_env(),
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -367,30 +415,48 @@ async def execute_code(body: ExecuteCodeIn):
 
 @router.post("/tasks")
 async def create_task(task: TaskIn):
-    conn = await db.get_db()
-    try:
-        cursor = await conn.execute(
-            "INSERT INTO tasks (title, description, assigned_to, assigned_by, priority) VALUES (?, ?, ?, ?, ?)",
-            (task.title, task.description, task.assigned_to, "user", task.priority),
-        )
-        await conn.commit()
-        row = await conn.execute("SELECT * FROM tasks WHERE id = ?", (cursor.lastrowid,))
-        return dict(await row.fetchone())
-    finally:
-        await conn.close()
+    payload = task.model_dump()
+    if not payload["title"].strip():
+        raise HTTPException(400, "Title is required.")
+    return await db.create_task_record(payload)
 
 
 @router.get("/tasks")
 async def list_tasks(status: Optional[str] = None):
-    conn = await db.get_db()
-    try:
-        if status:
-            rows = await conn.execute("SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC", (status,))
-        else:
-            rows = await conn.execute("SELECT * FROM tasks ORDER BY priority DESC")
-        return [dict(r) for r in await rows.fetchall()]
-    finally:
-        await conn.close()
+    if status and status not in db.TASK_STATUSES:
+        raise HTTPException(400, f"Invalid status: {status}")
+    return await db.list_tasks(status=status)
+
+
+@router.get("/tasks/{task_id}")
+async def get_task(task_id: int):
+    task = await db.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    return task
+
+
+@router.put("/tasks/{task_id}")
+async def update_task(task_id: int, body: TaskUpdateIn):
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(400, "No updates provided.")
+    if "title" in updates and not str(updates["title"]).strip():
+        raise HTTPException(400, "Title cannot be empty.")
+    if "status" in updates and updates["status"] not in db.TASK_STATUSES:
+        raise HTTPException(400, f"Invalid status: {updates['status']}")
+    updated = await db.update_task(task_id, updates)
+    if not updated:
+        raise HTTPException(404, "Task not found")
+    return updated
+
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(task_id: int):
+    ok = await db.delete_task(task_id)
+    if not ok:
+        raise HTTPException(404, "Task not found")
+    return {"ok": True, "deleted": task_id}
 
 
 @router.get("/health")
@@ -621,17 +687,10 @@ async def update_task_status(task_id: int, body: dict):
     new_status = str(body.get("status", "backlog")).strip().lower()
     if new_status not in db.TASK_STATUSES:
         raise HTTPException(400, f"Invalid status: {new_status}")
-    conn = await db.get_db()
-    try:
-        await conn.execute(
-            "UPDATE tasks SET status = ?, assigned_by = COALESCE(assigned_by, ?), updated_at = datetime('now') WHERE id = ?",
-            (new_status, "user", task_id))
-        await conn.commit()
-        row = await conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
-        result = await row.fetchone()
-        return dict(result) if result else {"error": "Not found"}
-    finally:
-        await conn.close()
+    task = await db.update_task(task_id, {"status": new_status})
+    if not task:
+        raise HTTPException(404, "Task not found")
+    return task
 
 
 @router.get("/files/tree")
