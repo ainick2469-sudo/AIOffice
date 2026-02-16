@@ -89,8 +89,31 @@ export default function DashboardHome({ onJumpToChannel, onOpenTasks, onOpenDeci
     return counts;
   }, [pendingTasks]);
 
-  const claudeAgents = agents.filter(a => a.backend === 'claude').length;
-  const ollamaAgents = Math.max(agents.length - claudeAgents, 0);
+  const roleGroupedAgents = useMemo(() => {
+    const groups = [
+      { key: 'technical', label: 'Technical', icon: '⚡', ids: new Set(['builder', 'reviewer', 'qa', 'architect', 'codex', 'ops', 'scribe']) },
+      { key: 'creative', label: 'Creative', icon: '🎨', ids: new Set(['spark', 'uiux', 'art', 'lore']) },
+      { key: 'management', label: 'Management', icon: '📋', ids: new Set(['producer', 'sage', 'critic']) },
+      { key: 'leadership', label: 'Leadership', icon: '⭐', ids: new Set(['director', 'researcher']) },
+      { key: 'system', label: 'System', icon: '🤖', ids: new Set(['router']) },
+    ];
+
+    const groupMap = Object.fromEntries(groups.map(group => [group.key, { ...group, agents: [] }]));
+    const fallback = { key: 'system', label: 'System', icon: '🤖', ids: new Set(), agents: [] };
+    for (const agent of agents) {
+      const match = groups.find(group => group.ids.has(agent.id));
+      if (match) {
+        groupMap[match.key].agents.push(agent);
+      } else {
+        fallback.agents.push(agent);
+      }
+    }
+
+    const ordered = groups.map(group => groupMap[group.key]);
+    if (fallback.agents.length > 0) ordered.push(fallback);
+    return ordered;
+  }, [agents]);
+
   const topWorkers = [...performance]
     .sort((a, b) => (b.tasks_done || 0) - (a.tasks_done || 0))
     .slice(0, 5);
@@ -205,22 +228,16 @@ export default function DashboardHome({ onJumpToChannel, onOpenTasks, onOpenDeci
             <h4>Agent Status</h4>
             <span className="dash-pill">{agents.length} online</span>
           </div>
-          <div className="dash-stats">
-            <div className="dash-stat">
-              <span className="dash-stat-value">{ollamaAgents}</span>
-              <span className="dash-stat-label">Ollama</span>
-            </div>
-            <div className="dash-stat">
-              <span className="dash-stat-value">{claudeAgents}</span>
-              <span className="dash-stat-label">Claude</span>
-            </div>
-          </div>
-          <div className="dash-agent-list">
-            {agents.slice(0, 10).map(agent => (
-              <div key={agent.id} className="dash-agent-item">
-                <span className="agent-dot" style={{ backgroundColor: agent.color || '#6B7280' }} />
+          <div className="dash-list">
+            {roleGroupedAgents.map(group => (
+              <div key={group.key} className="dash-list-item static">
                 <span className="dash-item-title">
-                  {agent.emoji || 'AI'} {agent.display_name}
+                  {group.icon} {group.label} ({group.agents.length})
+                </span>
+                <span className="dash-item-meta">
+                  {group.agents.length
+                    ? group.agents.map(agent => agent.display_name).join(', ')
+                    : 'none'}
                 </span>
               </div>
             ))}

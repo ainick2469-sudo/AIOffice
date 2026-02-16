@@ -1027,3 +1027,23 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - [x] `tools/desktop_smoke.py` PASS
 - [x] `client/dev-lint.cmd` PASS
 - [x] `client/dev-build.cmd` PASS
+
+---
+
+## SESSION 24 - Step 6 Dashboard Agent Status by Role Type (2026-02-16)
+
+### UX change
+- [x] Updated `client/src/components/DashboardHome.jsx` Agent Status card:
+  - removed backend/provider grouping from dashboard summary
+  - added role-type grouping with explicit buckets:
+    - `⚡ Technical`
+    - `🎨 Creative`
+    - `📋 Management`
+    - `⭐ Leadership`
+    - `🤖 System`
+  - each group now shows member count + member names.
+
+### Verification
+- [x] `python -m pytest tests -q` PASS (`17 passed`)
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
