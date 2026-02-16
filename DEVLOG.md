@@ -699,3 +699,38 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - [x] `client/dev-lint.cmd` PASS
 - [x] `client/dev-build.cmd` PASS
 - [x] `python start.py --mode web` startup health check PASS (`START_OK`)
+
+---
+
+## SESSION 15 - Segment 3 E2E Project Verification (2026-02-15)
+
+### Project lifecycle and build pipeline validation
+- [x] Created and switched active project to `test-calculator` under `C:/AI_WORKSPACE/projects`.
+- [x] Applied build/test/run config for project:
+  - build: `python -m py_compile main.py`
+  - test: `python -m pytest tests/ -v`
+  - run: `python main.py`
+- [x] Executed chat-driven E2E prompt:
+  - `Team, build a Python calculator with add/subtract/multiply/divide. Max write the code, Quinn write tests.`
+- [x] Confirmed generated files:
+  - `C:/AI_WORKSPACE/projects/test-calculator/main.py`
+  - `C:/AI_WORKSPACE/projects/test-calculator/tests/test_calculator.py`
+
+### Failure documentation
+- [x] Added full E2E run log to `tests/e2e_test_log.md`.
+- [x] No failures occurred in this run; log explicitly records zero failures.
+
+### Segment utility
+- [x] Added deterministic helper runner:
+  - `tools/segment3_e2e_runner.py`
+  - creates project, configures commands, drives conversation flow, and writes E2E log.
+
+### Segment 3 verification
+- [x] Project-level checks:
+  - `python -m py_compile main.py` PASS
+  - `python -m pytest tests/ -v` PASS (`6 passed`)
+- [x] Repo-level checks:
+  - `python -m pytest tests -q` PASS (`9 passed`)
+  - `client/dev-lint.cmd` PASS
+  - `client/dev-build.cmd` PASS
+  - `python start.py --mode web` health check PASS (`START_OK`)
