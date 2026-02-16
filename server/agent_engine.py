@@ -56,6 +56,7 @@ _msg_count: dict[str, int] = {}
 _user_interrupt: dict[str, str] = {}
 _collab_mode: dict[str, dict] = {}
 _agent_failures: dict[str, dict[str, int]] = {}
+_channel_turn_policy: dict[str, dict] = {}
 _review_mode: dict[str, bool] = {}
 _review_last_run: dict[str, float] = {}
 _sprint_tasks: dict[str, asyncio.Task] = {}
@@ -90,10 +91,75 @@ RISKY_SHORTCUT_TRIGGERS = (
     "push straight to prod", "temporary prod",
 )
 
+GENERIC_AGENT_REPLY_MARKERS = (
+    "how can i help",
+    "what can i help",
+    "what can i assist",
+    "happy to help",
+    "there was confusion",
+    "bit mixed up",
+    "looks like there might",
+    "let me know how",
+)
+
+TECHNICAL_COMPLEXITY_KEYWORDS = (
+    "build", "code", "design", "architecture", "implement", "fix", "test",
+    "api", "database", "schema", "frontend", "backend", "deploy", "debug",
+)
+
 
 def _looks_risky(text: str) -> bool:
     lower = text.lower()
     return any(trigger in lower for trigger in RISKY_SHORTCUT_TRIGGERS)
+
+
+def _single_line_excerpt(text: str, max_chars: int = 220) -> str:
+    clean = re.sub(r"\s+", " ", (text or "")).strip()
+    if len(clean) <= max_chars:
+        return clean
+    return clean[: max_chars - 3].rstrip() + "..."
+
+
+def _is_generic_agent_message(text: str) -> bool:
+    lower = (text or "").strip().lower()
+    if not lower:
+        return True
+    if any(marker in lower for marker in GENERIC_AGENT_REPLY_MARKERS):
+        return True
+    tokens = re.findall(r"[a-z0-9]+", lower)
+    if len(tokens) <= 12 and any(greet in lower for greet in ("hey", "hello", "hi ", "how are")):
+        return True
+    return False
+
+
+def _message_complexity(text: str) -> str:
+    lower = (text or "").lower()
+    words = len(re.findall(r"\b\w+\b", lower))
+    has_question = "?" in lower
+    has_technical = any(word in lower for word in TECHNICAL_COMPLEXITY_KEYWORDS)
+    has_structure = "\n" in text or lower.count(",") >= 3
+
+    if words < 10 and not has_technical and not has_structure:
+        return "simple"
+    if words < 40 or (has_question and not has_technical):
+        return "medium"
+    return "complex"
+
+
+def _turn_policy_for_message(text: str) -> dict:
+    complexity = _message_complexity(text)
+    if complexity == "simple":
+        return {"complexity": "simple", "max_initial_agents": 2, "max_followup_rounds": 0}
+    if complexity == "medium":
+        return {"complexity": "medium", "max_initial_agents": 3, "max_followup_rounds": 1}
+    return {"complexity": "complex", "max_initial_agents": 4, "max_followup_rounds": 2}
+
+
+def _get_turn_policy(channel: str) -> dict:
+    return _channel_turn_policy.get(
+        channel,
+        {"complexity": "medium", "max_initial_agents": 3, "max_followup_rounds": 1},
+    )
 
 
 # Cache project tree per root (refreshed every 60s)
@@ -1892,17 +1958,43 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
     # Find latest user message to highlight
     messages = await get_messages(channel, limit=CONTEXT_WINDOW)
     latest_user_msg = None
-    for msg in reversed(messages):
+    latest_user_index = -1
+    for idx in range(len(messages) - 1, -1, -1):
+        msg = messages[idx]
         if msg["sender"] == "user":
             latest_user_msg = msg["content"]
+            latest_user_index = idx
             break
+
+    teammate_messages = []
+    if latest_user_index >= 0:
+        for msg in messages[latest_user_index + 1:]:
+            sender = msg.get("sender")
+            if sender in {"user", "system", agent["id"]}:
+                continue
+            teammate_messages.append(msg)
+
+    teammate_summary_lines = []
+    for msg in teammate_messages[-5:]:
+        sender_id = msg.get("sender", "")
+        sender_name = AGENT_NAMES.get(sender_id, sender_id or "Teammate")
+        teammate_summary_lines.append(f'{sender_name} said: "{_single_line_excerpt(msg.get("content", ""))}"')
+    teammate_generic_count = sum(1 for msg in teammate_messages if _is_generic_agent_message(msg.get("content", "")))
 
     prompt = f"Here's the conversation so far:\n\n{context}\n\n"
     if latest_user_msg:
         prompt += f">>> THE USER'S LATEST MESSAGE (this is what you should respond to): \"{latest_user_msg}\"\n\n"
+    if teammate_summary_lines:
+        prompt += "=== WHAT YOUR TEAMMATES ALREADY SAID (DO NOT REPEAT) ===\n"
+        prompt += "\n".join(teammate_summary_lines) + "\n"
+        if teammate_generic_count >= 2:
+            prompt += (
+                "\nMultiple teammates already gave generic reactions. "
+                "You MUST add a concrete role-specific detail, ask a concrete question, or respond with PASS.\n"
+            )
+        prompt += "If you have nothing meaningfully new to add, respond with: PASS\n===\n\n"
     prompt += (
-        f"Now respond as {agent['display_name']}. Remember: respond to what the USER said, "
-        "not just what other agents said."
+        f"Now respond as {agent['display_name']}. Respond to the user and build on teammate context without repeating."
     )
 
     backend = agent.get("backend", "ollama")
@@ -1969,6 +2061,13 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
         response = re.sub(r'\n\s*PASS\.?\s*$', '', response, flags=re.IGNORECASE).strip()
         if not response or len(response) < 3:
             return None
+
+        if teammate_messages:
+            teammate_texts = [m.get("content", "") for m in teammate_messages]
+            if _too_similar_to_previous(response, teammate_texts):
+                return None
+            if teammate_generic_count >= 2 and _is_generic_agent_message(response):
+                return None
 
         if is_followup:
             recent_agent_messages = [
@@ -2303,12 +2402,15 @@ async def _handle_interrupt(channel: str, spoke_set: set) -> int:
     """Handle user interrupt: re-route and respond to new message. Returns msg count."""
     new_msg = _user_interrupt.pop(channel)
     logger.info(f"⚡ User interrupt: {new_msg[:60]}")
+    turn_policy = _turn_policy_for_message(new_msg)
+    _channel_turn_policy[channel] = turn_policy
     if _war_room_mode(channel):
         active_agents = await get_agents(active_only=True)
         active_ids = {a["id"] for a in active_agents}
         new_agents = [aid for aid in WAR_ROOM_AGENT_ORDER if aid in active_ids]
     else:
         new_agents = await route(new_msg)
+        new_agents = new_agents[: int(turn_policy.get("max_initial_agents", 3))]
     spoke_set.clear()
     count = 0
     for aid in new_agents:
@@ -2392,7 +2494,12 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
         max_silence = 2
         followup_rounds = 0
 
-        while count < MAX_MESSAGES and _active.get(channel) and consecutive_silence < max_silence and followup_rounds < MAX_FOLLOWUP_ROUNDS:
+        while count < MAX_MESSAGES and _active.get(channel) and consecutive_silence < max_silence:
+            turn_policy = _get_turn_policy(channel)
+            max_followup_rounds = int(turn_policy.get("max_followup_rounds", MAX_FOLLOWUP_ROUNDS))
+            max_followup_rounds = max(0, min(MAX_FOLLOWUP_ROUNDS, max_followup_rounds))
+            if followup_rounds >= max_followup_rounds:
+                break
             await asyncio.sleep(PAUSE_BETWEEN_ROUNDS)
 
             # Check for user interrupt
@@ -2415,7 +2522,11 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
                 await asyncio.sleep(2)
                 recent2 = await get_messages(channel, limit=1)
                 if recent2 and recent2[-1]["sender"] == "user":
-                    new_agents = await route(recent2[-1]["content"])
+                    next_user_message = recent2[-1]["content"]
+                    turn_policy = _turn_policy_for_message(next_user_message)
+                    _channel_turn_policy[channel] = turn_policy
+                    new_agents = await route(next_user_message)
+                    new_agents = new_agents[: int(turn_policy.get("max_initial_agents", 3))]
                     spoke_this_convo.clear()
                     added = await _respond_agents(channel, new_agents, spoke_this_convo, is_followup=False)
                     count += added
@@ -2538,6 +2649,9 @@ async def process_message(channel: str, user_message: str):
     if await _handle_meeting_or_vote(channel, user_message):
         return
 
+    turn_policy = _turn_policy_for_message(user_message)
+    _channel_turn_policy[channel] = turn_policy
+
     # Track user messages for auto-naming
     _user_msg_count[channel] = _user_msg_count.get(channel, 0) + 1
     asyncio.create_task(_auto_name_channel(channel))
@@ -2566,7 +2680,7 @@ async def process_message(channel: str, user_message: str):
         return
 
     # Start new conversation
-    logger.info(f"New conversation in #{channel}")
+    logger.info(f"New conversation in #{channel} ({turn_policy['complexity']})")
     mode = _war_room_mode(channel)
     if mode:
         active_agents = await get_agents(active_only=True)
@@ -2574,6 +2688,7 @@ async def process_message(channel: str, user_message: str):
         initial_agents = [aid for aid in WAR_ROOM_AGENT_ORDER if aid in active_ids]
     else:
         initial_agents = await route(user_message)
+        initial_agents = initial_agents[: int(turn_policy.get("max_initial_agents", 3))]
     logger.info(f"Initial agents: {initial_agents}")
     asyncio.create_task(_conversation_loop(channel, initial_agents))
 

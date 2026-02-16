@@ -954,3 +954,31 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
   - `tools/personality_smoke.py` PASS
   - `client/dev-lint.cmd` PASS
   - `client/dev-build.cmd` PASS
+
+---
+
+## SESSION 21 - Step 2/3 Conversation Quality + Complexity Caps (2026-02-16)
+
+### Step 2 - Agent response quality hardening
+- [x] Updated `server/agent_engine.py` `_generate()` to inject a strict teammate summary block before each response:
+  - `=== WHAT YOUR TEAMMATES ALREADY SAID (DO NOT REPEAT) ===`
+  - includes recent teammate one-line excerpts since the latest user message.
+- [x] Added generic-response detection so if multiple teammates already posted generic replies, the next agent is forced to add concrete role-specific value or effectively PASS.
+- [x] Added extra anti-repeat guard after generation:
+  - if response is too similar to teammate messages, it is dropped (treated like PASS).
+
+### Step 3 - Message complexity detection and turn limits
+- [x] Added complexity classifier helpers in `server/agent_engine.py`:
+  - simple -> max 2 initial agents, 0 follow-up rounds
+  - medium -> max 3 initial agents, 1 follow-up round
+  - complex -> max 4 initial agents, 2 follow-up rounds
+- [x] Added channel-scoped turn policy state and applied limits in:
+  - `process_message()` initial routing
+  - `_handle_interrupt()` rerouting
+  - `_conversation_loop()` follow-up gating and user-last reroute path.
+
+### Verification
+- [x] `python -m pytest tests -q` PASS (`17 passed`)
+- [x] `tools/personality_smoke.py` PASS
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
