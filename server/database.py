@@ -374,6 +374,16 @@ async def get_message_by_id(message_id: int) -> Optional[dict]:
         await db.close()
 
 
+async def clear_channel_messages(channel: str) -> int:
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM messages WHERE channel = ?", (channel,))
+        await db.commit()
+        return int(cursor.rowcount or 0)
+    finally:
+        await db.close()
+
+
 async def create_task_record(task: dict) -> dict:
     db = await get_db()
     try:

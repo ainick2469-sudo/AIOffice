@@ -982,3 +982,24 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - [x] `tools/personality_smoke.py` PASS
 - [x] `client/dev-lint.cmd` PASS
 - [x] `client/dev-build.cmd` PASS
+
+---
+
+## SESSION 22 - Step 4 Clear Chat Endpoint + UI (2026-02-16)
+
+### Backend
+- [x] Added `clear_channel_messages(channel)` in `server/database.py`.
+- [x] Added API endpoint in `server/routes_api.py`:
+  - `DELETE /api/channels/{channel_id}/messages`
+  - Deletes all channel messages, inserts system message `Chat history cleared.`, and broadcasts it via websocket.
+
+### Frontend
+- [x] Updated `client/src/components/ChatRoom.jsx`:
+  - Added `Clear Chat` button in header.
+  - Added confirmation dialog: `Clear all messages in this channel? This cannot be undone.`
+  - On success, clears local state and keeps the returned system message visible.
+
+### Verification
+- [x] `python -m pytest tests -q` PASS (`17 passed`)
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS

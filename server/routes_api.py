@@ -125,6 +125,27 @@ async def get_messages(channel: str, limit: int = 50, before_id: Optional[int] =
     return messages
 
 
+@router.delete("/channels/{channel_id}/messages")
+async def clear_channel_messages_route(channel_id: str):
+    deleted = await db.clear_channel_messages(channel_id)
+    system_message = await db.insert_message(
+        channel=channel_id,
+        sender="system",
+        content="Chat history cleared.",
+        msg_type="system",
+    )
+
+    from .websocket import manager
+
+    await manager.broadcast(channel_id, {"type": "chat", "message": system_message})
+    return {
+        "ok": True,
+        "channel": channel_id,
+        "deleted_count": deleted,
+        "system_message": system_message,
+    }
+
+
 @router.post("/messages/{message_id}/reactions")
 async def toggle_message_reaction(message_id: int, body: ReactionToggleIn):
     if not body.emoji.strip():

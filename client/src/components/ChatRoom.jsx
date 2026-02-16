@@ -431,6 +431,28 @@ export default function ChatRoom({ channel }) {
       .then(() => setConvoStatus(prev => ({ ...prev, active: false })));
   };
 
+  const clearChat = async () => {
+    const confirmed = window.confirm('Clear all messages in this channel? This cannot be undone.');
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`/api/channels/${channel}/messages`, { method: 'DELETE' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.error) {
+        throw new Error(payload?.error || `Clear chat failed (${response.status})`);
+      }
+
+      const systemMessage = payload?.system_message || null;
+      setMessages(systemMessage ? [systemMessage] : []);
+      setReactionsByMessage({});
+      loadedReactionIdsRef.current = new Set(systemMessage?.id ? [systemMessage.id] : []);
+      setThreadRootId(null);
+      setReplyTo(null);
+    } catch (err) {
+      window.alert(err?.message || 'Failed to clear chat.');
+    }
+  };
+
   const stopWork = () => {
     fetch('/api/work/stop', {
       method: 'POST',
@@ -506,6 +528,9 @@ export default function ChatRoom({ channel }) {
           </span>
         </div>
         <div className="chat-header-right">
+          <button className="stop-btn" onClick={clearChat}>
+            Clear Chat
+          </button>
           {isActive && (
             <>
               <span className="convo-status active">
