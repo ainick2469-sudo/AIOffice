@@ -10,6 +10,7 @@ import os
 import random
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from . import ollama_client
@@ -27,6 +28,8 @@ from .database import (
     log_build_result,
     get_api_usage_summary,
     get_setting,
+    create_task_record,
+    list_tasks,
 )
 from .websocket import manager
 from .memory import read_all_memory_for_agent
@@ -37,6 +40,7 @@ from . import openai_adapter
 from . import build_runner
 from . import project_manager
 from . import git_tools
+from . import autonomous_worker
 
 logger = logging.getLogger("ai-office.engine")
 
@@ -52,9 +56,17 @@ _msg_count: dict[str, int] = {}
 _user_interrupt: dict[str, str] = {}
 _collab_mode: dict[str, dict] = {}
 _agent_failures: dict[str, dict[str, int]] = {}
+_review_mode: dict[str, bool] = {}
+_review_last_run: dict[str, float] = {}
+_sprint_tasks: dict[str, asyncio.Task] = {}
 
 BUILD_FIX_MAX_ATTEMPTS = 3
 FAILURE_ESCALATION_THRESHOLD = 3
+AUTO_REVIEW_RATE_LIMIT_SECONDS = 30
+SPRINT_PROGRESS_INTERVAL_SECONDS = 300
+SPRINT_MIN_SECONDS = 60
+
+AUTO_REVIEW_CODE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".rs", ".go", ".cpp", ".c", ".java"}
 
 ALL_AGENT_IDS = [
     "spark", "architect", "builder", "reviewer", "qa", "uiux", "art",
@@ -156,6 +168,591 @@ def _format_elapsed(seconds: int) -> str:
     secs = max(0, int(seconds or 0))
     mins, rem = divmod(secs, 60)
     return f"{mins}m {rem:02d}s"
+
+
+def _review_enabled(channel: str) -> bool:
+    return _review_mode.get(channel, True)
+
+
+def _is_reviewable_code_path(path: str) -> bool:
+    normalized = (path or "").strip().replace("\\", "/").lower().lstrip("/")
+    if not normalized:
+        return False
+    ext = Path(normalized).suffix.lower()
+    if ext not in AUTO_REVIEW_CODE_EXTENSIONS:
+        return False
+
+    wrapped = f"/{normalized}/"
+    filename = Path(normalized).name
+    if "/docs/" in wrapped or normalized.startswith("docs/"):
+        return False
+    if "/tests/" in wrapped or normalized.startswith("tests/"):
+        return False
+    if filename.startswith("test_") or filename.endswith("_test.py") or ".test." in filename or ".spec." in filename:
+        return False
+    return True
+
+
+def _extract_reviewable_write_paths(results: list[dict]) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for item in results:
+        if item.get("type") != "write":
+            continue
+        result = item.get("result") or {}
+        is_success = bool(result.get("ok")) or result.get("action") == "written"
+        path = (item.get("path") or "").strip()
+        if not is_success or not path:
+            continue
+        if not _is_reviewable_code_path(path):
+            continue
+        normalized = path.replace("\\", "/")
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(normalized)
+    return paths
+
+
+async def _read_project_file_excerpt(channel: str, rel_path: str, max_lines: int = 220) -> str:
+    active = await project_manager.get_active_project(channel)
+    root = Path(active["path"]).resolve()
+    candidate = (root / rel_path.replace("\\", "/")).resolve()
+    if not str(candidate).startswith(str(root)):
+        return ""
+    if not candidate.exists() or not candidate.is_file():
+        return ""
+    try:
+        text = candidate.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+
+    lines = text.splitlines()
+    clipped = "\n".join(lines[:max_lines])
+    if len(lines) > max_lines:
+        clipped += f"\n... [truncated: showing {max_lines} of {len(lines)} lines]"
+    return clipped
+
+
+async def _generate_auto_review(
+    reviewer: dict,
+    channel: str,
+    file_path: str,
+    author_agent: dict,
+    excerpt: str,
+) -> Optional[str]:
+    active_project = await project_manager.get_active_project(channel)
+    backend = reviewer.get("backend", "ollama")
+
+    system = (
+        (reviewer.get("system_prompt") or "You are a strict code reviewer.")
+        + "\n\nAUTO CODE REVIEW MODE:\n"
+        + "Review only the provided file content.\n"
+        + "Focus on bugs, security, error handling, and edge cases.\n"
+        + "Respond in 2-6 short bullets.\n"
+        + "First line MUST be exactly: Severity: critical|warning|ok\n"
+    )
+    prompt = (
+        f"Author: {author_agent.get('display_name', author_agent.get('id', 'agent'))} ({author_agent.get('id', '')})\n"
+        f"File: {file_path}\n\n"
+        "Review this code that was just written.\n"
+        "If there are no major issues, use `Severity: ok`.\n"
+        "If there is a blocking or high-risk issue, use `Severity: critical`.\n\n"
+        f"```text\n{excerpt or '[file unreadable for review]'}\n```"
+    )
+
+    try:
+        if backend in {"claude", "openai"}:
+            budget_state = await _api_budget_state(channel, active_project["project"])
+            budget = budget_state["budget_usd"]
+            used = budget_state["used_usd"]
+            if budget > 0 and used >= budget:
+                return (
+                    "Severity: warning\n"
+                    "- API budget reached, auto-review skipped for this write."
+                )
+        if backend == "claude":
+            return await claude_adapter.generate(
+                prompt=prompt,
+                system=system,
+                temperature=0.2,
+                max_tokens=450,
+                model=reviewer.get("model", "claude-sonnet-4-20250514"),
+                channel=channel,
+                project_name=active_project["project"],
+            )
+        if backend == "openai":
+            return await openai_adapter.generate(
+                prompt=prompt,
+                system=system,
+                temperature=0.2,
+                max_tokens=450,
+                model=reviewer.get("model", "gpt-4o-mini"),
+                channel=channel,
+                project_name=active_project["project"],
+            )
+        return await ollama_client.generate(
+            model=reviewer.get("model", "qwen2.5:14b"),
+            prompt=prompt,
+            system=system,
+            temperature=0.2,
+            max_tokens=380,
+        )
+    except Exception as exc:
+        logger.error(f"Auto code review failed: {exc}")
+        return None
+
+
+def _review_has_critical_issues(review_text: str) -> bool:
+    lower = (review_text or "").lower()
+    if "severity: critical" in lower:
+        return True
+    if "no critical issue" in lower or "severity: ok" in lower:
+        return False
+    critical_tokens = (
+        "blocker",
+        "high severity",
+        "security vulnerability",
+        "remote code execution",
+        "data loss",
+        "auth bypass",
+    )
+    return any(token in lower for token in critical_tokens)
+
+
+def _extract_review_issue_summary(review_text: str) -> str:
+    lines = [line.strip(" -*\t") for line in (review_text or "").splitlines()]
+    for line in lines:
+        if not line:
+            continue
+        lower = line.lower()
+        if lower.startswith("severity:"):
+            continue
+        return line[:90]
+    return "critical review finding"
+
+
+async def _maybe_run_auto_code_review(channel: str, author_agent: dict, write_paths: list[str]):
+    if not write_paths or not _review_enabled(channel):
+        return
+
+    now = time.time()
+    last = _review_last_run.get(channel, 0.0)
+    if now - last < AUTO_REVIEW_RATE_LIMIT_SECONDS:
+        return
+
+    reviewer = await get_agent("reviewer")
+    if not reviewer or not reviewer.get("active"):
+        return
+
+    target_path = write_paths[0]
+    excerpt = await _read_project_file_excerpt(channel, target_path)
+    review = await _generate_auto_review(reviewer, channel, target_path, author_agent, excerpt)
+    if not review:
+        return
+
+    review = re.sub(r"<think>.*?</think>", "", review, flags=re.DOTALL).strip()
+    if not review:
+        return
+
+    _review_last_run[channel] = now
+    msg = f"📋 Code Review — `{target_path}`\n{review}"
+    saved = await insert_message(channel=channel, sender=reviewer["id"], content=msg, msg_type="review")
+    await manager.broadcast(channel, {"type": "chat", "message": saved})
+
+    if not _review_has_critical_issues(review):
+        return
+
+    issue = _extract_review_issue_summary(review)
+    task_title = f"Fix: {issue} in {target_path}"
+    if len(task_title) > 160:
+        task_title = task_title[:157] + "..."
+    task = await create_task_record(
+        {
+            "title": task_title,
+            "description": f"Auto-created from critical code review.\n\n{review}",
+            "assigned_to": author_agent["id"],
+            "created_by": reviewer["id"],
+            "priority": 3,
+            "subtasks": [],
+            "linked_files": [target_path],
+            "depends_on": [],
+            "status": "backlog",
+        }
+    )
+    await manager.broadcast(channel, {"type": "task_created", "task": task})
+    await _send_system_message(
+        channel,
+        f"Critical review issue detected. Created task #{task.get('id')} for `{author_agent.get('display_name', author_agent['id'])}`.",
+    )
+
+
+def _sprint_mode(channel: str) -> Optional[dict]:
+    mode = _collab_mode.get(channel)
+    if mode and mode.get("active") and mode.get("mode") == "sprint":
+        return mode
+    return None
+
+
+def _parse_sprint_duration(raw: str) -> int:
+    token = (raw or "").strip().lower()
+    match = re.fullmatch(r"(\d+)([mh])", token)
+    if not match:
+        raise ValueError("Duration must be like `30m` or `2h`.")
+    amount = int(match.group(1))
+    unit = match.group(2)
+    if amount <= 0:
+        raise ValueError("Duration must be > 0.")
+    seconds = amount * (60 if unit == "m" else 3600)
+    return max(SPRINT_MIN_SECONDS, seconds)
+
+
+def _sprint_scope_tasks(mode: dict, tasks: list[dict]) -> list[dict]:
+    baseline = {int(i) for i in mode.get("baseline_task_ids", [])}
+    scoped = []
+    for task in tasks:
+        try:
+            task_id = int(task.get("id"))
+        except Exception:
+            continue
+        if task_id in baseline:
+            continue
+        scoped.append(task)
+    return scoped
+
+
+def _sprint_progress_line(scoped_tasks: list[dict]) -> str:
+    total = len(scoped_tasks)
+    done = sum(1 for t in scoped_tasks if t.get("status") == "done")
+    in_progress = sum(1 for t in scoped_tasks if t.get("status") == "in_progress")
+    blocked = sum(1 for t in scoped_tasks if t.get("status") == "blocked")
+    remaining = max(0, total - done - in_progress - blocked)
+    return (
+        f"✅ {done}/{max(total, 1)} tasks done, "
+        f"🔨 {in_progress} in progress, "
+        f"⛔ {blocked} blocked, "
+        f"⬜ {remaining} remaining"
+    )
+
+
+def _parse_git_file_counts(status_stdout: str) -> tuple[int, int]:
+    created = 0
+    modified = 0
+    for raw in (status_stdout or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("??") or line.startswith("A") or line[1:2] == "A":
+            created += 1
+            continue
+        if line.startswith("M") or line[1:2] == "M":
+            modified += 1
+    return created, modified
+
+
+def _agent_write_counts(messages: list[dict], after_id: int) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for msg in messages:
+        if int(msg.get("id", 0) or 0) <= after_id:
+            continue
+        sender = msg.get("sender")
+        if not sender or sender in {"user", "system"}:
+            continue
+        tool_calls = parse_tool_calls(msg.get("content", ""))
+        write_count = sum(1 for call in tool_calls if call.get("type") == "write")
+        if write_count:
+            counts[sender] = counts.get(sender, 0) + write_count
+    return counts
+
+
+async def _generate_sprint_task_plan(director: dict, channel: str, goal: str) -> Optional[str]:
+    active_project = await project_manager.get_active_project(channel)
+    backend = director.get("backend", "ollama")
+    system = (
+        (director.get("system_prompt") or "You are a project director.")
+        + "\n\nSPRINT PLANNING MODE:\n"
+        + "Decompose the goal into 3-6 dependency-ordered implementation tasks.\n"
+        + "Use one `[TOOL:task]` line per task in format: title | assigned_to | priority.\n"
+        + "Choose valid assignees from this set: builder, reviewer, qa, architect, codex, ops, uiux, producer.\n"
+        + "Priority must be 1-3.\n"
+        + "Keep output short and action-focused."
+    )
+    prompt = (
+        f"Sprint goal: {goal}\n\n"
+        "Output 3-6 tasks using `[TOOL:task]` lines only, then one short kickoff sentence."
+    )
+
+    try:
+        if backend in {"claude", "openai"}:
+            budget_state = await _api_budget_state(channel, active_project["project"])
+            budget = budget_state["budget_usd"]
+            used = budget_state["used_usd"]
+            if budget > 0 and used >= budget:
+                return "API budget reached. Sprint planner cannot call remote model right now."
+        if backend == "claude":
+            return await claude_adapter.generate(
+                prompt=prompt,
+                system=system,
+                temperature=0.35,
+                max_tokens=500,
+                model=director.get("model", "claude-sonnet-4-20250514"),
+                channel=channel,
+                project_name=active_project["project"],
+            )
+        if backend == "openai":
+            return await openai_adapter.generate(
+                prompt=prompt,
+                system=system,
+                temperature=0.35,
+                max_tokens=500,
+                model=director.get("model", "gpt-4o-mini"),
+                channel=channel,
+                project_name=active_project["project"],
+            )
+        return await ollama_client.generate(
+            model=director.get("model", "qwen2.5:14b"),
+            prompt=prompt,
+            system=system,
+            temperature=0.4,
+            max_tokens=420,
+        )
+    except Exception as exc:
+        logger.error(f"Sprint decomposition failed: {exc}")
+        return None
+
+
+def _cancel_sprint_watcher(channel: str):
+    task = _sprint_tasks.get(channel)
+    current = asyncio.current_task()
+    if task and task is not current and not task.done():
+        task.cancel()
+    if task and (task.done() or task is not current):
+        _sprint_tasks.pop(channel, None)
+
+
+async def _build_sprint_report(channel: str, mode: dict, reason: str) -> tuple[str, Path]:
+    started_at = int(mode.get("started_at") or time.time())
+    duration_seconds = int(mode.get("duration_seconds") or 0)
+    now = int(time.time())
+    elapsed = max(0, now - started_at)
+
+    all_tasks = await list_tasks()
+    scoped = _sprint_scope_tasks(mode, all_tasks)
+    total_tasks = len(scoped)
+    done_tasks = sum(1 for t in scoped if t.get("status") == "done")
+    blocked_tasks = [t for t in scoped if t.get("status") == "blocked"]
+    remaining_tasks = [t for t in scoped if t.get("status") != "done"]
+
+    active_project = await project_manager.get_active_project(channel)
+    project_name = active_project["project"]
+    root = Path(active_project["path"])
+
+    build_status = "Not configured"
+    test_status = "Not configured"
+    cfg = build_runner.get_build_config(project_name)
+    if (cfg.get("build_cmd") or "").strip():
+        build_result = build_runner.run_build(project_name)
+        build_status = "✅ Passing" if build_result.get("ok") else f"❌ Failing ({build_result.get('exit_code')})"
+    if (cfg.get("test_cmd") or "").strip():
+        test_result = build_runner.run_test(project_name)
+        test_status = "✅ Passing" if test_result.get("ok") else f"❌ Failing ({test_result.get('exit_code')})"
+
+    git_status = git_tools.status(project_name)
+    created_files = 0
+    modified_files = 0
+    if git_status.get("ok"):
+        created_files, modified_files = _parse_git_file_counts(git_status.get("stdout", ""))
+
+    messages = await get_messages(channel, limit=2000)
+    start_message_id = int(mode.get("start_message_id") or 0)
+    writer_counts = _agent_write_counts(messages, start_message_id)
+    involved = []
+    for agent_id, count in sorted(writer_counts.items(), key=lambda item: (-item[1], item[0])):
+        involved.append(f"{AGENT_NAMES.get(agent_id, agent_id)} ({count} writes)")
+    involved_text = ", ".join(involved) if involved else "No write activity detected"
+
+    blocked_summary = "none"
+    if blocked_tasks:
+        blocked_summary = "; ".join(f"#{t.get('id')}: {t.get('title')}" for t in blocked_tasks[:4])
+    remaining_summary = "none"
+    if remaining_tasks:
+        remaining_summary = "; ".join(f"#{t.get('id')}: {t.get('title')}" for t in remaining_tasks[:4])
+
+    goal = mode.get("goal") or mode.get("topic") or "unspecified goal"
+    report = (
+        "📊 SPRINT REPORT\n"
+        f"Goal: {goal}\n"
+        f"Duration: {_format_elapsed(duration_seconds)} planned ({_format_elapsed(elapsed)} actual)\n"
+        f"Tasks completed: {done_tasks}/{max(total_tasks, 1)}\n"
+        f"Tasks remaining: {max(total_tasks - done_tasks, 0)} (blocked: {blocked_summary})\n"
+        f"Remaining detail: {remaining_summary}\n"
+        f"Files created: {created_files}\n"
+        f"Files modified: {modified_files}\n"
+        f"Build status: {build_status}\n"
+        f"Test status: {test_status}\n"
+        f"Agents involved: {involved_text}\n"
+        f"Finish reason: {reason}"
+    )
+
+    reports_dir = root / "docs" / "sprint-reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    report_path = reports_dir / f"{channel}-{stamp}.md"
+    report_path.write_text(report + "\n", encoding="utf-8")
+    return report, report_path
+
+
+async def _stop_sprint(channel: str, reason: str, cancel_watcher: bool = True) -> bool:
+    mode = _sprint_mode(channel)
+    if not mode:
+        return False
+
+    mode["active"] = False
+    mode["updated_at"] = int(time.time())
+    _collab_mode[channel] = mode
+
+    if cancel_watcher:
+        _cancel_sprint_watcher(channel)
+
+    status = autonomous_worker.stop_work(channel)
+    await manager.broadcast(channel, {"type": "work_status", "status": status})
+
+    report, path = await _build_sprint_report(channel, mode, reason)
+    _collab_mode.pop(channel, None)
+
+    await _send_system_message(
+        channel,
+        f"{report}\n\nReport saved to `{path}`",
+        msg_type="decision",
+    )
+    return True
+
+
+async def _sprint_watcher_loop(channel: str):
+    try:
+        while True:
+            mode = _sprint_mode(channel)
+            if not mode:
+                break
+
+            now = int(time.time())
+            ends_at = int(mode.get("ends_at") or now)
+            if now >= ends_at:
+                await _stop_sprint(channel, reason="time_elapsed", cancel_watcher=False)
+                break
+
+            scoped = _sprint_scope_tasks(mode, await list_tasks())
+            if scoped and all(task.get("status") == "done" for task in scoped):
+                await _stop_sprint(channel, reason="all_tasks_done", cancel_watcher=False)
+                break
+
+            last_progress = int(mode.get("last_progress_at") or 0)
+            if now - last_progress >= SPRINT_PROGRESS_INTERVAL_SECONDS:
+                await _send_system_message(channel, _sprint_progress_line(scoped))
+                mode["last_progress_at"] = now
+                mode["updated_at"] = now
+                _collab_mode[channel] = mode
+
+            await asyncio.sleep(5)
+    except asyncio.CancelledError:
+        return
+    finally:
+        current = asyncio.current_task()
+        if _sprint_tasks.get(channel) is current:
+            _sprint_tasks.pop(channel, None)
+
+
+async def _start_sprint(channel: str, duration_raw: str, goal: str):
+    if _sprint_mode(channel):
+        await _send_system_message(channel, "Sprint mode is already active. Use `/sprint stop` first.")
+        return
+
+    duration_seconds = _parse_sprint_duration(duration_raw)
+    goal_text = (goal or "").strip()
+    if not goal_text:
+        raise ValueError("Sprint goal is required.")
+
+    now = int(time.time())
+    existing_tasks = await list_tasks()
+    messages = await get_messages(channel, limit=1)
+    start_message_id = int(messages[-1]["id"]) if messages else 0
+
+    _collab_mode[channel] = {
+        "active": True,
+        "mode": "sprint",
+        "topic": goal_text,
+        "goal": goal_text,
+        "duration_seconds": duration_seconds,
+        "started_at": now,
+        "ends_at": now + duration_seconds,
+        "last_progress_at": now,
+        "baseline_task_ids": [int(t.get("id")) for t in existing_tasks if t.get("id") is not None],
+        "start_message_id": start_message_id,
+        "updated_at": now,
+    }
+
+    work_status = autonomous_worker.start_work(channel)
+    await manager.broadcast(channel, {"type": "work_status", "status": work_status})
+    await _send_system_message(
+        channel,
+        f"🏃 SPRINT STARTED — Goal: {goal_text} — Time: {_format_elapsed(duration_seconds)}",
+        msg_type="system",
+    )
+
+    director = await get_agent("director")
+    if director and director.get("active"):
+        plan = await _generate_sprint_task_plan(director, channel, goal_text)
+        if plan:
+            await _send(director, channel, plan, run_post_checks=False)
+
+    _cancel_sprint_watcher(channel)
+    _sprint_tasks[channel] = asyncio.create_task(_sprint_watcher_loop(channel))
+
+
+async def _handle_sprint_command(channel: str, user_message: str) -> bool:
+    raw = user_message.strip()
+    if not raw.startswith("/sprint"):
+        return False
+
+    arg = raw[len("/sprint"):].strip()
+    if not arg or arg.lower() == "status":
+        mode = _sprint_mode(channel)
+        if not mode:
+            await _send_system_message(channel, "Sprint mode is not active.")
+            return True
+        remaining = max(0, int(mode.get("ends_at", 0)) - int(time.time()))
+        scoped = _sprint_scope_tasks(mode, await list_tasks())
+        await _send_system_message(
+            channel,
+            f"Sprint status — Goal: {mode.get('goal')}\n"
+            f"Remaining: {_format_elapsed(remaining)}\n"
+            f"{_sprint_progress_line(scoped)}",
+        )
+        return True
+
+    lowered = arg.lower()
+    if lowered in {"stop", "end", "off"}:
+        stopped = await _stop_sprint(channel, reason="stopped_by_user")
+        if not stopped:
+            await _send_system_message(channel, "Sprint mode is not active.")
+        return True
+
+    if lowered.startswith("start "):
+        parts = arg.split(maxsplit=2)
+        if len(parts) < 3:
+            await _send_system_message(channel, "Usage: `/sprint start <duration> <goal>` (example: `/sprint start 30m finish login system`)")
+            return True
+        duration_raw = parts[1]
+        goal = parts[2]
+        try:
+            await _start_sprint(channel, duration_raw, goal)
+        except ValueError as exc:
+            await _send_system_message(channel, str(exc))
+        return True
+
+    await _send_system_message(channel, "Usage: `/sprint start <duration> <goal>`, `/sprint status`, `/sprint stop`")
+    return True
 
 
 async def _enter_war_room(channel: str, issue: str, trigger: str = "manual"):
@@ -567,6 +1164,29 @@ async def _handle_warroom_command(channel: str, user_message: str) -> bool:
 
     issue = arg or "critical incident"
     await _enter_war_room(channel, issue=issue, trigger="manual")
+    return True
+
+
+async def _handle_review_command(channel: str, user_message: str) -> bool:
+    raw = user_message.strip()
+    if not raw.startswith("/review"):
+        return False
+
+    arg = raw[len("/review"):].strip().lower()
+    if arg in {"on", "enable"}:
+        _review_mode[channel] = True
+        await _send_system_message(channel, "Auto code review is ON for this channel.")
+        return True
+    if arg in {"off", "disable"}:
+        _review_mode[channel] = False
+        await _send_system_message(channel, "Auto code review is OFF for this channel.")
+        return True
+    if arg in {"", "status"}:
+        state = "ON" if _review_enabled(channel) else "OFF"
+        await _send_system_message(channel, f"Auto code review status: {state}.")
+        return True
+
+    await _send_system_message(channel, "Usage: `/review on`, `/review off`, `/review status`")
     return True
 
 
@@ -1486,7 +2106,18 @@ async def _send(agent: dict, channel: str, content: str, run_post_checks: bool =
     if tool_calls:
         logger.info(f"  [{agent['display_name']}] executing {len(tool_calls)} tool call(s)")
         results = await execute_tool_calls(agent["id"], tool_calls, channel)
-        if run_post_checks and any(r.get("type") == "write" for r in results):
+        successful_writes = [
+            r for r in results
+            if r.get("type") == "write"
+            and (
+                bool((r.get("result") or {}).get("ok"))
+                or (r.get("result") or {}).get("action") == "written"
+            )
+        ]
+        reviewable_paths = _extract_reviewable_write_paths(successful_writes)
+        if reviewable_paths:
+            await _maybe_run_auto_code_review(channel, agent, reviewable_paths)
+        if run_post_checks and successful_writes:
             await _run_build_test_loop(agent, channel)
 
     return saved
@@ -1888,11 +2519,15 @@ async def process_message(channel: str, user_message: str):
         return
     if await _handle_work_command(channel, user_message):
         return
+    if await _handle_sprint_command(channel, user_message):
+        return
     if await _handle_git_command(channel, user_message):
         return
     if await _handle_branch_merge_command(channel, user_message):
         return
     if await _handle_export_command(channel, user_message):
+        return
+    if await _handle_review_command(channel, user_message):
         return
     if await _handle_warroom_command(channel, user_message):
         return

@@ -290,6 +290,13 @@ body {
   color: #fb923c;
   animation: none;
 }
+.convo-status.sprint,
+.convo-status.active.sprint {
+  background: rgba(16, 185, 129, 0.18);
+  border: 1px solid rgba(16, 185, 129, 0.5);
+  color: #34d399;
+  animation: none;
+}
 
 .stop-btn {
   padding: 4px 12px;

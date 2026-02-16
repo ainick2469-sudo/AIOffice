@@ -862,3 +862,95 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
   - `client/dev-lint.cmd` PASS
   - `client/dev-build.cmd` PASS
   - `python start.py --mode web` health check PASS (`START_OK`)
+
+---
+
+## SESSION 19 - Feature 4 Auto Code Review Pipeline (2026-02-16)
+
+### Auto-review runtime behavior
+- [x] Added channel-level auto-review toggle via slash commands:
+  - `/review on`
+  - `/review off`
+  - `/review status`
+- [x] Implemented code-write detection from successful `[TOOL:write]` executions.
+- [x] Added reviewable file filtering:
+  - allowed: `.py .js .jsx .ts .tsx .rs .go .cpp .c .java`
+  - excluded: docs/tests/spec-style files and non-code files.
+- [x] Added 30-second per-channel review rate limit.
+
+### Reviewer automation
+- [x] Added auto-review generator path for Rex (`reviewer`) with deterministic output contract:
+  - first line `Severity: critical|warning|ok`
+  - short bug/security/error-handling/edge-case review bullets.
+- [x] Auto-review messages are now posted as `msg_type=review` with `📋 Code Review`.
+- [x] If review severity is critical:
+  - auto-create follow-up task assigned to original author
+  - include linked file path
+  - broadcast task creation event.
+
+### Tool execution contract updates
+- [x] Updated `server/tool_executor.py` result payloads to include tool call metadata (`path`/`arg`) so post-processors can safely detect written files.
+
+### Tests and verification
+- [x] Added `tests/test_auto_review_pipeline.py`:
+  - verifies critical review creates review message + task
+  - verifies `/review off` disables auto-review.
+- [x] Verification run:
+  - `python -m pytest tests/test_auto_review_pipeline.py -q` PASS
+  - `python -m pytest tests -q` PASS
+  - `client/dev-lint.cmd` PASS
+  - `client/dev-build.cmd` PASS
+
+---
+
+## SESSION 20 - Feature 5 Sprint Mode (2026-02-16)
+
+### Sprint command surface
+- [x] Added sprint command handler in `server/agent_engine.py`:
+  - `/sprint start <duration> <goal>`
+  - `/sprint status`
+  - `/sprint stop`
+- [x] Added duration parser (`30m`, `2h`) and channel-scoped sprint state tracking.
+
+### Sprint execution flow
+- [x] Sprint start now:
+  - sets collab mode `sprint` with `goal`, `started_at`, `ends_at`
+  - starts background work loop (through existing autonomous worker)
+  - asks Nova to decompose sprint goal into `3-6` `[TOOL:task]` items.
+- [x] Added sprint watcher loop:
+  - periodic progress updates (default every 5 minutes)
+  - auto-stop on timer expiry
+  - auto-stop when sprint-scoped tasks are all done.
+
+### Sprint report generation
+- [x] Sprint stop now generates and posts structured report:
+  - goal
+  - planned vs actual duration
+  - task completion and blocked/remaining summary
+  - file create/modify counts from git status
+  - build/test status (when configured)
+  - agent write participation summary.
+- [x] Report persisted to:
+  - `<active project>/docs/sprint-reports/<channel>-<timestamp>.md`
+
+### Frontend sprint status
+- [x] Updated `client/src/components/ChatRoom.jsx`:
+  - header badge now shows sprint countdown and goal while sprint is active.
+- [x] Updated `client/src/App.css`:
+  - added sprint badge styling.
+
+### Tests and verification
+- [x] Added `tests/test_sprint_mode.py`:
+  - sprint start/status/stop lifecycle
+  - task decomposition path
+  - report file persistence.
+- [x] Verification run:
+  - `python -m pytest tests/test_sprint_mode.py -q` PASS
+  - `python -m pytest tests -q` PASS (`17 passed`)
+  - `tools/runtime_smoke.py` PASS
+  - `tools/startup_smoke.py` PASS
+  - `tools/desktop_smoke.py` PASS
+  - `tools/toolchain_smoke.py` PASS
+  - `tools/personality_smoke.py` PASS
+  - `client/dev-lint.cmd` PASS
+  - `client/dev-build.cmd` PASS

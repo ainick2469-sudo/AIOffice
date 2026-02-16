@@ -274,13 +274,24 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                 msg_type="tool_result",
             )
             await manager.broadcast(channel, {"type": "chat", "message": saved})
-            results.append({"type": tool_type, "result": result, "msg": msg})
+            results.append({
+                "type": tool_type,
+                "path": call.get("path"),
+                "arg": call.get("arg"),
+                "result": result,
+                "msg": msg,
+            })
 
         except Exception as e:
             logger.error(f"Tool exec error: {e}")
             err_msg = f"❌ **Tool error:** {e}"
             saved = await insert_message(channel=channel, sender=agent_id, content=err_msg, msg_type="tool_result")
             await manager.broadcast(channel, {"type": "chat", "message": saved})
-            results.append({"type": tool_type, "error": str(e)})
+            results.append({
+                "type": tool_type,
+                "path": call.get("path"),
+                "arg": call.get("arg"),
+                "error": str(e),
+            })
 
     return results

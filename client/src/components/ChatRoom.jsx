@@ -480,6 +480,12 @@ export default function ChatRoom({ channel }) {
   const warRoomElapsed = warRoomActive
     ? formatElapsed(Math.floor(clockMs / 1000) - Number(collabMode?.started_at || 0))
     : '';
+  const sprintActive = collabMode?.active && collabMode?.mode === 'sprint';
+  const sprintGoal = collabMode?.goal || collabMode?.topic || 'current goal';
+  const sprintRemaining = sprintActive
+    ? Math.max(0, Number(collabMode?.ends_at || 0) - Math.floor(clockMs / 1000))
+    : 0;
+  const sprintLabel = `SPRINT - ${formatElapsed(sprintRemaining)} remaining - Goal: ${sprintGoal}`;
 
   return (
     <div className="chat-room">
@@ -488,9 +494,11 @@ export default function ChatRoom({ channel }) {
           <h2>{channelLabel}</h2>
           <span className={`status-dot ${connected ? 'online' : 'offline'}`} />
           <span className="status-text">{connected ? 'Connected' : 'Reconnecting...'}</span>
-          <span className={`convo-status ${collabMode?.active ? 'active' : ''} ${warRoomActive ? 'warroom' : ''}`}>
+          <span className={`convo-status ${collabMode?.active ? 'active' : ''} ${warRoomActive ? 'warroom' : ''} ${sprintActive ? 'sprint' : ''}`}>
             {warRoomActive
               ? `WAR ROOM — ${warRoomIssue} — ${warRoomElapsed}`
+              : sprintActive
+                ? sprintLabel
               : `Mode: ${collabMode?.mode || 'chat'}`}
           </span>
           <span className="convo-status">
