@@ -1101,3 +1101,15 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 
 ### Notes
 - Build warns about large JS chunk size (>500kB after minification), but build completes successfully.
+
+---
+
+## SESSION 27 - Clear Chat UX Hotfix (2026-02-16)
+
+### Fix
+- [x] Updated `client/src/components/ChatRoom.jsx` clear-chat flow to avoid duplicate
+  `Chat history cleared.` messages when websocket broadcast and local state update happen together.
+
+### Verification
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS

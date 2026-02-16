@@ -443,7 +443,11 @@ export default function ChatRoom({ channel }) {
       }
 
       const systemMessage = payload?.system_message || null;
-      setMessages(systemMessage ? [systemMessage] : []);
+      if (connected && systemMessage) {
+        setMessages([]);
+      } else {
+        setMessages(systemMessage ? [systemMessage] : []);
+      }
       setReactionsByMessage({});
       loadedReactionIdsRef.current = new Set(systemMessage?.id ? [systemMessage.id] : []);
       setThreadRootId(null);
