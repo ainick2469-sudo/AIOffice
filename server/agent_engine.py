@@ -68,6 +68,8 @@ AGENT_NAMES = {
     "director": "Nova", "researcher": "Scout", "sage": "Sage",
     "codex": "Codex", "ops": "Ops", "scribe": "Mira", "critic": "Vera",
 }
+WAR_ROOM_AGENT_ORDER = ["builder", "reviewer", "qa", "director"]
+WAR_ROOM_AGENT_SET = set(WAR_ROOM_AGENT_ORDER)
 
 RISKY_SHORTCUT_TRIGGERS = (
     "skip test", "skip tests", "no tests", "without tests",
@@ -138,6 +140,72 @@ async def _send_system_message(channel: str, content: str, msg_type: str = "syst
     await manager.broadcast(channel, {"type": "chat", "message": saved})
     return saved
 
+
+def _war_room_mode(channel: str) -> Optional[dict]:
+    mode = _collab_mode.get(channel)
+    if mode and mode.get("active") and mode.get("mode") == "warroom":
+        return mode
+    return None
+
+
+def _is_war_room_suppressed(channel: str, agent_id: str) -> bool:
+    return _war_room_mode(channel) is not None and agent_id not in WAR_ROOM_AGENT_SET
+
+
+def _format_elapsed(seconds: int) -> str:
+    secs = max(0, int(seconds or 0))
+    mins, rem = divmod(secs, 60)
+    return f"{mins}m {rem:02d}s"
+
+
+async def _enter_war_room(channel: str, issue: str, trigger: str = "manual"):
+    existing = _war_room_mode(channel)
+    if existing:
+        return
+
+    if channel in _active and _active[channel]:
+        _active[channel] = False
+
+    now = int(time.time())
+    _collab_mode[channel] = {
+        "active": True,
+        "mode": "warroom",
+        "topic": issue,
+        "issue": issue,
+        "trigger": trigger,
+        "started_at": now,
+        "updated_at": now,
+        "allowed_agents": WAR_ROOM_AGENT_ORDER[:],
+    }
+
+    await _send_system_message(
+        channel,
+        f"🚨 WAR ROOM — {issue}\n"
+        "Only Max (builder), Rex (reviewer), Quinn (qa), and Nova (director) are active.\n"
+        "Focus ONLY on fixing this issue: reproduce -> diagnose -> fix -> verify.",
+        msg_type="system",
+    )
+
+
+async def _exit_war_room(channel: str, reason: str, resolved_by: str = "system"):
+    mode = _war_room_mode(channel)
+    if not mode:
+        return
+
+    started_at = int(mode.get("started_at") or time.time())
+    elapsed = int(time.time()) - started_at
+    issue = mode.get("issue") or mode.get("topic") or "incident"
+    _collab_mode.pop(channel, None)
+
+    await _send_system_message(
+        channel,
+        "🚨 War Room closed.\n"
+        f"Issue: {issue}\n"
+        f"Duration: {_format_elapsed(elapsed)}\n"
+        f"Resolved by: {resolved_by}\n"
+        f"Reason: {reason}",
+        msg_type="decision",
+    )
 
 async def _maybe_escalate_to_nova(channel: str, agent_id: str, reason: str, context: str = "") -> bool:
     count = _record_agent_failure(channel, agent_id)
@@ -481,6 +549,24 @@ async def _handle_oracle_command(channel: str, user_message: str) -> bool:
         return True
 
     await _send(scout, channel, answer, run_post_checks=False)
+    return True
+
+
+async def _handle_warroom_command(channel: str, user_message: str) -> bool:
+    raw = user_message.strip()
+    if not raw.startswith("/warroom"):
+        return False
+
+    arg = raw[len("/warroom"):].strip()
+    if arg.lower() in {"stop", "off", "end"}:
+        if not _war_room_mode(channel):
+            await _send_system_message(channel, "War Room mode is not active.")
+            return True
+        await _exit_war_room(channel, reason="manual stop command", resolved_by="user")
+        return True
+
+    issue = arg or "critical incident"
+    await _enter_war_room(channel, issue=issue, trigger="manual")
     return True
 
 
@@ -1127,6 +1213,13 @@ def _build_system(
                 f"{topic}. Be specific and creative. Think from YOUR role's perspective. "
                 "Keep it to 2-3 sentences. Do NOT agree with others - pitch something DIFFERENT."
             )
+        if mode.get("mode") == "warroom":
+            issue = mode.get("issue") or mode.get("topic") or "critical issue"
+            s += (
+                "\nWAR ROOM MODE. Focus ONLY on fixing "
+                f"{issue}. No brainstorming, no new features. "
+                "Steps: reproduce -> diagnose -> fix -> verify."
+            )
         if mode.get("mode") == "meeting":
             s += "\nUse structured bullets with Goal, Risks, and Action."
         if mode.get("mode") == "vote":
@@ -1157,6 +1250,9 @@ def _build_system(
 
 async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Optional[str]:
     """Generate one agent's response. Routes to Ollama or Claude based on backend."""
+    if _is_war_room_suppressed(channel, agent["id"]):
+        return None
+
     context = await _build_context(channel)
     active_project = await project_manager.get_active_project(channel)
     project_root = Path(active_project["path"])
@@ -1279,6 +1375,7 @@ async def _run_build_test_loop(agent: dict, channel: str) -> None:
         return
 
     failure_context = ""
+    build_passed = False
     for attempt in range(1, BUILD_FIX_MAX_ATTEMPTS + 1):
         build_result = build_runner.run_build(project_name)
         await log_build_result(
@@ -1294,6 +1391,7 @@ async def _run_build_test_loop(agent: dict, channel: str) -> None:
         await _send_system_message(channel, _format_runner_result("build", build_result), msg_type="tool_result")
         if build_result.get("ok"):
             _reset_agent_failure(channel, agent["id"])
+            build_passed = True
             break
 
         failure_context = (
@@ -1302,6 +1400,11 @@ async def _run_build_test_loop(agent: dict, channel: str) -> None:
             f"Error:\n{(build_result.get('stderr') or build_result.get('error') or '')[:3000]}"
         )
         if attempt >= BUILD_FIX_MAX_ATTEMPTS:
+            await _enter_war_room(
+                channel,
+                issue=f"Build failing repeatedly in project `{project_name}`",
+                trigger="auto-build-failure",
+            )
             await _maybe_escalate_to_nova(channel, agent["id"], "repeated build failure", failure_context)
             return
 
@@ -1317,6 +1420,8 @@ async def _run_build_test_loop(agent: dict, channel: str) -> None:
         await _send(agent, channel, fix_response, run_post_checks=False)
 
     if not test_cmd:
+        if build_passed and _war_room_mode(channel):
+            await _exit_war_room(channel, reason="build passing again", resolved_by=agent["display_name"])
         return
 
     for attempt in range(1, BUILD_FIX_MAX_ATTEMPTS + 1):
@@ -1334,6 +1439,8 @@ async def _run_build_test_loop(agent: dict, channel: str) -> None:
         await _send_system_message(channel, _format_runner_result("test", test_result), msg_type="tool_result")
         if test_result.get("ok"):
             _reset_agent_failure(channel, agent["id"])
+            if _war_room_mode(channel):
+                await _exit_war_room(channel, reason="build and tests passing again", resolved_by=agent["display_name"])
             return
 
         failure_context = (
@@ -1342,6 +1449,11 @@ async def _run_build_test_loop(agent: dict, channel: str) -> None:
             f"Error:\n{(test_result.get('stderr') or test_result.get('error') or '')[:3000]}"
         )
         if attempt >= BUILD_FIX_MAX_ATTEMPTS:
+            await _enter_war_room(
+                channel,
+                issue=f"Tests failing repeatedly in project `{project_name}`",
+                trigger="auto-test-failure",
+            )
             await _maybe_escalate_to_nova(channel, agent["id"], "repeated test failure", failure_context)
             return
 
@@ -1362,6 +1474,12 @@ async def _send(agent: dict, channel: str, content: str, run_post_checks: bool =
     saved = await insert_message(channel=channel, sender=agent["id"], content=content, msg_type="message")
     await manager.broadcast(channel, {"type": "chat", "message": saved})
     logger.info(f"  [{agent['display_name']}] {content[:80]}")
+    if (
+        _war_room_mode(channel)
+        and agent["id"] == "director"
+        and "resolved" in (content or "").lower()
+    ):
+        await _exit_war_room(channel, reason="Nova marked the issue resolved", resolved_by=agent["display_name"])
 
     # Check for tool calls in the message
     tool_calls = parse_tool_calls(content)
@@ -1554,7 +1672,12 @@ async def _handle_interrupt(channel: str, spoke_set: set) -> int:
     """Handle user interrupt: re-route and respond to new message. Returns msg count."""
     new_msg = _user_interrupt.pop(channel)
     logger.info(f"⚡ User interrupt: {new_msg[:60]}")
-    new_agents = await route(new_msg)
+    if _war_room_mode(channel):
+        active_agents = await get_agents(active_only=True)
+        active_ids = {a["id"] for a in active_agents}
+        new_agents = [aid for aid in WAR_ROOM_AGENT_ORDER if aid in active_ids]
+    else:
+        new_agents = await route(new_msg)
     spoke_set.clear()
     count = 0
     for aid in new_agents:
@@ -1572,6 +1695,8 @@ async def _handle_interrupt(channel: str, spoke_set: set) -> int:
             count += 1
             await asyncio.sleep(PAUSE_BETWEEN_AGENTS)
         else:
+            if _is_war_room_suppressed(channel, aid):
+                continue
             await _maybe_escalate_to_nova(
                 channel,
                 aid,
@@ -1604,6 +1729,8 @@ async def _respond_agents(channel: str, agent_ids: list[str], spoke_set: set, is
             count += 1
             await asyncio.sleep(PAUSE_BETWEEN_AGENTS)
         else:
+            if _is_war_room_suppressed(channel, aid):
+                continue
             escalated = await _maybe_escalate_to_nova(
                 channel,
                 aid,
@@ -1767,6 +1894,8 @@ async def process_message(channel: str, user_message: str):
         return
     if await _handle_export_command(channel, user_message):
         return
+    if await _handle_warroom_command(channel, user_message):
+        return
     if await _handle_brainstorm_command(channel, user_message):
         return
     if await _handle_oracle_command(channel, user_message):
@@ -1803,7 +1932,13 @@ async def process_message(channel: str, user_message: str):
 
     # Start new conversation
     logger.info(f"New conversation in #{channel}")
-    initial_agents = await route(user_message)
+    mode = _war_room_mode(channel)
+    if mode:
+        active_agents = await get_agents(active_only=True)
+        active_ids = {a["id"] for a in active_agents}
+        initial_agents = [aid for aid in WAR_ROOM_AGENT_ORDER if aid in active_ids]
+    else:
+        initial_agents = await route(user_message)
     logger.info(f"Initial agents: {initial_agents}")
     asyncio.create_task(_conversation_loop(channel, initial_agents))
 

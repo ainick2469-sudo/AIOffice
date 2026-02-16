@@ -283,6 +283,13 @@ body {
   color: var(--online);
   animation: pulse 2s ease-in-out infinite;
 }
+.convo-status.warroom,
+.convo-status.active.warroom {
+  background: rgba(249, 115, 22, 0.2);
+  border: 1px solid rgba(249, 115, 22, 0.55);
+  color: #fb923c;
+  animation: none;
+}
 
 .stop-btn {
   padding: 4px 12px;

@@ -814,3 +814,51 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
   - `client/dev-lint.cmd` PASS
   - `client/dev-build.cmd` PASS
   - `python start.py --mode web` health check PASS (`START_OK`)
+
+---
+
+## SESSION 18 - Feature 3 War Room Mode (2026-02-15)
+
+### New command mode
+- [x] Added `/warroom [issue]` command in `server/agent_engine.py`.
+- [x] Added `/warroom stop` command with closure summary.
+- [x] War Room collab mode now tracks:
+  - `issue/topic`
+  - `started_at`
+  - `trigger` (manual/auto)
+  - `allowed_agents`.
+
+### War Room enforcement
+- [x] Locked active responders to 4 core agents:
+  - Max (`builder`)
+  - Rex (`reviewer`)
+  - Quinn (`qa`)
+  - Nova (`director`)
+- [x] Added suppression guard so non-war-room agents are skipped without escalation noise.
+- [x] Added war-room prompt override:
+  - "WAR ROOM MODE. Focus ONLY on fixing [issue]. No brainstorming, no new features. Steps: reproduce -> diagnose -> fix -> verify."
+
+### Auto-trigger and auto-exit behavior
+- [x] Auto-enter War Room on repeated build/test failure threshold in build-fix loop.
+- [x] Auto-exit War Room when:
+  - build/test recovers to pass,
+  - Nova marks it "resolved",
+  - user runs `/warroom stop`.
+- [x] Exit posts summary including issue, elapsed time, resolver, and reason.
+
+### Frontend status/timer
+- [x] Updated `client/src/components/ChatRoom.jsx`:
+  - war-room header state with issue + elapsed timer
+  - status display now shows `WAR ROOM — [issue] — [mm:ss]` when active.
+- [x] Updated `client/src/App.css` with red/orange war-room badge styling.
+
+### Tests and verification
+- [x] Added `tests/test_warroom_mode.py`:
+  - manual start/stop lifecycle
+  - auto-trigger from repeated build failures.
+- [x] Verification run:
+  - `python -m pytest tests/test_warroom_mode.py -q` PASS
+  - `python -m pytest tests -q` PASS (`14 passed`)
+  - `client/dev-lint.cmd` PASS
+  - `client/dev-build.cmd` PASS
+  - `python start.py --mode web` health check PASS (`START_OK`)

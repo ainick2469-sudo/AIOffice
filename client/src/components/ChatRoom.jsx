@@ -22,6 +22,7 @@ export default function ChatRoom({ channel }) {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [dragActive, setDragActive] = useState(false);
+  const [clockMs, setClockMs] = useState(Date.now());
   const bottomRef = useRef(null);
   const statusInterval = useRef(null);
   const fileInputRef = useRef(null);
@@ -112,6 +113,11 @@ export default function ChatRoom({ channel }) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, typingAgents]);
+
+  useEffect(() => {
+    const interval = setInterval(() => setClockMs(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     const missing = messages
@@ -215,6 +221,13 @@ export default function ChatRoom({ channel }) {
   };
 
   const isImageType = (mimeType) => (mimeType || '').startsWith('image/');
+
+  const formatElapsed = (seconds) => {
+    const total = Math.max(0, Number(seconds || 0));
+    const mins = Math.floor(total / 60);
+    const secs = total % 60;
+    return `${mins}m ${String(secs).padStart(2, '0')}s`;
+  };
 
   const getSender = (msg) => {
     if (msg.sender === 'user') return { name: 'You', color: '#3B82F6', emoji: 'Y' };
@@ -462,6 +475,11 @@ export default function ChatRoom({ channel }) {
     );
 
   const isActive = convoStatus?.active;
+  const warRoomActive = collabMode?.active && collabMode?.mode === 'warroom';
+  const warRoomIssue = collabMode?.issue || collabMode?.topic || 'incident';
+  const warRoomElapsed = warRoomActive
+    ? formatElapsed(Math.floor(clockMs / 1000) - Number(collabMode?.started_at || 0))
+    : '';
 
   return (
     <div className="chat-room">
@@ -470,8 +488,10 @@ export default function ChatRoom({ channel }) {
           <h2>{channelLabel}</h2>
           <span className={`status-dot ${connected ? 'online' : 'offline'}`} />
           <span className="status-text">{connected ? 'Connected' : 'Reconnecting...'}</span>
-          <span className={`convo-status ${collabMode?.active ? 'active' : ''}`}>
-            Mode: {collabMode?.mode || 'chat'}
+          <span className={`convo-status ${collabMode?.active ? 'active' : ''} ${warRoomActive ? 'warroom' : ''}`}>
+            {warRoomActive
+              ? `WAR ROOM — ${warRoomIssue} — ${warRoomElapsed}`
+              : `Mode: ${collabMode?.mode || 'chat'}`}
           </span>
           <span className="convo-status">
             Project: {activeProject?.project || 'ai-office'}
