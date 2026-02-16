@@ -669,3 +669,33 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - [x] `client/dev-lint.cmd` PASS
 - [x] `client/dev-build.cmd` PASS
 - [x] Direct startup validation via `python start.py --mode web` + `/api/health` check PASS (`START_OK`)
+
+---
+
+## SESSION 14 - Segment 2 Conversation Quality (2026-02-15)
+
+### Baseline conversation test and log
+- [x] Sent baseline prompt: `hey team, what should we build today?`
+- [x] Logged deterministic baseline behavior before fix to:
+  - `tests/segment2_conversation_baseline_before_fix.md`
+- [x] Logged post-fix behavior to:
+  - `tests/segment2_conversation_after_fix.md`
+
+### Engine follow-up quality fixes (`server/agent_engine.py`)
+- [x] Added stronger follow-up prompt rules in `_build_system`:
+  - "Read all messages above. If someone already said X, do NOT repeat it. React to what THEY said."
+  - must reference at least one teammate by name in follow-ups
+  - if everyone agrees, challenge at least one assumption.
+- [x] Added follow-up quality enforcement helpers:
+  - semantic similarity check against recent agent messages
+  - agreement-cluster detection
+  - challenge-signal detection
+  - teammate-name reference enforcement for follow-ups.
+- [x] Added deterministic anti-groupthink routing in `_pick_next`:
+  - when multiple agents already spoke and last message is pure agreement, force one challenger voice (`critic/reviewer/sage/codex`).
+
+### Segment 2 verification
+- [x] `python -m pytest tests -q` PASS (`9 passed`)
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
+- [x] `python start.py --mode web` startup health check PASS (`START_OK`)

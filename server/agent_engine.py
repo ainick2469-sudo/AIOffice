@@ -684,6 +684,9 @@ def _build_system(
         s += "\nIf you have nothing new, respond with exactly: PASS"
         s += "\nDo NOT just agree or restate what others said. Do NOT be sycophantic."
         s += "\nIf the latest proposal sounds risky or sloppy, challenge it explicitly."
+        s += "\nRead all messages above. If someone already said X, do NOT repeat it. React to what THEY said."
+        s += "\nYou MUST reference at least one teammate by name in every follow-up response."
+        s += "\nIf all previous agents agreed, challenge at least one assumption."
 
     # Tool instructions
     perms = agent.get("permissions", "read")
@@ -843,6 +846,15 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
         if not response or len(response) < 3:
             return None
 
+        if is_followup:
+            recent_agent_messages = [
+                m for m in messages
+                if m.get("sender") not in {"user", "system"} and m.get("sender") != agent["id"]
+            ][-8:]
+            response = _enforce_followup_constraints(agent["id"], response, recent_agent_messages).strip()
+            if response.upper() == "PASS" or len(response) < 3:
+                return None
+
         return response.strip()
     except Exception as e:
         logger.error(f"Agent {agent['id']} failed: {e}")
@@ -986,6 +998,94 @@ def _invites_response(text: str) -> bool:
     return any(t in lower for t in triggers)
 
 
+_SIMILARITY_STOP_WORDS = {
+    "the", "a", "an", "and", "or", "to", "for", "of", "in", "on", "is", "it",
+    "this", "that", "we", "should", "can", "be", "with", "about", "today",
+}
+
+
+def _token_signature(text: str) -> list[str]:
+    cleaned = re.sub(r"[^a-z0-9\s]", " ", (text or "").lower())
+    tokens = [t for t in cleaned.split() if t and t not in _SIMILARITY_STOP_WORDS]
+    return tokens[:60]
+
+
+def _too_similar_to_previous(response: str, previous_texts: list[str]) -> bool:
+    base_tokens = _token_signature(response)
+    if not base_tokens:
+        return False
+    base_set = set(base_tokens)
+
+    for prev in previous_texts:
+        prev_tokens = _token_signature(prev)
+        if not prev_tokens:
+            continue
+        prev_set = set(prev_tokens)
+        overlap = len(base_set & prev_set) / max(1, len(base_set))
+        if overlap >= 0.72:
+            return True
+        if " ".join(base_tokens[:20]) == " ".join(prev_tokens[:20]):
+            return True
+    return False
+
+
+def _is_agreement_only(text: str) -> bool:
+    lower = (text or "").lower()
+    positive = ("agree", "sounds good", "great idea", "exactly", "yes", "aligned", "good plan")
+    challenge = ("but", "however", "risk", "concern", "disagree", "challenge", "counter", "failure")
+    has_positive = any(token in lower for token in positive)
+    has_challenge = any(token in lower for token in challenge)
+    return has_positive and not has_challenge
+
+
+def _all_previous_agents_agreed(recent_agent_messages: list[dict]) -> bool:
+    if len(recent_agent_messages) < 2:
+        return False
+    unique_senders = {m.get("sender") for m in recent_agent_messages if m.get("sender")}
+    if len(unique_senders) < 2:
+        return False
+    return all(_is_agreement_only(m.get("content", "")) for m in recent_agent_messages)
+
+
+def _has_challenge_signal(text: str) -> bool:
+    lower = (text or "").lower()
+    return any(
+        token in lower
+        for token in ("disagree", "challenge", "risk", "concern", "failure mode", "counter", "however", "but")
+    )
+
+
+def _enforce_followup_constraints(agent_id: str, response: str, recent_agent_messages: list[dict]) -> str:
+    text = (response or "").strip()
+    if not text:
+        return text
+
+    reference_name = "team"
+    if recent_agent_messages:
+        reference_sender = recent_agent_messages[-1].get("sender", "")
+        reference_name = AGENT_NAMES.get(reference_sender, reference_name)
+
+    if _too_similar_to_previous(text, [m.get("content", "") for m in recent_agent_messages]):
+        text = (
+            f"{reference_name}, I do not want to repeat what is already said. "
+            "The missing piece is one concrete risk check and one fallback path before we commit."
+        )
+
+    if _all_previous_agents_agreed(recent_agent_messages) and not _has_challenge_signal(text):
+        text = (
+            f"{reference_name}, I challenge the current consensus: we still need to name one failure mode "
+            "and a safer fallback before deciding."
+        )
+
+    if not _mentions(text):
+        if text[0].isalpha():
+            text = f"{reference_name}, {text[0].lower() + text[1:]}"
+        else:
+            text = f"{reference_name}, {text}"
+
+    return text
+
+
 def _pick_next(last_sender: str, last_text: str, already_spoke: set) -> list[str]:
     """Pick who talks next. Only agents who were mentioned or have a specific reason to respond."""
     candidates = []
@@ -1001,6 +1101,12 @@ def _pick_next(last_sender: str, last_text: str, already_spoke: set) -> list[str
         for counter_voice in ("reviewer", "sage", "critic"):
             if counter_voice != last_sender and counter_voice not in already_spoke and counter_voice not in candidates:
                 candidates.insert(0, counter_voice)
+                break
+
+    if not candidates and len(already_spoke) >= 2 and _is_agreement_only(last_text):
+        for counter_voice in ("critic", "reviewer", "sage", "codex"):
+            if counter_voice != last_sender and counter_voice not in already_spoke and counter_voice not in candidates:
+                candidates.append(counter_voice)
                 break
 
     # Only add 1 random follow-up if nobody was mentioned AND the message
