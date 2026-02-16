@@ -1085,3 +1085,19 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - [x] `python -m pytest tests -q` PASS (`17 passed`)
 - [x] `client/dev-lint.cmd` PASS
 - [x] `client/dev-build.cmd` PASS
+
+---
+
+## SESSION 26 - Step 8 Final Rebuild + Smoke Verification (2026-02-16)
+
+### Final verification run
+- [x] `tools/runtime_smoke.py` PASS
+- [x] `tools/startup_smoke.py` PASS
+- [x] `tools/desktop_smoke.py` PASS
+- [x] `tools/toolchain_smoke.py` PASS
+- [x] `tools/personality_smoke.py` PASS
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
+
+### Notes
+- Build warns about large JS chunk size (>500kB after minification), but build completes successfully.
