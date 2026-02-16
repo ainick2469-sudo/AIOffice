@@ -172,6 +172,12 @@ TEXT_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".md", ".txt", ".toml",
     ".yaml", ".yml", ".css", ".html", ".sql", ".ini", ".cfg", ".go", ".rs",
 }
+ORACLE_SCAN_EXTENSIONS = TEXT_EXTENSIONS | {".java", ".c", ".cpp", ".h"}
+ORACLE_SKIP_DIRS = {"node_modules", ".git", "__pycache__", "client-dist", ".venv", "venv", "dist", "build"}
+ORACLE_STOP_WORDS = {
+    "the", "a", "an", "and", "or", "to", "for", "of", "in", "on", "is", "it",
+    "what", "how", "do", "does", "we", "our", "have", "with", "about", "codebase",
+}
 
 
 async def _build_file_context(channel: str, user_message: str, agent: dict) -> str:
@@ -259,6 +265,223 @@ async def _build_file_context(channel: str, user_message: str, agent: dict) -> s
         blocks.append(block)
         budget -= len(block)
     return "\n".join(blocks)
+
+
+def _oracle_extract_keywords(question: str) -> list[str]:
+    tokens = re.findall(r"[a-zA-Z0-9_]+", (question or "").lower())
+    return [t for t in tokens if len(t) > 2 and t not in ORACLE_STOP_WORDS][:20]
+
+
+def _oracle_select_files(project_root: Path, question: str) -> list[Path]:
+    keywords = _oracle_extract_keywords(question)
+    hints = []
+    lower_q = (question or "").lower()
+    if "endpoint" in lower_q or "api" in lower_q or "route" in lower_q:
+        hints.extend(["routes", "api", "router"])
+    if "auth" in lower_q or "login" in lower_q or "permission" in lower_q:
+        hints.extend(["auth", "permission", "login", "token"])
+    if "test" in lower_q:
+        hints.extend(["test", "pytest", "spec"])
+    keywords = list(dict.fromkeys(keywords + hints))
+
+    scored: list[tuple[int, Path]] = []
+    scanned = 0
+    for root_dir, dirs, files in os.walk(project_root):
+        dirs[:] = [d for d in dirs if d not in ORACLE_SKIP_DIRS]
+        for filename in files:
+            scanned += 1
+            if scanned > 2000:
+                break
+            path = Path(root_dir) / filename
+            if path.suffix.lower() not in ORACLE_SCAN_EXTENSIONS and filename not in {
+                "README.md",
+                "pyproject.toml",
+                "package.json",
+                "requirements.txt",
+            }:
+                continue
+            rel = path.relative_to(project_root).as_posix().lower()
+            score = 0
+            for key in keywords:
+                if key in rel:
+                    score += 3
+                if rel.endswith(f"/{key}.py") or rel.endswith(f"/{key}.js"):
+                    score += 2
+            if "routes_api.py" in rel and ("endpoint" in lower_q or "api" in lower_q):
+                score += 8
+            if "/tests/" in f"/{rel}/" and "test" in lower_q:
+                score += 4
+            if score > 0:
+                scored.append((score, path))
+        if scanned > 2000:
+            break
+
+    scored.sort(key=lambda item: (-item[0], item[1].as_posix()))
+    selected = [item[1] for item in scored[:5]]
+
+    if not selected:
+        readme = project_root / "README.md"
+        if readme.exists():
+            selected.append(readme)
+
+    return selected[:5]
+
+
+def _oracle_test_gap_hint(project_root: Path) -> str:
+    source_candidates: list[str] = []
+    test_candidates: set[str] = set()
+
+    for root_dir, dirs, files in os.walk(project_root):
+        dirs[:] = [d for d in dirs if d not in ORACLE_SKIP_DIRS]
+        rel_root = Path(root_dir).relative_to(project_root).as_posix().lower()
+        for filename in files:
+            if filename.startswith("."):
+                continue
+            path = Path(root_dir) / filename
+            rel = path.relative_to(project_root).as_posix()
+            base = Path(filename).stem.lower()
+            if "/tests/" in f"/{rel_root}/" or filename.startswith("test_") or ".test." in filename:
+                test_candidates.add(base.replace("test_", ""))
+                continue
+            if path.suffix.lower() in {".py", ".js", ".jsx", ".ts", ".tsx"} and "/tests/" not in f"/{rel_root}/":
+                source_candidates.append(rel)
+
+    uncovered = []
+    for rel in source_candidates:
+        stem = Path(rel).stem.lower()
+        if stem not in test_candidates:
+            uncovered.append(rel)
+    if not uncovered:
+        return "All detected source files appear to have a similarly named test file."
+    top = uncovered[:15]
+    return "Potential files lacking direct test-name matches:\n" + "\n".join(f"- {item}" for item in top)
+
+
+def _oracle_build_context(project_root: Path, question: str, selected_files: list[Path]) -> str:
+    chunks = []
+    for path in selected_files[:5]:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        lines = text.splitlines()
+        clipped = "\n".join(lines[:200])
+        if len(lines) > 200:
+            clipped += f"\n... [truncated: showing 200 of {len(lines)} lines]"
+        rel = path.relative_to(project_root).as_posix()
+        chunks.append(f"[FILE] {rel}\n{clipped}")
+
+    lower_q = (question or "").lower()
+    if "no tests" in lower_q or "without tests" in lower_q:
+        chunks.append("[TEST_GAP_HINT]\n" + _oracle_test_gap_hint(project_root))
+
+    return "\n\n".join(chunks)
+
+
+async def _generate_oracle_answer(agent: dict, channel: str, question: str, file_context: str, file_tree: str) -> Optional[str]:
+    active_project = await project_manager.get_active_project(channel)
+    backend = agent.get("backend", "ollama")
+
+    system = (
+        (agent.get("system_prompt") or "You are a researcher.")
+        + "\n\nORACLE MODE RULES:\n"
+        + "1. Answer ONLY from provided project files and tree.\n"
+        + "2. If data is missing, say exactly what file is missing.\n"
+        + "3. Be concrete: cite files and counts where possible.\n"
+        + "4. Do not guess.\n"
+    )
+    prompt = (
+        "Oracle mode question:\n"
+        f"{question}\n\n"
+        "Project file tree:\n"
+        f"{file_tree}\n\n"
+        "Relevant file excerpts:\n"
+        f"{file_context}\n\n"
+        "Provide a concise answer with file references."
+    )
+
+    try:
+        if backend in {"claude", "openai"}:
+            budget_state = await _api_budget_state(channel, active_project["project"])
+            budget = budget_state["budget_usd"]
+            used = budget_state["used_usd"]
+            if budget > 0 and used >= budget:
+                return (
+                    f"API budget cap reached (${budget:.2f}). "
+                    f"Current estimated usage is ${used:.2f}. "
+                    "Please raise budget or switch this query to local models."
+                )
+        if backend == "claude":
+            return await claude_adapter.generate(
+                prompt=prompt,
+                system=system,
+                temperature=0.2,
+                max_tokens=700,
+                model=agent.get("model", "claude-sonnet-4-20250514"),
+                channel=channel,
+                project_name=active_project["project"],
+            )
+        if backend == "openai":
+            return await openai_adapter.generate(
+                prompt=prompt,
+                system=system,
+                temperature=0.2,
+                max_tokens=700,
+                model=agent.get("model", "gpt-4o-mini"),
+                channel=channel,
+                project_name=active_project["project"],
+            )
+        return await ollama_client.generate(
+            model=agent.get("model", "qwen2.5:14b"),
+            prompt=prompt,
+            system=system,
+            temperature=0.2,
+            max_tokens=650,
+        )
+    except Exception as exc:
+        logger.error(f"Oracle generation failed for {agent.get('id')}: {exc}")
+        return None
+
+
+async def _handle_oracle_command(channel: str, user_message: str) -> bool:
+    raw = user_message.strip()
+    if not raw.startswith("/oracle"):
+        return False
+
+    question = raw[len("/oracle"):].strip()
+    if not question:
+        await _send_system_message(channel, "Usage: /oracle <question about codebase>")
+        return True
+
+    await _send_system_message(channel, "🔮 Oracle mode — reading project files...")
+    active = await project_manager.get_active_project(channel)
+    project_root = Path(active["path"])
+    if not project_root.exists():
+        await _send_system_message(channel, f"Active project path is missing: `{project_root}`")
+        return True
+
+    selected = _oracle_select_files(project_root, question)
+    if not selected:
+        await _send_system_message(channel, "Oracle mode could not find relevant project files for this question.")
+        return True
+
+    file_context = _oracle_build_context(project_root, question, selected)
+    file_tree = _get_project_tree(project_root)
+
+    scout = await get_agent("researcher")
+    if not scout or not scout.get("active"):
+        scout = await get_agent("director")
+    if not scout or not scout.get("active"):
+        await _send_system_message(channel, "No Oracle-capable agent is active (Scout/Nova unavailable).")
+        return True
+
+    answer = await _generate_oracle_answer(scout, channel, question, file_context, file_tree)
+    if not answer:
+        await _send_system_message(channel, "Oracle mode could not generate an answer. Try narrowing the question.")
+        return True
+
+    await _send(scout, channel, answer, run_post_checks=False)
+    return True
 
 
 async def _handle_project_command(channel: str, user_message: str) -> bool:
@@ -1545,6 +1768,8 @@ async def process_message(channel: str, user_message: str):
     if await _handle_export_command(channel, user_message):
         return
     if await _handle_brainstorm_command(channel, user_message):
+        return
+    if await _handle_oracle_command(channel, user_message):
         return
     if await _handle_meeting_or_vote(channel, user_message):
         return

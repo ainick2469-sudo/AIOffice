@@ -775,3 +775,42 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
   - `client/dev-lint.cmd` PASS
   - `client/dev-build.cmd` PASS
   - `python start.py --mode web` health check PASS (`START_OK`)
+
+---
+
+## SESSION 17 - Feature 2 Oracle Mode (2026-02-15)
+
+### New command mode
+- [x] Added `/oracle <question>` command in `server/agent_engine.py`.
+- [x] Oracle flow now sends startup notice:
+  - `🔮 Oracle mode — reading project files...`
+- [x] Oracle routes responses through Scout (`researcher`) by default, with Nova fallback if Scout is unavailable.
+
+### Oracle file context pipeline
+- [x] Added file selection logic with keyword scoring and heuristics:
+  - scans active project tree
+  - prefers relevant files by question terms
+  - endpoint/API questions boost `routes_api`/routing files
+  - max 5 files selected.
+- [x] Added file context injection limits:
+  - reads text files only
+  - max 200 lines per file with truncation marker.
+- [x] Added optional test-gap hint generation for "no tests/without tests" questions.
+
+### Oracle answer generation
+- [x] Added dedicated Oracle answer generator with strict grounding rules:
+  - answer only from provided files/tree
+  - cite concrete files and avoid guessing
+  - explain missing-file limitations explicitly.
+- [x] Supports ollama/claude/openai backends with existing budget guard behavior for hosted providers.
+
+### Tests and verification
+- [x] Added `tests/test_oracle_mode.py`:
+  - verifies endpoint questions select `routes_api.py`
+  - verifies `/oracle` posts system startup + agent answer.
+- [x] Verification run:
+  - `python -m pytest tests/test_oracle_mode.py -q` PASS
+  - `python -m pytest tests -q` PASS (`12 passed`)
+  - `client/dev-lint.cmd` PASS
+  - `client/dev-build.cmd` PASS
+  - `python start.py --mode web` health check PASS (`START_OK`)
