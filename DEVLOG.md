@@ -1113,3 +1113,48 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 ### Verification
 - [x] `client/dev-lint.cmd` PASS
 - [x] `client/dev-build.cmd` PASS
+
+---
+
+## SESSION 28 - Regression Coverage + Desktop Packaging Flow (2026-02-16)
+
+### Added regression tests
+- [x] Added `tests/test_chat_audit_api.py`:
+  - verifies `DELETE /api/channels/{channel_id}/messages` clears history and leaves exactly one system notice
+  - verifies audit filters (`agent_id`, `tool_type`, `q`, `date_from`, `date_to`)
+  - verifies `GET /api/audit/count`
+  - verifies clear endpoints:
+    - `DELETE /api/audit/logs`
+    - `DELETE /api/audit/decisions`
+    - `DELETE /api/audit/all`
+- [x] Added `tests/test_conversation_complexity.py`:
+  - verifies simple/medium/complex turn policy outputs
+  - verifies `process_message()` caps initial routed agents by complexity.
+
+### Documentation sync
+- [x] Updated `README.md` for current launcher reality:
+  - `start.py` is desktop-first launcher
+  - `dev.py` is web dev mode launcher
+  - documented new clear-chat and audit APIs
+  - documented standalone packaging output path.
+
+### Standalone desktop packaging
+- [x] Added one-command packaging script:
+  - `build-desktop.cmd`
+  - calls `tools/build_desktop_exe.py`
+- [x] Added `tools/build_desktop_exe.py`:
+  - validates/install-checks PyInstaller
+  - builds one-dir desktop app for `app.py`
+  - outputs executable:
+    `C:\AI_WORKSPACE\ai-office\dist\AI Office\AI Office.exe`
+- [x] Added generated-artifact ignores in `.gitignore`:
+  - `build/`
+  - `dist/`
+  - `*.spec`
+  - `docs/sprint-reports/test-sprint-*.md`
+
+### Verification
+- [x] `python -m pytest tests -q` PASS (`21 passed`)
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
+- [x] `build-desktop.cmd` PASS (PyInstaller build complete, executable created)

@@ -57,7 +57,7 @@ Registry source of truth: `C:\AI_WORKSPACE\ai-office\agents\registry.json`
 - Project templates (`react`, `python`, `rust`)
 - Agent performance metrics and API usage/cost tracking
 - Budget threshold and stop-warning behavior for hosted API backends
-- Theme toggle (dark/light) and startup mode selector (web/desktop)
+- Theme toggle (dark/light) with desktop-first launcher and dedicated dev launcher (`dev.py`)
 - App Builder control to launch full multi-agent app delivery runs
 - Desktop app launcher with tray controls and standalone native window mode
 
@@ -74,6 +74,7 @@ Registry source of truth: `C:\AI_WORKSPACE\ai-office\agents\registry.json`
 - `GET /api/ollama/models/recommendations`
 - `POST /api/ollama/models/pull`
 - `GET /api/messages/{channel}`
+- `DELETE /api/channels/{channel_id}/messages`
 - `GET /api/messages/search`
 - `GET /api/tasks`
 - `POST /api/tasks`
@@ -100,6 +101,11 @@ Registry source of truth: `C:\AI_WORKSPACE\ai-office\agents\registry.json`
 - `POST /api/work/start`
 - `POST /api/work/stop`
 - `GET /api/work/status/{channel}`
+- `GET /api/audit`
+- `GET /api/audit/count`
+- `DELETE /api/audit/logs`
+- `DELETE /api/audit/decisions`
+- `DELETE /api/audit/all`
 - `POST /api/tools/web`
 - `POST /api/tools/fetch`
 - `POST /api/execute`
@@ -127,18 +133,18 @@ dev-build.cmd
 dev-lint.cmd
 ```
 
-3. Start app (PATH-safe launcher with mode selector)
+3. Start app (desktop-first launcher)
 
 ```bat
 cd /d C:\AI_WORKSPACE\ai-office
-C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe start.py --mode web
+C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe start.py
 ```
 
-4. Desktop mode
+4. Dev web mode (backend + Vite)
 
 ```bat
 cd /d C:\AI_WORKSPACE\ai-office
-C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe start.py --mode desktop
+C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe dev.py
 ```
 
 Or double-click:
@@ -148,6 +154,19 @@ C:\AI_WORKSPACE\ai-office\desktop-launch.cmd
 ```
 
 Desktop mode requires `pywebview` and runs as a standalone native window (not browser fallback).
+
+5. Build standalone Windows `.exe`
+
+```bat
+cd /d C:\AI_WORKSPACE\ai-office
+build-desktop.cmd
+```
+
+Output:
+
+```text
+C:\AI_WORKSPACE\ai-office\dist\AI Office\AI Office.exe
+```
 
 ## Full App Build Workflow
 
