@@ -1003,3 +1003,27 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - [x] `python -m pytest tests -q` PASS (`17 passed`)
 - [x] `client/dev-lint.cmd` PASS
 - [x] `client/dev-build.cmd` PASS
+
+---
+
+## SESSION 23 - Step 5 Desktop-Only Launcher + Dev Escape Hatch (2026-02-16)
+
+### Launcher changes
+- [x] Replaced `start.py` mode selection flow with desktop-only launch:
+  - always launches `app.py`
+  - no web/desktop prompt
+  - no direct Vite startup path in user launcher.
+- [x] Added `dev.py` as developer-only web mode launcher:
+  - starts backend (`run.py`) + Vite dev server (`npm run dev`)
+  - opens `http://localhost:5173`
+  - Ctrl+C cleanup for child processes.
+
+### Runtime smoke alignment
+- [x] Updated `tools/startup_smoke.py` for desktop-first behavior:
+  - validates port `8000` only (no `5173` requirement).
+
+### Verification
+- [x] `tools/startup_smoke.py` PASS
+- [x] `tools/desktop_smoke.py` PASS
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS

@@ -46,10 +46,8 @@ def main() -> int:
     )
 
     ok_8000 = False
-    ok_5173 = False
     try:
         ok_8000 = wait_for_port("localhost", 8000, timeout=50)
-        ok_5173 = wait_for_port("localhost", 5173, timeout=50)
     finally:
         subprocess.run(
             ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
@@ -58,13 +56,12 @@ def main() -> int:
             check=False,
         )
 
-    if ok_8000 and ok_5173:
+    if ok_8000:
         print("STARTUP_SMOKE_PASS")
         return 0
 
     print("STARTUP_SMOKE_FAIL")
     print(f"PORT_8000_READY={ok_8000}")
-    print(f"PORT_5173_READY={ok_5173}")
     return 1
 
 
