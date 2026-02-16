@@ -734,3 +734,44 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
   - `client/dev-lint.cmd` PASS
   - `client/dev-build.cmd` PASS
   - `python start.py --mode web` health check PASS (`START_OK`)
+
+---
+
+## SESSION 16 - Feature 1 Brainstorm Mode (2026-02-15)
+
+### New command mode
+- [x] Added `/brainstorm [topic]` command in `server/agent_engine.py`.
+- [x] Added `/brainstorm stop` command to end mode and publish vote-ranked summary.
+- [x] Brainstorm collab mode now sets `collab_mode=brainstorm` with topic and round metadata.
+
+### Agent orchestration and prompts
+- [x] Added deterministic brainstorm roster selection (5-6 agents):
+  - Must include Spark when active.
+  - Strong preference order includes Ada (`architect`), Uma (`uiux`), Leo (`lore`), Sage.
+  - Adds one wildcard when available.
+- [x] Added brainstorm-specific system guidance in `_build_system`:
+  - exactly one idea
+  - 2-3 sentences
+  - role-perspective specific
+  - no agreement/repetition.
+- [x] Added dedicated brainstorm round runner to collect one idea per selected agent and post round-complete instruction message.
+
+### Upvote tracking and stop summary
+- [x] Added reaction-backed idea vote summary for brainstorm message IDs.
+- [x] `/brainstorm stop` now posts:
+  - top-voted ideas (👍 counts)
+  - winner callout
+  - prompt to convert winner into task.
+
+### Tests and verification
+- [x] Added `tests/test_brainstorm_mode.py` covering:
+  - brainstorm start
+  - idea round completion
+  - upvote counting
+  - stop summary emission.
+- [x] Verification run:
+  - `python -m pytest tests/test_brainstorm_mode.py -q` PASS
+  - `python -m pytest tests -q` PASS (`10 passed`)
+  - `client/dev-lint.cmd` PASS
+  - `client/dev-build.cmd` PASS
+  - `python start.py --mode web` health check PASS (`START_OK`)

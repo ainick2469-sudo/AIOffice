@@ -18,6 +18,7 @@ from .database import (
     get_agent,
     get_agents,
     get_messages,
+    get_db,
     insert_message,
     get_channel_name,
     set_channel_name,
@@ -549,6 +550,183 @@ def _deterministic_vote(title: str, options: list[str], voters: list[str]) -> di
     return {"tally": tally, "ballots": ballots, "winner": winner}
 
 
+def _pick_brainstorm_agents(active_ids: list[str]) -> list[str]:
+    if not active_ids:
+        return []
+
+    preferred = ["spark", "architect", "uiux", "lore", "sage"]
+    chosen: list[str] = []
+    for agent_id in preferred:
+        if agent_id in active_ids and agent_id not in chosen:
+            chosen.append(agent_id)
+
+    wildcards = [aid for aid in active_ids if aid not in chosen and aid != "router"]
+    random.shuffle(wildcards)
+    target = min(6, max(5, len(chosen)))
+    target = min(target, len(active_ids))
+    while len(chosen) < target and wildcards:
+        chosen.append(wildcards.pop(0))
+
+    if "spark" in active_ids and "spark" not in chosen:
+        chosen.insert(0, "spark")
+
+    return chosen[:6]
+
+
+async def _fetch_brainstorm_votes(channel: str, idea_ids: list[int]) -> list[dict]:
+    if not idea_ids:
+        return []
+    placeholders = ",".join("?" for _ in idea_ids)
+    params = [channel, *idea_ids]
+    db = await get_db()
+    try:
+        rows = await db.execute(
+            f"""
+            SELECT
+              m.id,
+              m.sender,
+              m.content,
+              SUM(CASE WHEN r.emoji IN ('👍', ':+1:') THEN 1 ELSE 0 END) AS upvotes
+            FROM messages m
+            LEFT JOIN message_reactions r ON r.message_id = m.id
+            WHERE m.channel = ? AND m.id IN ({placeholders})
+            GROUP BY m.id, m.sender, m.content
+            ORDER BY upvotes DESC, m.id ASC
+            """
+            ,
+            tuple(params),
+        )
+        items = [dict(r) for r in await rows.fetchall()]
+        for item in items:
+            item["upvotes"] = int(item.get("upvotes") or 0)
+        return items
+    finally:
+        await db.close()
+
+
+async def _summarize_brainstorm(channel: str, mode: dict) -> str:
+    idea_ids = mode.get("idea_message_ids", []) or []
+    ideas = await _fetch_brainstorm_votes(channel, idea_ids)
+    if not ideas:
+        return (
+            "Brainstorm mode ended.\n"
+            "No idea messages were recorded for vote summary this round."
+        )
+
+    lines = ["💡 Brainstorm stopped. Top-voted ideas:"]
+    for idx, item in enumerate(ideas[:5], start=1):
+        sender_name = AGENT_NAMES.get(item.get("sender", ""), item.get("sender", "agent"))
+        snippet = (item.get("content", "") or "").replace("\n", " ").strip()
+        if len(snippet) > 170:
+            snippet = snippet[:167] + "..."
+        lines.append(f"{idx}. {sender_name} ({item['upvotes']} 👍) - {snippet}")
+
+    winner = ideas[0]
+    winner_name = AGENT_NAMES.get(winner.get("sender", ""), winner.get("sender", "agent"))
+    lines.append("")
+    lines.append(
+        f"Winner: {winner_name} with {winner['upvotes']} 👍. "
+        "Say `create task from brainstorm winner` and I will convert it into a project task."
+    )
+    return "\n".join(lines)
+
+
+async def _run_brainstorm_round(channel: str, agent_ids: list[str]):
+    if channel in _active and _active[channel]:
+        _active[channel] = False
+        await asyncio.sleep(0.1)
+
+    _active[channel] = True
+    _msg_count[channel] = 0
+    idea_ids: list[int] = []
+    message_count = 0
+
+    try:
+        for agent_id in agent_ids:
+            mode = _collab_mode.get(channel) or {}
+            if not mode.get("active") or mode.get("mode") != "brainstorm":
+                break
+
+            agent = await get_agent(agent_id)
+            if not agent or not agent.get("active"):
+                continue
+
+            await _typing(agent, channel)
+            response = await _generate(agent, channel, is_followup=False)
+            if not response or response.strip().upper() == "PASS":
+                continue
+
+            saved = await _send(agent, channel, response, run_post_checks=False)
+            idea_ids.append(saved["id"])
+            message_count += 1
+            _msg_count[channel] = message_count
+            await asyncio.sleep(PAUSE_BETWEEN_AGENTS)
+    finally:
+        _active.pop(channel, None)
+        _msg_count.pop(channel, None)
+
+    mode = _collab_mode.get(channel)
+    if mode and mode.get("active") and mode.get("mode") == "brainstorm":
+        existing = mode.get("idea_message_ids", []) or []
+        mode["idea_message_ids"] = existing + idea_ids
+        mode["last_round_ids"] = idea_ids
+        mode["updated_at"] = int(time.time())
+        _collab_mode[channel] = mode
+
+    await _send_system_message(
+        channel,
+        "💡 Round complete! React with 👍 to your favorites. "
+        "Say `/brainstorm` for another round, or `/brainstorm stop` to end.",
+    )
+
+
+async def _handle_brainstorm_command(channel: str, user_message: str) -> bool:
+    raw = user_message.strip()
+    if not raw.startswith("/brainstorm"):
+        return False
+
+    arg = raw[len("/brainstorm"):].strip()
+    if arg.lower() in {"stop", "off", "end"}:
+        mode = _collab_mode.get(channel)
+        if not mode or mode.get("mode") != "brainstorm" or not mode.get("active"):
+            await _send_system_message(channel, "Brainstorm mode is not active.")
+            return True
+
+        summary = await _summarize_brainstorm(channel, mode)
+        _collab_mode.pop(channel, None)
+        await _send_system_message(channel, summary, msg_type="decision")
+        return True
+
+    topic = arg or "open-ended product ideas"
+    active_agents = await get_agents(active_only=True)
+    active_ids = [a["id"] for a in active_agents if a["id"] != "router"]
+    chosen = _pick_brainstorm_agents(active_ids)
+    if not chosen:
+        await _send_system_message(channel, "No active agents available for brainstorm mode.")
+        return True
+
+    previous = _collab_mode.get(channel) or {}
+    round_no = int(previous.get("round", 0) or 0) + 1
+    _collab_mode[channel] = {
+        "active": True,
+        "mode": "brainstorm",
+        "topic": topic,
+        "round": round_no,
+        "agent_ids": chosen,
+        "idea_message_ids": previous.get("idea_message_ids", []) or [],
+        "updated_at": int(time.time()),
+    }
+
+    selected_names = ", ".join(AGENT_NAMES.get(aid, aid) for aid in chosen)
+    await _send_system_message(
+        channel,
+        f"💡 BRAINSTORM MODE — Topic: {topic}. Each agent will pitch ONE idea. "
+        f"Upvote the best ones with 👍.\nRound {round_no} agents: {selected_names}",
+    )
+    asyncio.create_task(_run_brainstorm_round(channel, chosen))
+    return True
+
+
 async def _handle_meeting_or_vote(channel: str, user_message: str) -> bool:
     raw = user_message.strip()
     if raw.startswith("/meeting"):
@@ -719,6 +897,13 @@ def _build_system(
         s += f"\nMode: {mode.get('mode', 'chat')}"
         if mode.get("topic"):
             s += f"\nTopic: {mode['topic']}"
+        if mode.get("mode") == "brainstorm":
+            topic = mode.get("topic", "open-ended ideas")
+            s += (
+                "\nBRAINSTORM MODE: Pitch exactly ONE idea related to "
+                f"{topic}. Be specific and creative. Think from YOUR role's perspective. "
+                "Keep it to 2-3 sentences. Do NOT agree with others - pitch something DIFFERENT."
+            )
         if mode.get("mode") == "meeting":
             s += "\nUse structured bullets with Goal, Risks, and Action."
         if mode.get("mode") == "vote":
@@ -1358,6 +1543,8 @@ async def process_message(channel: str, user_message: str):
     if await _handle_branch_merge_command(channel, user_message):
         return
     if await _handle_export_command(channel, user_message):
+        return
+    if await _handle_brainstorm_command(channel, user_message):
         return
     if await _handle_meeting_or_vote(channel, user_message):
         return
