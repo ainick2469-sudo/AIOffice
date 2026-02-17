@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from fastapi.responses import FileResponse
 from typing import Optional
 from . import database as db
 from .models import (
@@ -22,6 +23,7 @@ from .models import (
     ProcessStartIn,
     ProcessStopIn,
     ProjectActiveOut,
+    DebugBundleIn,
     ExecuteCodeIn,
     OllamaPullIn,
     PermissionPolicyIn,
@@ -846,6 +848,27 @@ async def get_console_events_route(
         limit=limit,
         event_type=event_type,
         source=source,
+    )
+
+
+@router.post("/debug/bundle")
+async def export_debug_bundle(body: DebugBundleIn):
+    from . import debug_bundle
+
+    try:
+        result = await debug_bundle.create_debug_bundle(
+            channel=(body.channel or "main").strip() or "main",
+            minutes=int(body.minutes or 30),
+            include_prompts=bool(body.include_prompts),
+            redact_secrets=bool(body.redact_secrets),
+        )
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+
+    return FileResponse(
+        path=str(result.path),
+        media_type="application/zip",
+        filename=result.file_name,
     )
 
 

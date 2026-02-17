@@ -4,6 +4,7 @@ import aiosqlite
 import json
 import os
 import tempfile
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -39,6 +40,10 @@ VALID_AUTONOMY_MODES = {"SAFE", "TRUSTED", "ELEVATED"}
 VALID_PERMISSION_MODES = {"locked", "ask", "trusted"}
 DEFAULT_PERMISSION_SCOPES = ["read", "search", "run", "write", "task"]
 
+
+def _task_title_key(value: Optional[str]) -> str:
+    return " ".join(((value or "").strip().lower()).split())
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS channels (
     id TEXT PRIMARY KEY,
@@ -62,6 +67,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     description TEXT,
+    why TEXT,
+    acceptance_criteria TEXT,
     status TEXT DEFAULT 'backlog',
     assigned_to TEXT,
     channel TEXT NOT NULL DEFAULT 'main',
@@ -71,6 +78,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     linked_files TEXT DEFAULT '[]',
     depends_on TEXT DEFAULT '[]',
     created_by TEXT,
+    source_message_id INTEGER,
+    source_tool_log_id INTEGER,
+    duplicate_count INTEGER DEFAULT 0,
     priority INTEGER DEFAULT 2,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -208,6 +218,35 @@ CREATE TABLE IF NOT EXISTS approval_requests (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS permission_grants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL,
+    project_name TEXT,
+    scope TEXT NOT NULL,
+    grant_level TEXT NOT NULL DEFAULT 'chat',
+    source_request_id TEXT,
+    expires_at TEXT,
+    created_by TEXT NOT NULL DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS managed_processes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    process_id TEXT NOT NULL UNIQUE,
+    session_id TEXT,
+    channel TEXT NOT NULL,
+    project_name TEXT,
+    pid INTEGER,
+    command TEXT NOT NULL,
+    cwd TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
+    started_at INTEGER,
+    ended_at INTEGER,
+    exit_code INTEGER,
+    metadata_json TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS console_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL,
@@ -267,9 +306,14 @@ async def _run_migrations(db: aiosqlite.Connection):
     await _ensure_column(db, "tasks", "channel", "TEXT NOT NULL DEFAULT 'main'")
     await _ensure_column(db, "tasks", "project_name", "TEXT NOT NULL DEFAULT 'ai-office'")
     await _ensure_column(db, "tasks", "branch", "TEXT NOT NULL DEFAULT 'main'")
+    await _ensure_column(db, "tasks", "why", "TEXT")
+    await _ensure_column(db, "tasks", "acceptance_criteria", "TEXT")
     await _ensure_column(db, "tasks", "subtasks", "TEXT DEFAULT '[]'")
     await _ensure_column(db, "tasks", "linked_files", "TEXT DEFAULT '[]'")
     await _ensure_column(db, "tasks", "depends_on", "TEXT DEFAULT '[]'")
+    await _ensure_column(db, "tasks", "source_message_id", "INTEGER")
+    await _ensure_column(db, "tasks", "source_tool_log_id", "INTEGER")
+    await _ensure_column(db, "tasks", "duplicate_count", "INTEGER DEFAULT 0")
     await _ensure_column(db, "tool_logs", "channel", "TEXT")
     await _ensure_column(db, "tool_logs", "task_id", "TEXT")
     await _ensure_column(db, "tool_logs", "approval_request_id", "TEXT")
@@ -300,12 +344,44 @@ async def _run_migrations(db: aiosqlite.Connection):
                decided_by TEXT,
                decided_at TEXT,
                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS permission_grants (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               channel TEXT NOT NULL,
+               project_name TEXT,
+               scope TEXT NOT NULL,
+               grant_level TEXT NOT NULL DEFAULT 'chat',
+               source_request_id TEXT,
+               expires_at TEXT,
+               created_by TEXT NOT NULL DEFAULT 'user',
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS managed_processes (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               process_id TEXT NOT NULL UNIQUE,
+               session_id TEXT,
+               channel TEXT NOT NULL,
+               project_name TEXT,
+               pid INTEGER,
+               command TEXT NOT NULL,
+               cwd TEXT,
+               status TEXT NOT NULL DEFAULT 'running',
+               started_at INTEGER,
+               ended_at INTEGER,
+               exit_code INTEGER,
+               metadata_json TEXT,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
            )"""
     )
 
     await db.execute("UPDATE tasks SET branch = 'main' WHERE branch IS NULL OR TRIM(branch) = ''")
     await db.execute("UPDATE tasks SET channel = 'main' WHERE channel IS NULL OR TRIM(channel) = ''")
     await db.execute("UPDATE tasks SET project_name = 'ai-office' WHERE project_name IS NULL OR TRIM(project_name) = ''")
+    await db.execute("UPDATE tasks SET duplicate_count = 0 WHERE duplicate_count IS NULL OR duplicate_count < 0")
     await db.execute("UPDATE tasks SET subtasks = '[]' WHERE subtasks IS NULL OR subtasks = ''")
     await db.execute("UPDATE tasks SET linked_files = '[]' WHERE linked_files IS NULL OR linked_files = ''")
     await db.execute("UPDATE tasks SET depends_on = '[]' WHERE depends_on IS NULL OR depends_on = ''")
@@ -1276,9 +1352,149 @@ def _normalize_permission_scopes(scopes: Optional[list[str] | str]) -> list[str]
 
 def _normalize_permission_mode(mode: Optional[str]) -> str:
     normalized = (mode or "ask").strip().lower()
+    if normalized == "auto":
+        normalized = "trusted"
     if normalized not in VALID_PERMISSION_MODES:
         return "ask"
     return normalized
+
+
+def _permission_ui_mode(mode: str) -> str:
+    normalized = _normalize_permission_mode(mode)
+    if normalized == "locked":
+        return "LOCKED"
+    if normalized == "trusted":
+        return "AUTO"
+    return "ASK"
+
+
+async def list_permission_grants(
+    channel: str,
+    *,
+    project_name: Optional[str] = None,
+    include_expired: bool = False,
+) -> list[dict]:
+    channel_id = (channel or "main").strip() or "main"
+    project = (project_name or "").strip()
+    now = _utc_now()
+    db = await get_db()
+    try:
+        rows = await db.execute(
+            "SELECT * FROM permission_grants WHERE channel = ? ORDER BY id DESC",
+            (channel_id,),
+        )
+        result = []
+        expired_ids: list[int] = []
+        for row in await rows.fetchall():
+            item = dict(row)
+            expires = _parse_iso(item.get("expires_at"))
+            if expires and expires <= now:
+                expired_ids.append(int(item.get("id")))
+                if not include_expired:
+                    continue
+            grant_project = (item.get("project_name") or "").strip()
+            if project and grant_project and grant_project != project:
+                continue
+            result.append(item)
+
+        if expired_ids:
+            placeholders = ",".join("?" for _ in expired_ids)
+            await db.execute(f"DELETE FROM permission_grants WHERE id IN ({placeholders})", tuple(expired_ids))
+            await db.commit()
+        return result
+    finally:
+        await db.close()
+
+
+async def grant_permission_scope(
+    *,
+    channel: str,
+    scope: str,
+    grant_level: str = "chat",
+    minutes: int = 10,
+    project_name: Optional[str] = None,
+    source_request_id: Optional[str] = None,
+    created_by: str = "user",
+) -> dict:
+    channel_id = (channel or "main").strip() or "main"
+    grant_scope = (scope or "").strip().lower()
+    if not grant_scope:
+        raise ValueError("scope is required")
+    level = (grant_level or "chat").strip().lower()
+    if level not in {"once", "chat", "project"}:
+        raise ValueError("grant_level must be one of: once, chat, project")
+    ttl_minutes = max(1, min(int(minutes or 10), 24 * 60))
+    expires_at = None
+    if level in {"once", "chat"}:
+        expires_at = (_utc_now() + timedelta(minutes=ttl_minutes)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO permission_grants (
+                   channel, project_name, scope, grant_level, source_request_id, expires_at, created_by
+               ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                channel_id,
+                (project_name or "").strip() or None,
+                grant_scope,
+                level,
+                (source_request_id or "").strip() or None,
+                expires_at,
+                (created_by or "user").strip() or "user",
+            ),
+        )
+        await db.commit()
+        row = await db.execute("SELECT * FROM permission_grants WHERE id = ?", (cursor.lastrowid,))
+        result = await row.fetchone()
+        return dict(result) if result else {}
+    finally:
+        await db.close()
+
+
+async def revoke_permission_grant(
+    *,
+    channel: str,
+    grant_id: Optional[int] = None,
+    scope: Optional[str] = None,
+    project_name: Optional[str] = None,
+) -> int:
+    channel_id = (channel or "main").strip() or "main"
+    db = await get_db()
+    try:
+        if grant_id:
+            cursor = await db.execute(
+                "DELETE FROM permission_grants WHERE id = ? AND channel = ?",
+                (int(grant_id), channel_id),
+            )
+            await db.commit()
+            return int(cursor.rowcount or 0)
+
+        where = ["channel = ?"]
+        params: list = [channel_id]
+        if scope:
+            where.append("scope = ?")
+            params.append((scope or "").strip().lower())
+        if project_name:
+            where.append("COALESCE(project_name, '') = ?")
+            params.append((project_name or "").strip())
+        cursor = await db.execute(f"DELETE FROM permission_grants WHERE {' AND '.join(where)}", tuple(params))
+        await db.commit()
+        return int(cursor.rowcount or 0)
+    finally:
+        await db.close()
+
+
+def _merge_scopes_with_grants(scopes: list[str], grants: list[dict]) -> list[str]:
+    merged = list(scopes or [])
+    seen = {item.strip().lower() for item in merged if str(item).strip()}
+    for item in grants:
+        token = str(item.get("scope") or "").strip().lower()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        merged.append(token)
+    return merged
 
 
 async def get_permission_policy(channel: str) -> dict:
@@ -1291,13 +1507,18 @@ async def get_permission_policy(channel: str) -> dict:
         )
         item = await row.fetchone()
         if not item:
-            return {
+            base_policy = {
                 "channel": channel_id,
                 "mode": "ask",
                 "expires_at": None,
                 "scopes": list(DEFAULT_PERMISSION_SCOPES),
                 "command_allowlist_profile": "safe",
             }
+            grants = await list_permission_grants(channel_id)
+            base_policy["active_grants"] = grants
+            base_policy["scopes"] = _merge_scopes_with_grants(base_policy["scopes"], grants)
+            base_policy["ui_mode"] = _permission_ui_mode(base_policy["mode"])
+            return base_policy
 
         policy = dict(item)
         policy["mode"] = _normalize_permission_mode(policy.get("mode"))
@@ -1315,6 +1536,10 @@ async def get_permission_policy(channel: str) -> dict:
             await db.commit()
             policy["mode"] = "ask"
             policy["expires_at"] = None
+        grants = await list_permission_grants(channel_id)
+        policy["active_grants"] = grants
+        policy["scopes"] = _merge_scopes_with_grants(policy["scopes"], grants)
+        policy["ui_mode"] = _permission_ui_mode(policy["mode"])
         return policy
     finally:
         await db.close()

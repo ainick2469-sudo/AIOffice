@@ -1,6 +1,6 @@
 """AI Office — Pydantic models."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Literal
 from datetime import datetime
 
@@ -176,18 +176,30 @@ class AutonomyModeIn(BaseModel):
 
 class PermissionPolicyIn(BaseModel):
     channel: str = "main"
-    mode: PermissionMode = "ask"
+    mode: str = "ask"
     expires_at: Optional[str] = None
     scopes: list[str] = Field(default_factory=list)
     command_allowlist_profile: str = "safe"
+
+    @field_validator("mode")
+    @classmethod
+    def normalize_mode(cls, value: str) -> str:
+        normalized = (value or "ask").strip().lower()
+        if normalized == "auto":
+            normalized = "trusted"
+        if normalized not in {"locked", "ask", "trusted"}:
+            raise ValueError("mode must be one of: locked, ask, trusted, auto")
+        return normalized
 
 
 class PermissionPolicyOut(BaseModel):
     channel: str
     mode: PermissionMode
+    ui_mode: Literal["LOCKED", "ASK", "AUTO"] = "ASK"
     expires_at: Optional[str] = None
     scopes: list[str] = Field(default_factory=list)
     command_allowlist_profile: str = "safe"
+    active_grants: list[dict] = Field(default_factory=list)
 
 
 class TrustSessionIn(BaseModel):
@@ -201,6 +213,35 @@ class ApprovalResponseIn(BaseModel):
     request_id: str = Field(..., min_length=6, max_length=64)
     approved: bool
     decided_by: str = "user"
+
+
+class PermissionGrantIn(BaseModel):
+    channel: str = "main"
+    project_name: Optional[str] = None
+    scope: Literal["read", "search", "write", "run", "task", "pip", "git", "start_process", "net", "delete", "admin"]
+    grant_level: Literal["once", "chat", "project"] = "chat"
+    minutes: int = Field(default=10, ge=1, le=1440)
+    request_id: Optional[str] = None
+    created_by: str = "user"
+
+
+class PermissionRevokeIn(BaseModel):
+    channel: str = "main"
+    project_name: Optional[str] = None
+    scope: Optional[str] = None
+    grant_id: Optional[int] = None
+
+
+class PermissionGrantOut(BaseModel):
+    id: int
+    channel: str
+    project_name: Optional[str] = None
+    scope: str
+    grant_level: str
+    source_request_id: Optional[str] = None
+    expires_at: Optional[str] = None
+    created_by: str
+    created_at: str
 
 
 class ProcessStartIn(BaseModel):
@@ -253,6 +294,18 @@ class CreateSkillIn(BaseModel):
     agent_id: str = "user"
 
 
+class RunCommandIn(BaseModel):
+    channel: str = "main"
+    agent_id: str = "user"
+    approved: bool = False
+    command: Optional[str] = None
+    cmd: Optional[list[str]] = None
+    cwd: Optional[str] = None
+    env: dict[str, str] = Field(default_factory=dict)
+    timeout: Optional[int] = Field(default=None, ge=1, le=7200)
+    background: bool = False
+
+
 class PolicyDecisionOut(BaseModel):
     allowed: bool
     requires_approval: bool = False
@@ -271,6 +324,52 @@ class VerificationLoopEventOut(BaseModel):
     exit_code: Optional[int] = None
     attempt: int = 1
     summary: Optional[str] = None
+
+
+class DebugBundleIn(BaseModel):
+    channel: str = "main"
+    minutes: int = Field(default=30, ge=1, le=1440)
+    include_prompts: bool = False
+    redact_secrets: bool = True
+
+
+class DebugBundleOut(BaseModel):
+    ok: bool = True
+    channel: str
+    path: str
+    file_name: str
+    created_at: str
+    bytes: int
+
+
+class ChannelResetIn(BaseModel):
+    clear_messages: bool = True
+    clear_channel_memory: bool = False
+    clear_project_memory: bool = False
+    clear_tasks: bool = False
+
+
+class FactoryResetIn(BaseModel):
+    confirm_text: str
+    keep_settings: bool = True
+
+
+class ProjectImportOut(BaseModel):
+    ok: bool = True
+    project: str
+    channel: str
+    path: str
+    extracted_files: int
+    brief_path: Optional[str] = None
+    tasks_created: int = 0
+
+
+class PermissionDecisionOut(BaseModel):
+    allowed: bool
+    requires_approval: bool = False
+    reason: str
+    suggested_grant: Optional[dict] = None
+    policy_snapshot: dict = Field(default_factory=dict)
 
 
 class WSMessage(BaseModel):

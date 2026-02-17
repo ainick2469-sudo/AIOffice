@@ -41,12 +41,35 @@ const toLocalInputValue = (value) => {
   return local.toISOString().slice(0, 16);
 };
 
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'absolute';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      textarea.remove();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 export default function AuditLog({ onAuditChanged }) {
   const [logs, setLogs] = useState([]);
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState('');
+  const [copiedLogId, setCopiedLogId] = useState(null);
   const [filters, setFilters] = useState({
     agentId: '',
     toolType: '',
@@ -144,6 +167,16 @@ export default function AuditLog({ onAuditChanged }) {
 
   const toggleOutput = (logId) => {
     setExpandedOutputs(prev => ({ ...prev, [logId]: !prev[logId] }));
+  };
+
+  const copyLogEntry = async (log) => {
+    const ok = await copyToClipboard(JSON.stringify(log, null, 2));
+    if (!ok) {
+      setError('Copy failed (clipboard unavailable).');
+      return;
+    }
+    setCopiedLogId(log.id);
+    window.setTimeout(() => setCopiedLogId(null), 1500);
   };
 
   const clearAudit = async (target) => {
@@ -299,6 +332,14 @@ export default function AuditLog({ onAuditChanged }) {
                     <span className="audit-agent">{log.agent_id}</span>
                     <span className={`audit-type type-${log.tool_type}`}>{log.tool_type}</span>
                     <span className="audit-time">{new Date(log.created_at).toLocaleString()}</span>
+                    <button
+                      className="refresh-btn"
+                      onClick={() => copyLogEntry(log).catch(() => {})}
+                      title="Copy full tool payload/result as JSON"
+                      style={{ marginLeft: 'auto' }}
+                    >
+                      {copiedLogId === log.id ? 'Copied' : 'Copy'}
+                    </button>
                   </div>
                   <div className="audit-command">{log.command}</div>
                   {log.args && (

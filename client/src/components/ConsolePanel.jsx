@@ -2,11 +2,34 @@ import { useCallback, useEffect, useState } from 'react';
 
 const LIMIT = 200;
 
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'absolute';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      textarea.remove();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 export default function ConsolePanel({ channel = 'main' }) {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({ eventType: '', source: '' });
   const [error, setError] = useState('');
+  const [copied, setCopied] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -35,12 +58,49 @@ export default function ConsolePanel({ channel = 'main' }) {
     return () => clearInterval(interval);
   }, [load]);
 
+  const copyFilteredJson = async () => {
+    const ok = await copyToClipboard(JSON.stringify(events, null, 2));
+    if (!ok) {
+      setError('Copy failed (clipboard unavailable).');
+      return;
+    }
+    setCopied('json');
+    window.setTimeout(() => setCopied(''), 1500);
+  };
+
+  const copyFilteredMarkdown = async () => {
+    const exportedAt = new Date().toISOString();
+    const header = [
+      `# Console Export`,
+      ``,
+      `- Channel: ${channel}`,
+      `- Exported: ${exportedAt}`,
+      filters.eventType ? `- event_type: ${filters.eventType}` : null,
+      filters.source ? `- source: ${filters.source}` : null,
+      ``,
+    ].filter(Boolean).join('\n');
+    const body = `\`\`\`json\n${JSON.stringify(events, null, 2)}\n\`\`\`\n`;
+    const ok = await copyToClipboard(`${header}\n${body}`);
+    if (!ok) {
+      setError('Copy failed (clipboard unavailable).');
+      return;
+    }
+    setCopied('md');
+    window.setTimeout(() => setCopied(''), 1500);
+  };
+
   return (
     <div className="panel console-panel">
       <div className="panel-header">
         <h3>Console Events</h3>
         <div className="audit-header-actions">
           <button className="refresh-btn" onClick={load} disabled={loading}>Refresh</button>
+          <button className="refresh-btn" onClick={() => copyFilteredJson().catch(() => {})} disabled={loading || events.length === 0}>
+            {copied === 'json' ? 'Copied' : 'Copy JSON'}
+          </button>
+          <button className="refresh-btn" onClick={() => copyFilteredMarkdown().catch(() => {})} disabled={loading || events.length === 0}>
+            {copied === 'md' ? 'Copied' : 'Copy Markdown'}
+          </button>
         </div>
       </div>
       <div className="panel-body">

@@ -6,6 +6,28 @@ import MessageContent from './MessageContent';
 const HISTORY_LIMIT = 200;
 const MAX_ATTACHMENTS = 8;
 
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'absolute';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      textarea.remove();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 export default function ChatRoom({ channel }) {
   const { connected, messages, setMessages, send, typingAgents, lastEvent } = useWebSocket(channel);
   const [input, setInput] = useState('');
@@ -31,6 +53,7 @@ export default function ChatRoom({ channel }) {
   const [trustMinutes, setTrustMinutes] = useState(30);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [processActionBusy, setProcessActionBusy] = useState(false);
+  const [copiedMessageId, setCopiedMessageId] = useState(null);
   const bottomRef = useRef(null);
   const statusInterval = useRef(null);
   const fileInputRef = useRef(null);
@@ -290,6 +313,13 @@ export default function ChatRoom({ channel }) {
     const mins = Math.floor(total / 60);
     const secs = total % 60;
     return `${mins}m ${String(secs).padStart(2, '0')}s`;
+  };
+
+  const copyMessage = async (msg) => {
+    const ok = await copyToClipboard(msg?.content || '');
+    if (!ok) return;
+    setCopiedMessageId(msg.id);
+    window.setTimeout(() => setCopiedMessageId(null), 1500);
   };
 
   const getSender = (msg) => {
@@ -788,6 +818,9 @@ export default function ChatRoom({ channel }) {
                       {childCounts[msg.id] ? `Thread (${childCounts[msg.id]})` : 'View thread'}
                     </button>
                   )}
+                  <button className="msg-action-btn" onClick={() => copyMessage(msg)}>
+                    {copiedMessageId === msg.id ? 'Copied' : 'Copy'}
+                  </button>
                   <button className="msg-action-btn" onClick={() => toggleReaction(msg.id, '👍')}>
                     👍
                   </button>
