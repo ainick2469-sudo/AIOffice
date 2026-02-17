@@ -1925,6 +1925,15 @@ body {
   font-size: 11px;
   color: var(--text-muted);
 }
+.task-branch-chip {
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 10px;
+  letter-spacing: 0.2px;
+}
 .task-priority-pill {
   font-size: 11px;
   padding: 2px 8px;

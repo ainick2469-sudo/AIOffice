@@ -5,6 +5,9 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
 ---
 
 ## LATEST STATUS UPDATE (2026-02-17)
+- Baseline snapshot locked and tagged:
+  - commit: `095f9b3`
+  - tag: `baseline-2026-02-17`
 - Portability, env overrides, and test isolation are active:
   - centralized runtime path module (`server/runtime_paths.py`)
   - env override contract (`AI_OFFICE_HOME`, `AI_OFFICE_DB_PATH`, `AI_OFFICE_MEMORY_DIR`, `AI_OFFICE_PROJECTS_DIR`)
@@ -17,8 +20,19 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
   - skills plugin loader + create/reload APIs
 - Frontend wiring completed:
   - Console tab in `client/src/App.jsx`
-  - Project autonomy + process controls in `client/src/components/ProjectPanel.jsx`
-  - kill switch + autonomy badge in `client/src/components/ChatRoom.jsx`
+  - Project autonomy/process controls + branch/merge controls in `client/src/components/ProjectPanel.jsx`
+  - branch-aware task board controls in `client/src/components/TaskBoard.jsx`
+  - branch-aware Git panel merge workflow in `client/src/components/GitPanel.jsx`
+  - kill switch + autonomy badge + `Project @ branch` header in `client/src/components/ChatRoom.jsx`
+- Multi-branch orchestration polish is now implemented:
+  - DB: task `branch` field + `channel_branches` state table
+  - APIs:
+    - `GET /api/projects/{name}/branches`
+    - `POST /api/projects/{name}/branches/switch`
+    - `POST /api/projects/{name}/merge-preview`
+    - `POST /api/projects/{name}/merge-apply`
+  - task filtering: `GET /api/tasks?branch=<name>`
+  - branch-aware task defaulting on `POST /api/tasks`
 - Added new backend tests:
   - `test_autonomy_policy.py`
   - `test_process_manager.py`
@@ -28,8 +42,14 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
   - `test_create_skill_tool.py`
   - `test_project_scoped_memory.py`
   - `test_console_events_api.py`
+  - `test_branch_context_api.py`
+  - `test_task_branch_assignment.py`
+  - `test_merge_preview_api.py`
+  - `test_merge_apply_conflict_handling.py`
+  - `test_project_switch_branch_persistence.py`
+  - `test_agent_branch_prompt_context.py`
 - Latest checks pass:
-  - `python -m pytest -q tests` (`35 passed`)
+  - `python -m pytest -q tests` (`41 passed`)
   - `client/dev-lint.cmd`
   - `client/dev-build.cmd`
   - `tools/runtime_smoke.py`

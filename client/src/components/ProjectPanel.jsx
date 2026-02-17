@@ -2,10 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
   const [projects, setProjects] = useState([]);
-  const [active, setActive] = useState({ project: 'ai-office', path: '' });
+  const [active, setActive] = useState({ project: 'ai-office', path: '', branch: 'main' });
   const [newName, setNewName] = useState('');
   const [template, setTemplate] = useState('');
   const [status, setStatus] = useState('');
+  const [branches, setBranches] = useState([]);
+  const [branchInput, setBranchInput] = useState('');
+  const [mergeSource, setMergeSource] = useState('');
+  const [mergeTarget, setMergeTarget] = useState('main');
+  const [mergePreview, setMergePreview] = useState(null);
+  const [branchBusy, setBranchBusy] = useState({ refresh: false, switch: false, preview: false, apply: false });
   const [buildConfig, setBuildConfig] = useState({ build_cmd: '', test_cmd: '', run_cmd: '' });
   const [running, setRunning] = useState({ build: false, test: false, run: false });
   const [result, setResult] = useState(null);
@@ -26,9 +32,31 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
       .catch(() => {});
     fetch(`/api/projects/active/${channel}`)
       .then(r => r.json())
-      .then((data) => setActive(data || { project: 'ai-office', path: '' }))
+      .then((data) => setActive(data || { project: 'ai-office', path: '', branch: 'main' }))
       .catch(() => {});
   }, [channel]);
+
+  const loadBranches = useCallback((projectName) => {
+    const project = projectName || activeProjectName;
+    if (!project) return;
+    setBranchBusy(prev => ({ ...prev, refresh: true }));
+    fetch(`/api/projects/${project}/branches?channel=${encodeURIComponent(channel)}`)
+      .then(r => r.json())
+      .then((data) => {
+        if (data?.detail) throw new Error(data.detail);
+        const list = Array.isArray(data?.branches) ? data.branches : [];
+        setBranches(list);
+        const activeBranch = data?.active_branch || data?.current_branch || 'main';
+        setActive(prev => ({ ...prev, branch: activeBranch }));
+        setMergeTarget(activeBranch);
+        if (!mergeSource && list.length > 0) {
+          const fallback = list.find((item) => item !== activeBranch) || list[0];
+          setMergeSource(fallback);
+        }
+      })
+      .catch(() => setBranches([]))
+      .finally(() => setBranchBusy(prev => ({ ...prev, refresh: false })));
+  }, [activeProjectName, channel, mergeSource]);
 
   const loadAutonomyMode = useCallback((projectName) => {
     fetch(`/api/projects/${projectName}/autonomy-mode`)
@@ -68,7 +96,11 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
     if (!activeProjectName) return;
     loadBuildConfig(activeProjectName);
     loadAutonomyMode(activeProjectName);
-  }, [activeProjectName, loadAutonomyMode]);
+    const timer = setTimeout(() => {
+      loadBranches(activeProjectName);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [activeProjectName, loadAutonomyMode, loadBranches]);
 
   useEffect(() => {
     const immediate = setTimeout(() => {
@@ -115,11 +147,97 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
       .then((data) => {
         if (data?.detail) throw new Error(data.detail);
         setActive(data.active);
-        setStatus(`Active project: ${data.active.project}`);
+        setStatus(`Active project: ${data.active.project} @ ${data.active.branch || 'main'}`);
         loadBuildConfig(data.active.project);
+        loadBranches(data.active.project);
         onProjectSwitch?.(data.active);
       })
       .catch((err) => setStatus(err?.message || 'Failed to switch project.'));
+  };
+
+  const switchBranch = (branchName, createIfMissing = false) => {
+    const value = (branchName || '').trim();
+    if (!value) return;
+    setBranchBusy(prev => ({ ...prev, switch: true }));
+    setStatus(`Switching branch to ${value}...`);
+    fetch(`/api/projects/${activeProjectName}/branches/switch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel,
+        branch: value,
+        create_if_missing: Boolean(createIfMissing),
+      }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data?.detail) throw new Error(data.detail);
+        if (data?.active) {
+          setActive(data.active);
+          onProjectSwitch?.(data.active);
+        } else {
+          setActive(prev => ({ ...prev, branch: data?.branch || value }));
+        }
+        setMergeTarget(data?.branch || value);
+        setStatus(`Active branch: ${data?.branch || value}`);
+        setBranchInput('');
+        loadBranches(activeProjectName);
+      })
+      .catch((err) => setStatus(err?.message || 'Failed to switch branch.'))
+      .finally(() => setBranchBusy(prev => ({ ...prev, switch: false })));
+  };
+
+  const previewMerge = () => {
+    const sourceBranch = mergeSource.trim();
+    const targetBranch = mergeTarget.trim();
+    if (!sourceBranch || !targetBranch) return;
+    setBranchBusy(prev => ({ ...prev, preview: true }));
+    setMergePreview(null);
+    fetch(`/api/projects/${activeProjectName}/merge-preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_branch: sourceBranch, target_branch: targetBranch }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data?.detail) throw new Error(data.detail);
+        setMergePreview(data);
+        if (data?.ok) {
+          if (data?.has_conflicts) setStatus(`Merge preview found ${data.conflicts?.length || 0} conflict(s).`);
+          else setStatus('Merge preview clean.');
+        } else {
+          setStatus(data?.error || data?.stderr || 'Merge preview failed.');
+        }
+      })
+      .catch((err) => setStatus(err?.message || 'Merge preview failed.'))
+      .finally(() => setBranchBusy(prev => ({ ...prev, preview: false })));
+  };
+
+  const applyMerge = () => {
+    const sourceBranch = mergeSource.trim();
+    const targetBranch = mergeTarget.trim();
+    if (!sourceBranch || !targetBranch) return;
+    const confirmed = window.confirm(`Apply merge ${sourceBranch} -> ${targetBranch}?`);
+    if (!confirmed) return;
+    setBranchBusy(prev => ({ ...prev, apply: true }));
+    fetch(`/api/projects/${activeProjectName}/merge-apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_branch: sourceBranch, target_branch: targetBranch }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data?.detail) throw new Error(data.detail);
+        setMergePreview(data);
+        if (!data?.ok) {
+          setStatus(data?.error || data?.stderr || 'Merge apply failed.');
+          return;
+        }
+        setStatus(`Merge applied (${sourceBranch} -> ${targetBranch}).`);
+        loadBranches(activeProjectName);
+      })
+      .catch((err) => setStatus(err?.message || 'Merge apply failed.'))
+      .finally(() => setBranchBusy(prev => ({ ...prev, apply: false })));
   };
 
   const deleteProject = (name) => {
@@ -264,7 +382,7 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
       </div>
       <div className="panel-body project-panel">
         <div className="project-active">
-          <strong>Active:</strong> {activeProjectName}
+          <strong>Active:</strong> {activeProjectName} @ {active?.branch || 'main'}
           {active?.path && <span className="project-path">{active.path}</span>}
         </div>
 
@@ -299,6 +417,83 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
               </div>
             </div>
           ))}
+        </div>
+
+        <div className="project-build-config">
+          <h4>Branch Workflow</h4>
+          <div className="project-item-actions">
+            <button onClick={() => loadBranches(activeProjectName)} disabled={branchBusy.refresh}>
+              {branchBusy.refresh ? 'Refreshing...' : 'Refresh Branches'}
+            </button>
+          </div>
+          <label>
+            Current Branch
+            <select
+              value={active?.branch || 'main'}
+              onChange={(e) => switchBranch(e.target.value, false)}
+              disabled={branchBusy.switch}
+            >
+              {(branches.length > 0 ? branches : [active?.branch || 'main']).map((branchName) => (
+                <option key={branchName} value={branchName}>
+                  {branchName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Create/Switch Branch
+            <input
+              type="text"
+              value={branchInput}
+              onChange={(e) => setBranchInput(e.target.value)}
+              placeholder="feature/new-flow"
+            />
+          </label>
+          <div className="project-item-actions">
+            <button onClick={() => switchBranch(branchInput, true)} disabled={branchBusy.switch || !branchInput.trim()}>
+              {branchBusy.switch ? 'Working...' : 'Create + Switch'}
+            </button>
+            <button onClick={() => switchBranch(branchInput, false)} disabled={branchBusy.switch || !branchInput.trim()}>
+              {branchBusy.switch ? 'Working...' : 'Switch Existing'}
+            </button>
+          </div>
+          <label>
+            Merge Source
+            <select value={mergeSource} onChange={(e) => setMergeSource(e.target.value)}>
+              <option value="">Select source branch</option>
+              {branches
+                .filter((branchName) => branchName !== mergeTarget)
+                .map((branchName) => (
+                  <option key={`source-${branchName}`} value={branchName}>
+                    {branchName}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label>
+            Merge Target
+            <select value={mergeTarget} onChange={(e) => setMergeTarget(e.target.value)}>
+              <option value="">Select target branch</option>
+              {branches.map((branchName) => (
+                <option key={`target-${branchName}`} value={branchName}>
+                  {branchName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="project-item-actions">
+            <button onClick={previewMerge} disabled={branchBusy.preview || !mergeSource || !mergeTarget}>
+              {branchBusy.preview ? 'Previewing...' : 'Merge Preview'}
+            </button>
+            <button onClick={applyMerge} disabled={branchBusy.apply || !mergeSource || !mergeTarget}>
+              {branchBusy.apply ? 'Applying...' : 'Merge Apply'}
+            </button>
+          </div>
+          {mergePreview && (
+            <pre className="project-result">
+              {JSON.stringify(mergePreview, null, 2)}
+            </pre>
+          )}
         </div>
 
         <div className="project-build-config">

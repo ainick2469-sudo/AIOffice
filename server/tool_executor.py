@@ -8,6 +8,7 @@ from .database import insert_message, update_task_from_tag, get_agent, create_ta
 from .websocket import manager
 from . import web_search
 from . import skills_loader
+from . import project_manager
 from .observability import emit_console_event
 
 logger = logging.getLogger("ai-office.toolexec")
@@ -131,7 +132,7 @@ def validate_tool_call_format(call: dict) -> tuple[bool, str]:
     return False, f"Unknown tool type: {tool_type}"
 
 
-async def _create_task(agent_id: str, task_text: str) -> dict:
+async def _create_task(agent_id: str, task_text: str, channel: str) -> dict:
     """Create a task from agent tool call. Format: Title | assigned_to | priority"""
     parts = [p.strip() for p in task_text.split("|")]
     title = parts[0] if parts else task_text
@@ -140,6 +141,8 @@ async def _create_task(agent_id: str, task_text: str) -> dict:
         priority = int(parts[2]) if len(parts) > 2 else 2
     except ValueError:
         priority = 2
+    active = await project_manager.get_active_project(channel)
+    branch = (active.get("branch") or "main").strip() or "main"
 
     try:
         task = await create_task_record(
@@ -153,7 +156,10 @@ async def _create_task(agent_id: str, task_text: str) -> dict:
                 "linked_files": [],
                 "depends_on": [],
                 "status": "backlog",
-            }
+                "branch": branch,
+            },
+            channel=channel,
+            project_name=active.get("project"),
         )
         return {"ok": True, "task": task}
     except Exception as e:
@@ -164,6 +170,9 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
     """Execute tool calls and broadcast results to chat."""
     results = []
     agent = await get_agent(agent_id)
+    active_project = await project_manager.get_active_project(channel)
+    project_name = active_project.get("project")
+    branch_name = (active_project.get("branch") or "main").strip() or "main"
     role = (agent or {}).get("role", "").lower()
     can_research = agent_id in {"researcher", "director"} or "research" in role or "director" in role
 
@@ -185,7 +194,8 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                 event_type="tool_format_invalid",
                 source="tool_executor",
                 message=validation_error,
-                data={"agent_id": agent_id, "tool_type": tool_type},
+                project_name=project_name,
+                data={"agent_id": agent_id, "tool_type": tool_type, "branch": branch_name},
             )
             results.append({"type": tool_type, "result": {"ok": False, "error": validation_error}, "msg": msg})
             continue
@@ -194,7 +204,12 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
             event_type="tool_call",
             source="tool_executor",
             message=f"{agent_id} -> {tool_type}",
-            data={"agent_id": agent_id, "call": {k: v for k, v in call.items() if k != "content"}},
+            project_name=project_name,
+            data={
+                "agent_id": agent_id,
+                "branch": branch_name,
+                "call": {k: v for k, v in call.items() if k != "content"},
+            },
         )
 
         try:
@@ -268,7 +283,7 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                 msg = f"⚠️ **Write skipped for** `{call['path']}` — no content block provided. Use:\n```\n[TOOL:write] {call['path']}\n```\nfile content here\n```\n```"
 
             elif tool_type == "task":
-                result = await _create_task(agent_id, call["arg"])
+                result = await _create_task(agent_id, call["arg"], channel)
                 if result["ok"]:
                     task = result["task"]
                     assigned = task.get("assigned_to", "unassigned")
@@ -371,9 +386,11 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                 event_type="tool_result",
                 source="tool_executor",
                 message=f"{tool_type} {'ok' if bool(result.get('ok')) else 'failed'}",
+                project_name=project_name,
                 data={
                     "agent_id": agent_id,
                     "tool_type": tool_type,
+                    "branch": branch_name,
                     "ok": bool(result.get("ok")),
                     "exit_code": result.get("exit_code"),
                 },
@@ -397,7 +414,8 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                 source="tool_executor",
                 message=str(e),
                 severity="error",
-                data={"agent_id": agent_id, "tool_type": tool_type},
+                project_name=project_name,
+                data={"agent_id": agent_id, "tool_type": tool_type, "branch": branch_name},
             )
             results.append({
                 "type": tool_type,

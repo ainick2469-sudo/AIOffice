@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     description TEXT,
     status TEXT DEFAULT 'backlog',
     assigned_to TEXT,
+    branch TEXT NOT NULL DEFAULT 'main',
     subtasks TEXT DEFAULT '[]',
     linked_files TEXT DEFAULT '[]',
     depends_on TEXT DEFAULT '[]',
@@ -112,6 +113,14 @@ CREATE TABLE IF NOT EXISTS channel_projects (
     channel TEXT PRIMARY KEY,
     project_name TEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS channel_branches (
+    channel TEXT NOT NULL,
+    project_name TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT 'main',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (channel, project_name)
 );
 
 CREATE TABLE IF NOT EXISTS api_usage (
@@ -192,11 +201,22 @@ async def init_db():
 
 async def _run_migrations(db: aiosqlite.Connection):
     """Non-destructive schema migrations for existing local DBs."""
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS channel_branches (
+               channel TEXT NOT NULL,
+               project_name TEXT NOT NULL,
+               branch TEXT NOT NULL DEFAULT 'main',
+               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               PRIMARY KEY (channel, project_name)
+           )"""
+    )
     await _ensure_column(db, "tasks", "assigned_by", "TEXT")
+    await _ensure_column(db, "tasks", "branch", "TEXT NOT NULL DEFAULT 'main'")
     await _ensure_column(db, "tasks", "subtasks", "TEXT DEFAULT '[]'")
     await _ensure_column(db, "tasks", "linked_files", "TEXT DEFAULT '[]'")
     await _ensure_column(db, "tasks", "depends_on", "TEXT DEFAULT '[]'")
 
+    await db.execute("UPDATE tasks SET branch = 'main' WHERE branch IS NULL OR TRIM(branch) = ''")
     await db.execute("UPDATE tasks SET subtasks = '[]' WHERE subtasks IS NULL OR subtasks = ''")
     await db.execute("UPDATE tasks SET linked_files = '[]' WHERE linked_files IS NULL OR linked_files = ''")
     await db.execute("UPDATE tasks SET depends_on = '[]' WHERE depends_on IS NULL OR depends_on = ''")
@@ -222,6 +242,7 @@ def _json_loads(value, fallback):
 
 def _normalize_task_row(row: dict) -> dict:
     data = dict(row)
+    data["branch"] = (data.get("branch") or "main").strip() or "main"
     data["priority"] = max(1, min(3, int(data.get("priority", 2) or 2)))
     data["subtasks"] = _json_loads(data.get("subtasks"), [])
     data["linked_files"] = _json_loads(data.get("linked_files"), [])
@@ -333,6 +354,8 @@ async def delete_channel(channel_id: str, delete_messages: bool = True):
             await db.execute("DELETE FROM messages WHERE channel = ?", (channel_id,))
         await db.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
         await db.execute("DELETE FROM channel_names WHERE channel_id = ?", (channel_id,))
+        await db.execute("DELETE FROM channel_projects WHERE channel = ?", (channel_id,))
+        await db.execute("DELETE FROM channel_branches WHERE channel = ?", (channel_id,))
         await db.commit()
     finally:
         await db.close()
@@ -406,19 +429,34 @@ async def clear_channel_messages(channel: str) -> int:
         await db.close()
 
 
-async def create_task_record(task: dict) -> dict:
+async def create_task_record(
+    task: dict,
+    channel: Optional[str] = None,
+    project_name: Optional[str] = None,
+) -> dict:
+    branch = str(task.get("branch") or "").strip()
+    if not branch:
+        selected_project = (project_name or "").strip()
+        if not selected_project and channel:
+            selected_project = await get_channel_active_project(channel) or "ai-office"
+        if channel and selected_project:
+            branch = await get_channel_active_branch(channel, selected_project)
+        else:
+            branch = "main"
+
     db = await get_db()
     try:
         cursor = await db.execute(
             """INSERT INTO tasks (
-                   title, description, status, assigned_to, subtasks, linked_files,
+                   title, description, status, assigned_to, branch, subtasks, linked_files,
                    depends_on, created_by, priority
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 (task.get("title") or "").strip(),
                 (task.get("description") or "").strip(),
                 task.get("status", "backlog"),
                 (task.get("assigned_to") or "").strip() or None,
+                branch,
                 _json_dumps(task.get("subtasks"), []),
                 _json_dumps(task.get("linked_files"), []),
                 _json_dumps(task.get("depends_on"), []),
@@ -444,13 +482,28 @@ async def get_task(task_id: int) -> Optional[dict]:
         await db.close()
 
 
-async def list_tasks(status: Optional[str] = None) -> list[dict]:
+async def list_tasks(status: Optional[str] = None, branch: Optional[str] = None) -> list[dict]:
     db = await get_db()
     try:
-        if status:
+        safe_branch = (branch or "").strip()
+        if status and safe_branch:
+            rows = await db.execute(
+                """SELECT * FROM tasks
+                   WHERE status = ? AND COALESCE(NULLIF(branch, ''), 'main') = ?
+                   ORDER BY priority DESC, updated_at DESC""",
+                (status, safe_branch),
+            )
+        elif status:
             rows = await db.execute(
                 "SELECT * FROM tasks WHERE status = ? ORDER BY priority DESC, updated_at DESC",
                 (status,),
+            )
+        elif safe_branch:
+            rows = await db.execute(
+                """SELECT * FROM tasks
+                   WHERE COALESCE(NULLIF(branch, ''), 'main') = ?
+                   ORDER BY priority DESC, updated_at DESC""",
+                (safe_branch,),
             )
         else:
             rows = await db.execute("SELECT * FROM tasks ORDER BY priority DESC, updated_at DESC")
@@ -466,6 +519,7 @@ async def update_task(task_id: int, updates: dict) -> Optional[dict]:
         "description",
         "status",
         "assigned_to",
+        "branch",
         "subtasks",
         "linked_files",
         "depends_on",
@@ -493,6 +547,10 @@ async def update_task(task_id: int, updates: dict) -> Optional[dict]:
     if "assigned_to" in fields:
         assignments.append("assigned_to = ?")
         params.append((fields["assigned_to"] or "").strip() or None)
+    if "branch" in fields:
+        next_branch = str(fields["branch"] or "").strip() or "main"
+        assignments.append("branch = ?")
+        params.append(next_branch)
     if "subtasks" in fields:
         assignments.append("subtasks = ?")
         params.append(_json_dumps(fields.get("subtasks"), []))
@@ -706,6 +764,18 @@ async def set_channel_active_project(channel: str, project_name: str):
                updated_at = CURRENT_TIMESTAMP""",
             (channel, project_name),
         )
+        existing = await db.execute(
+            """SELECT branch FROM channel_branches
+               WHERE channel = ? AND project_name = ?""",
+            (channel, project_name),
+        )
+        if not await existing.fetchone():
+            await db.execute(
+                """INSERT INTO channel_branches (channel, project_name, branch, updated_at)
+                   VALUES (?, ?, 'main', CURRENT_TIMESTAMP)
+                   ON CONFLICT(channel, project_name) DO NOTHING""",
+                (channel, project_name),
+            )
         await db.commit()
     finally:
         await db.close()
@@ -733,15 +803,75 @@ async def list_channel_projects() -> list[dict]:
         await db.close()
 
 
-async def get_tasks_for_agent(agent_id: str) -> list[dict]:
+async def get_channel_active_branch(channel: str, project_name: str) -> str:
+    db = await get_db()
+    try:
+        row = await db.execute(
+            """SELECT branch FROM channel_branches
+               WHERE channel = ? AND project_name = ?""",
+            (channel, project_name),
+        )
+        result = await row.fetchone()
+        if not result:
+            return "main"
+        value = str(result["branch"] or "").strip()
+        return value or "main"
+    finally:
+        await db.close()
+
+
+async def set_channel_active_branch(channel: str, project_name: str, branch: str) -> str:
+    normalized = (branch or "").strip() or "main"
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO channel_branches (channel, project_name, branch, updated_at)
+               VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(channel, project_name) DO UPDATE SET
+                 branch = excluded.branch,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (channel, project_name, normalized),
+        )
+        await db.commit()
+        return normalized
+    finally:
+        await db.close()
+
+
+async def list_project_branches_state(project_name: str) -> list[dict]:
     db = await get_db()
     try:
         rows = await db.execute(
-            """SELECT * FROM tasks
-               WHERE assigned_to = ? AND status != 'done'
-               ORDER BY priority DESC, updated_at DESC""",
-            (agent_id,),
+            """SELECT channel, project_name, branch, updated_at
+               FROM channel_branches
+               WHERE project_name = ?
+               ORDER BY updated_at DESC, channel ASC""",
+            (project_name,),
         )
+        return [dict(r) for r in await rows.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_tasks_for_agent(agent_id: str, branch: Optional[str] = None) -> list[dict]:
+    db = await get_db()
+    try:
+        safe_branch = (branch or "").strip()
+        if safe_branch:
+            rows = await db.execute(
+                """SELECT * FROM tasks
+                   WHERE assigned_to = ? AND status != 'done'
+                     AND COALESCE(NULLIF(branch, ''), 'main') = ?
+                   ORDER BY priority DESC, updated_at DESC""",
+                (agent_id, safe_branch),
+            )
+        else:
+            rows = await db.execute(
+                """SELECT * FROM tasks
+                   WHERE assigned_to = ? AND status != 'done'
+                   ORDER BY priority DESC, updated_at DESC""",
+                (agent_id,),
+            )
         return [_normalize_task_row(r) for r in await rows.fetchall()]
     finally:
         await db.close()

@@ -436,6 +436,7 @@ async def _maybe_run_auto_code_review(channel: str, author_agent: dict, write_pa
     task_title = f"Fix: {issue} in {target_path}"
     if len(task_title) > 160:
         task_title = task_title[:157] + "..."
+    active_project = await project_manager.get_active_project(channel)
     task = await create_task_record(
         {
             "title": task_title,
@@ -447,7 +448,10 @@ async def _maybe_run_auto_code_review(channel: str, author_agent: dict, write_pa
             "linked_files": [target_path],
             "depends_on": [],
             "status": "backlog",
-        }
+            "branch": active_project.get("branch", "main"),
+        },
+        channel=channel,
+        project_name=active_project.get("project"),
     )
     await manager.broadcast(channel, {"type": "task_created", "task": task})
     await _send_system_message(
@@ -1296,7 +1300,10 @@ async def _handle_project_command(channel: str, user_message: str) -> bool:
                 raise ValueError("Usage: /project switch <name>")
             active = await project_manager.switch_project(channel, parts[2])
             detected = await project_manager.maybe_detect_build_config(channel)
-            msg = f"Active project for `{channel}` is now `{active['project']}`."
+            msg = (
+                f"Active project for `{channel}` is now "
+                f"`{active['project']}` @ `{active.get('branch', 'main')}`."
+            )
             if detected:
                 msg += (
                     f"\nDetected commands: build=`{detected.get('build_cmd', '')}` "
@@ -1310,7 +1317,7 @@ async def _handle_project_command(channel: str, user_message: str) -> bool:
             active = status["active"]
             await _send_system_message(
                 channel,
-                f"Active project: `{active['project']}` at `{active['path']}`\n"
+                f"Active project: `{active['project']}` @ `{active.get('branch', 'main')}` at `{active['path']}`\n"
                 f"Known projects ({status['projects_count']}): {', '.join(status['known_projects']) or '(none)'}",
             )
             return True
@@ -1457,6 +1464,10 @@ async def _handle_git_command(channel: str, user_message: str) -> bool:
     if raw.startswith("/git branch "):
         name = raw[len("/git branch "):].strip()
         result = git_tools.branch(project_name, name)
+        if result.get("ok"):
+            current = result.get("current_branch") or git_tools.current_branch(project_name) or name
+            await project_manager.set_active_branch(channel, project_name, current)
+            await manager.broadcast(channel, {"type": "project_switched", "active": await project_manager.get_active_project(channel)})
         await _send_system_message(channel, _format_runner_result("git branch", result), msg_type="tool_result")
         return True
 
@@ -1494,9 +1505,28 @@ async def _handle_branch_merge_command(channel: str, user_message: str) -> bool:
     project_name = active["project"]
     from . import git_tools
 
+    if raw == "/branch":
+        result = git_tools.list_branches(project_name)
+        if result.get("ok"):
+            active_branch = await project_manager.get_active_branch(channel, project_name)
+            branches = ", ".join(result.get("branches", [])) or "(none)"
+            await _send_system_message(
+                channel,
+                f"Project `{project_name}` branches: {branches}\n"
+                f"Active channel branch: `{active_branch}`",
+                msg_type="tool_result",
+            )
+        else:
+            await _send_system_message(channel, _format_runner_result("branch list", result), msg_type="tool_result")
+        return True
+
     if raw.startswith("/branch "):
         name = raw[len("/branch "):].strip()
         result = git_tools.branch(project_name, name)
+        if result.get("ok"):
+            current = result.get("current_branch") or git_tools.current_branch(project_name) or name
+            await project_manager.set_active_branch(channel, project_name, current)
+            await manager.broadcast(channel, {"type": "project_switched", "active": await project_manager.get_active_project(channel)})
         await _send_system_message(channel, _format_runner_result("branch", result), msg_type="tool_result")
         return True
 
@@ -1954,9 +1984,13 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
     context = await _build_context(channel)
     active_project = await project_manager.get_active_project(channel)
     project_root = Path(active_project["path"])
-    branch_name = git_tools.current_branch(active_project["project"])
+    branch_name = (
+        (active_project.get("branch") or "").strip()
+        or git_tools.current_branch(active_project["project"])
+        or "main"
+    )
     file_context = await _build_file_context(channel, context[-1200:], agent)
-    assigned_tasks = await get_tasks_for_agent(agent["id"])
+    assigned_tasks = await get_tasks_for_agent(agent["id"], branch=branch_name)
     memory_entries = get_known_context(
         active_project["project"],
         agent["id"],
@@ -2029,6 +2063,7 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
             "backend": backend,
             "model": agent.get("model"),
             "followup": bool(is_followup),
+            "branch": branch_name,
             "context_chars": len(context),
             "file_context_chars": len(file_context or ""),
             "task_count": len(assigned_tasks or []),

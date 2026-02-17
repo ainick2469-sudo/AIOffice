@@ -128,6 +128,7 @@ async def evaluate_tool_policy(
     active = await get_active_project(channel)
     project_name = active["project"]
     project_root = Path(active["path"]).resolve()
+    branch_name = (active.get("branch") or "main").strip() or "main"
     mode = normalize_mode(await db.get_project_autonomy_mode(project_name))
 
     caller_auto_approved = agent_id in {"user", "system"}
@@ -137,6 +138,7 @@ async def evaluate_tool_policy(
         "requires_approval": False,
         "mode": mode,
         "project": project_name,
+        "branch": branch_name,
         "project_root": str(project_root),
         "tool_type": tool_type,
         "reason": "allowed",

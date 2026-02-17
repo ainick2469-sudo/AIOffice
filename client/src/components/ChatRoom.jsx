@@ -12,7 +12,7 @@ export default function ChatRoom({ channel }) {
   const [agents, setAgents] = useState({});
   const [convoStatus, setConvoStatus] = useState(null);
   const [collabMode, setCollabMode] = useState({ mode: 'chat', active: false });
-  const [activeProject, setActiveProject] = useState({ project: 'ai-office', path: '' });
+  const [activeProject, setActiveProject] = useState({ project: 'ai-office', path: '', branch: 'main' });
   const [autonomyMode, setAutonomyMode] = useState('SAFE');
   const [workStatus, setWorkStatus] = useState({ running: false, processed: 0, errors: 0 });
   const [reactionsByMessage, setReactionsByMessage] = useState({});
@@ -109,7 +109,7 @@ export default function ChatRoom({ channel }) {
         })
         .catch(() => {
           setAutonomyMode('SAFE');
-          setActiveProject({ project: 'ai-office', path: '' });
+          setActiveProject({ project: 'ai-office', path: '', branch: 'main' });
         });
       fetch(`/api/work/status/${channel}`)
         .then(r => r.json())
@@ -564,7 +564,7 @@ export default function ChatRoom({ channel }) {
               : `Mode: ${collabMode?.mode || 'chat'}`}
           </span>
           <span className="convo-status">
-            Project: {activeProject?.project || 'ai-office'}
+            Project: {activeProject?.project || 'ai-office'} @ {activeProject?.branch || 'main'}
           </span>
           <span className={`convo-status ${autonomyMode === 'SAFE' ? '' : 'active'}`}>
             Autonomy: {autonomyMode}

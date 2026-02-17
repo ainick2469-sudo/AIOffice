@@ -117,7 +117,7 @@ export default function App() {
           />
         )}
         {panel === 'chat' && <ChatRoom channel={channel} />}
-        {panel === 'tasks' && <TaskBoard />}
+        {panel === 'tasks' && <TaskBoard channel={channel} />}
         {panel === 'files' && <FileViewer />}
         {panel === 'search' && (
           <SearchPanel

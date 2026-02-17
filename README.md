@@ -44,6 +44,7 @@ Registry source of truth: `agents/registry.json`
 - Thread replies, reactions, message grouping, and unread badges
 - Structured collaboration commands: `/meeting`, `/vote`
 - Task board with auto task-tag updates (`[TASK:start|done|blocked]`)
+- Branch-aware task assignment/filtering per channel/project context
 - Channel-scoped project workspaces with `/project` lifecycle commands
 - Channel-scoped tool sandbox root for read/search/run/write
 - File context injection before agent code generation
@@ -54,7 +55,7 @@ Registry source of truth: `agents/registry.json`
 - Channel process manager (start/stop/list) for project services
 - Console events panel for router/tool/verification observability
 - Web research tools (`[TOOL:web]`, `[TOOL:fetch]`) with provider fallback
-- Git panel + `/git` and `/branch`/`/merge` commands
+- Git panel + `/git` and `/branch`/`/merge` commands with merge preview/apply conflict surfacing
 - Inline code execution for code blocks (`python`, `javascript`, `bash`)
 - Conversation export to `docs/exports/` via `/export`
 - Project templates (`react`, `python`, `rust`)
@@ -81,6 +82,7 @@ Registry source of truth: `agents/registry.json`
 - `GET /api/messages/search`
 - `GET /api/tasks`
 - `POST /api/tasks`
+- `GET /api/tasks?branch=<name>`
 - `PATCH /api/tasks/{task_id}/status`
 - `POST /api/files/upload`
 - `GET /api/files/tree`
@@ -89,6 +91,10 @@ Registry source of truth: `agents/registry.json`
 - `GET /api/projects`
 - `POST /api/projects/switch`
 - `GET /api/projects/active/{channel}`
+- `GET /api/projects/{name}/branches`
+- `POST /api/projects/{name}/branches/switch`
+- `POST /api/projects/{name}/merge-preview`
+- `POST /api/projects/{name}/merge-apply`
 - `GET /api/projects/{name}/autonomy-mode`
 - `PUT /api/projects/{name}/autonomy-mode`
 - `DELETE /api/projects/{name}`

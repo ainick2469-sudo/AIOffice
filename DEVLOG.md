@@ -4,6 +4,93 @@
 
 ---
 
+## SESSION 31 - Baseline Lock + Multi-Branch Orchestration Polish (2026-02-17)
+
+### Baseline snapshot and tag
+- [x] Verified full matrix before implementation:
+  - `python -m pytest -q tests`
+  - `client/dev-lint.cmd`
+  - `client/dev-build.cmd`
+  - `tools/runtime_smoke.py`
+  - `tools/startup_smoke.py`
+  - `tools/desktop_smoke.py`
+  - `tools/toolchain_smoke.py`
+  - `tools/personality_smoke.py`
+- [x] Baseline commit created and pushed on `main`:
+  - commit: `095f9b3`
+  - tag: `baseline-2026-02-17`
+
+### Branch-aware backend state model
+- [x] Added task branch support in `server/database.py`:
+  - `tasks.branch` (`TEXT NOT NULL DEFAULT 'main'`)
+  - branch-aware `create_task_record()`, `list_tasks(status, branch)`, `update_task()`
+  - branch-aware `get_tasks_for_agent(agent_id, branch=...)`
+- [x] Added `channel_branches` table and helpers:
+  - `get_channel_active_branch(channel, project_name)`
+  - `set_channel_active_branch(channel, project_name, branch)`
+  - `list_project_branches_state(project_name)`
+- [x] Added non-destructive DB migrations for existing installs.
+
+### Git safety workflows + new APIs
+- [x] Reworked `server/git_tools.py`:
+  - branch listing/current/switch
+  - merge preview (non-destructive + auto-abort)
+  - merge apply with structured conflict payload and safety guards
+  - dirty working tree protection for preview/apply
+- [x] Added routes in `server/routes_api.py`:
+  - `GET /api/projects/{name}/branches`
+  - `POST /api/projects/{name}/branches/switch`
+  - `POST /api/projects/{name}/merge-preview`
+  - `POST /api/projects/{name}/merge-apply`
+- [x] Updated task APIs:
+  - `GET /api/tasks?branch=<name>`
+  - `POST /api/tasks` supports branch-aware defaulting from channel/project active branch
+
+### Project/agent/tool context wiring
+- [x] `server/project_manager.py` now returns active branch with active project and status payloads.
+- [x] `server/agent_engine.py` now:
+  - injects active branch into system prompt context
+  - scopes assigned task fetch by active branch
+  - keeps branch state in `/project` and `/git` command flows
+- [x] `server/tool_executor.py` task creation now tags tasks with active branch context.
+- [x] `server/policy.py` + `server/tool_gateway.py` now carry branch metadata in policy decisions/tool outputs/events.
+
+### Frontend branch UX polish
+- [x] `client/src/components/ProjectPanel.jsx`
+  - branch list/current badge
+  - switch/create branch controls
+  - merge preview/apply controls with conflict payload visibility
+- [x] `client/src/components/TaskBoard.jsx`
+  - branch filter
+  - branch field in create/edit flows
+  - branch chip per task card
+- [x] `client/src/components/GitPanel.jsx`
+  - current branch display
+  - merge preview/apply controls
+  - conflict summary rendering
+- [x] `client/src/components/ChatRoom.jsx`
+  - header now shows `Project: <name> @ <branch>`
+
+### New tests added
+- [x] `tests/test_branch_context_api.py`
+- [x] `tests/test_task_branch_assignment.py`
+- [x] `tests/test_merge_preview_api.py`
+- [x] `tests/test_merge_apply_conflict_handling.py`
+- [x] `tests/test_project_switch_branch_persistence.py`
+- [x] `tests/test_agent_branch_prompt_context.py`
+
+### Verification (post-implementation)
+- [x] `python -m pytest -q tests` PASS (`41 passed`)
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
+- [x] `tools/runtime_smoke.py` PASS
+- [x] `tools/startup_smoke.py` PASS
+- [x] `tools/desktop_smoke.py` PASS
+- [x] `tools/toolchain_smoke.py` PASS
+- [x] `tools/personality_smoke.py` PASS
+
+---
+
 ## SESSION 30 - Autonomy/Process/Console Stabilization + Test Expansion (2026-02-17)
 
 ### Backend reliability and policy execution

@@ -253,11 +253,21 @@ async def switch_project(channel: str, name: str) -> dict:
     normalized = (name or "").strip().lower()
     if normalized in {"app", "root", "ai-office"}:
         await db.set_channel_active_project(channel, "ai-office")
+        branch = await db.get_channel_active_branch(channel, "ai-office")
+        if branch == "main":
+            try:
+                from . import git_tools
+                detected = git_tools.current_branch("ai-office")
+                if detected:
+                    branch = await db.set_channel_active_branch(channel, "ai-office", detected)
+            except Exception:
+                pass
         return {
             "channel": channel,
             "project": "ai-office",
             "path": str(APP_ROOT),
             "is_app_root": True,
+            "branch": branch,
         }
 
     if not validate_project_name(normalized):
@@ -267,24 +277,85 @@ async def switch_project(channel: str, name: str) -> dict:
         raise ValueError("Project not found.")
 
     await db.set_channel_active_project(channel, normalized)
+    branch = await db.get_channel_active_branch(channel, normalized)
+    if branch == "main":
+        try:
+            from . import git_tools
+            detected = git_tools.current_branch(normalized)
+            if detected:
+                branch = await db.set_channel_active_branch(channel, normalized, detected)
+        except Exception:
+            pass
     return {
         "channel": channel,
         "project": normalized,
         "path": str(project_root),
         "is_app_root": False,
+        "branch": branch,
     }
 
 
 async def get_active_project(channel: str) -> dict:
     active = await db.get_channel_active_project(channel)
     if not active or active == "ai-office":
-        return {"channel": channel, "project": "ai-office", "path": str(APP_ROOT), "is_app_root": True}
+        branch = await db.get_channel_active_branch(channel, "ai-office")
+        if branch == "main":
+            try:
+                from . import git_tools
+                detected = git_tools.current_branch("ai-office")
+                if detected:
+                    branch = await db.set_channel_active_branch(channel, "ai-office", detected)
+            except Exception:
+                pass
+        return {
+            "channel": channel,
+            "project": "ai-office",
+            "path": str(APP_ROOT),
+            "is_app_root": True,
+            "branch": branch,
+        }
 
     root = get_project_root(active)
     if not root.exists():
         await db.set_channel_active_project(channel, "ai-office")
-        return {"channel": channel, "project": "ai-office", "path": str(APP_ROOT), "is_app_root": True}
-    return {"channel": channel, "project": active, "path": str(root), "is_app_root": False}
+        branch = await db.get_channel_active_branch(channel, "ai-office")
+        return {
+            "channel": channel,
+            "project": "ai-office",
+            "path": str(APP_ROOT),
+            "is_app_root": True,
+            "branch": branch,
+        }
+    branch = await db.get_channel_active_branch(channel, active)
+    if branch == "main":
+        try:
+            from . import git_tools
+            detected = git_tools.current_branch(active)
+            if detected:
+                branch = await db.set_channel_active_branch(channel, active, detected)
+        except Exception:
+            pass
+    return {
+        "channel": channel,
+        "project": active,
+        "path": str(root),
+        "is_app_root": False,
+        "branch": branch,
+    }
+
+
+async def get_active_branch(channel: str, project_name: Optional[str] = None) -> str:
+    project = (project_name or "").strip()
+    if not project:
+        active = await get_active_project(channel)
+        project = active["project"]
+    return await db.get_channel_active_branch(channel, project)
+
+
+async def set_active_branch(channel: str, project_name: str, branch: str) -> str:
+    normalized_project = (project_name or "").strip() or "ai-office"
+    normalized_branch = (branch or "").strip() or "main"
+    return await db.set_channel_active_branch(channel, normalized_project, normalized_branch)
 
 
 async def get_project_status(channel: str) -> dict:

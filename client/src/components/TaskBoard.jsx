@@ -21,6 +21,7 @@ const blankTask = {
   title: '',
   description: '',
   assigned_to: '',
+  branch: 'main',
   priority: 2,
   subtasks: [],
   linked_files: [],
@@ -45,6 +46,7 @@ function normalizeSubtasks(raw) {
 function normalizeTask(task) {
   return {
     ...task,
+    branch: String(task.branch || 'main').trim() || 'main',
     priority: Math.max(1, Math.min(3, Number(task.priority) || 2)),
     subtasks: normalizeSubtasks(task.subtasks),
     linked_files: Array.isArray(task.linked_files) ? task.linked_files.filter(Boolean) : [],
@@ -54,9 +56,10 @@ function normalizeTask(task) {
   };
 }
 
-export default function TaskBoard() {
+export default function TaskBoard({ channel = 'main' }) {
   const [tasks, setTasks] = useState([]);
   const [agents, setAgents] = useState({});
+  const [activeBranch, setActiveBranch] = useState('main');
   const [showForm, setShowForm] = useState(false);
   const [newTask, setNewTask] = useState(blankTask);
   const [filters, setFilters] = useState({
@@ -64,6 +67,7 @@ export default function TaskBoard() {
     assigned_to: 'all',
     priority: 'all',
     status: 'all',
+    branch: 'all',
   });
   const [selectedTask, setSelectedTask] = useState(null);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
@@ -91,7 +95,20 @@ export default function TaskBoard() {
     load();
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [channel]);
+
+  useEffect(() => {
+    fetch(`/api/projects/active/${channel}`)
+      .then((r) => r.json())
+      .then((data) => {
+        const branch = String(data?.branch || 'main').trim() || 'main';
+        setActiveBranch(branch);
+        setNewTask((prev) => ({ ...prev, branch }));
+      })
+      .catch(() => {
+        setActiveBranch('main');
+      });
+  }, [channel]);
 
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
@@ -106,6 +123,7 @@ export default function TaskBoard() {
       }
       if (filters.priority !== 'all' && String(task.priority) !== String(filters.priority)) return false;
       if (filters.status !== 'all' && task.status !== filters.status) return false;
+      if (filters.branch !== 'all' && task.branch !== filters.branch) return false;
       return true;
     });
   }, [tasks, filters]);
@@ -122,19 +140,27 @@ export default function TaskBoard() {
     return next;
   }, [filteredTasks]);
 
-  const resetNewTask = () => setNewTask(blankTask);
+  const branchOptions = useMemo(() => {
+    const values = new Set(['main']);
+    tasks.forEach((task) => values.add(task.branch || 'main'));
+    if (activeBranch) values.add(activeBranch);
+    return Array.from(values).sort();
+  }, [tasks, activeBranch]);
+
+  const resetNewTask = () => setNewTask({ ...blankTask, branch: activeBranch || 'main' });
 
   const createTask = (event) => {
     event.preventDefault();
     if (!newTask.title.trim()) return;
 
-    fetch('/api/tasks', {
+    fetch(`/api/tasks?channel=${encodeURIComponent(channel)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...newTask,
         title: newTask.title.trim(),
         description: (newTask.description || '').trim(),
+        branch: (newTask.branch || activeBranch || 'main').trim() || 'main',
       }),
     })
       .then((r) => r.json())
@@ -178,6 +204,7 @@ export default function TaskBoard() {
         description: (selectedTask.description || '').trim(),
         status: selectedTask.status,
         assigned_to: selectedTask.assigned_to || null,
+        branch: (selectedTask.branch || 'main').trim() || 'main',
         priority: selectedTask.priority,
         subtasks: normalizeSubtasks(selectedTask.subtasks),
         linked_files: selectedTask.linked_files || [],
@@ -312,6 +339,12 @@ export default function TaskBoard() {
               <option value={2}>Priority 2</option>
               <option value={3}>Priority 3</option>
             </select>
+            <input
+              type="text"
+              value={newTask.branch}
+              placeholder="branch (default main)"
+              onChange={(event) => setNewTask((prev) => ({ ...prev, branch: event.target.value }))}
+            />
             <button type="submit">Create</button>
           </div>
         </form>
@@ -358,6 +391,17 @@ export default function TaskBoard() {
             </option>
           ))}
         </select>
+        <select
+          value={filters.branch}
+          onChange={(event) => setFilters((prev) => ({ ...prev, branch: event.target.value }))}
+        >
+          <option value="all">All Branches</option>
+          {branchOptions.map((branch) => (
+            <option key={branch} value={branch}>
+              {branch}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="board-columns">
@@ -378,6 +422,7 @@ export default function TaskBoard() {
                     {task.description && <div className="task-desc">{task.description}</div>}
                     <div className="task-meta">
                       <span className="task-assignee">{assigneeLabel(task)}</span>
+                      <span className="task-branch-chip">{task.branch || 'main'}</span>
                       <span>{task.subtasks.filter((item) => item.done).length}/{task.subtasks.length} subtasks</span>
                     </div>
                   </button>
@@ -432,6 +477,14 @@ export default function TaskBoard() {
                     <option key={statusItem} value={statusItem}>{STATUS_LABELS[statusItem]}</option>
                   ))}
                 </select>
+              </label>
+              <label>
+                Branch
+                <input
+                  type="text"
+                  value={selectedTask.branch || 'main'}
+                  onChange={(event) => setTaskField('branch', event.target.value)}
+                />
               </label>
               <label>
                 Assignee

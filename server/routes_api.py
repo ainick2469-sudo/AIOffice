@@ -13,10 +13,14 @@ from .models import (
     AgentOut,
     AgentUpdateIn,
     AppBuilderStartIn,
+    BranchSwitchIn,
     BuildConfigIn,
     CreateSkillIn,
+    MergeApplyIn,
+    MergePreviewIn,
     ProcessStartIn,
     ProcessStopIn,
+    ProjectActiveOut,
     ExecuteCodeIn,
     OllamaPullIn,
     ProjectCreateIn,
@@ -270,7 +274,7 @@ async def switch_project_route(body: ProjectSwitchIn):
     return {"ok": True, "active": result, "detected_config": detection}
 
 
-@router.get("/projects/active/{channel}")
+@router.get("/projects/active/{channel}", response_model=ProjectActiveOut)
 async def get_active_project_route(channel: str):
     from . import project_manager as pm
     return await pm.get_active_project(channel)
@@ -345,6 +349,70 @@ async def run_project_test(name: str):
 async def run_project_start(name: str):
     from . import build_runner
     return build_runner.run_start(name)
+
+
+@router.get("/projects/{name}/branches")
+async def list_project_branches_route(name: str, channel: Optional[str] = None):
+    from . import git_tools
+    from . import project_manager as pm
+
+    result = git_tools.list_branches(name)
+    if not result.get("ok"):
+        return result
+    active_branch = (
+        await pm.get_active_branch(channel, name)
+        if channel
+        else (result.get("current_branch") or "main")
+    )
+    channel_state = await db.list_project_branches_state(name)
+    return {
+        **result,
+        "active_branch": active_branch,
+        "channel_branch_state": channel_state,
+    }
+
+
+@router.post("/projects/{name}/branches/switch")
+async def switch_project_branch_route(name: str, body: BranchSwitchIn):
+    from . import git_tools
+    from . import project_manager as pm
+
+    result = git_tools.switch_branch(
+        name,
+        body.branch,
+        create_if_missing=bool(body.create_if_missing),
+    )
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or result.get("stderr") or "Failed to switch branch")
+
+    branch = (result.get("current_branch") or body.branch).strip() or "main"
+    await pm.set_active_branch(body.channel, name, branch)
+    active = await pm.get_active_project(body.channel)
+    return {
+        "ok": True,
+        "project": name,
+        "channel": body.channel,
+        "branch": branch,
+        "active": active,
+        "git": result,
+    }
+
+
+@router.post("/projects/{name}/merge-preview")
+async def merge_preview_route(name: str, body: MergePreviewIn):
+    from . import git_tools
+    return git_tools.merge_preview(name, body.source_branch, body.target_branch)
+
+
+@router.post("/projects/{name}/merge-apply")
+async def merge_apply_route(name: str, body: MergeApplyIn):
+    from . import git_tools
+    return git_tools.merge_apply(
+        name,
+        body.source_branch,
+        body.target_branch,
+        allow_dirty_override=bool(body.allow_dirty_override),
+    )
 
 
 @router.get("/projects/{name}/git/status")
@@ -435,18 +503,22 @@ async def execute_code(body: ExecuteCodeIn):
 
 
 @router.post("/tasks")
-async def create_task(task: TaskIn):
+async def create_task(task: TaskIn, channel: str = "main"):
     payload = task.model_dump()
     if not payload["title"].strip():
         raise HTTPException(400, "Title is required.")
-    return await db.create_task_record(payload)
+    if "branch" in payload and payload["branch"] is not None:
+        payload["branch"] = str(payload["branch"]).strip() or None
+    return await db.create_task_record(payload, channel=channel)
 
 
 @router.get("/tasks")
-async def list_tasks(status: Optional[str] = None):
+async def list_tasks(status: Optional[str] = None, branch: Optional[str] = None):
     if status and status not in db.TASK_STATUSES:
         raise HTTPException(400, f"Invalid status: {status}")
-    return await db.list_tasks(status=status)
+    if branch is not None and not str(branch).strip():
+        raise HTTPException(400, "branch cannot be empty")
+    return await db.list_tasks(status=status, branch=branch)
 
 
 @router.get("/tasks/{task_id}")
@@ -466,6 +538,8 @@ async def update_task(task_id: int, body: TaskUpdateIn):
         raise HTTPException(400, "Title cannot be empty.")
     if "status" in updates and updates["status"] not in db.TASK_STATUSES:
         raise HTTPException(400, f"Invalid status: {updates['status']}")
+    if "branch" in updates and not str(updates["branch"]).strip():
+        raise HTTPException(400, "branch cannot be empty.")
     updated = await db.update_task(task_id, updates)
     if not updated:
         raise HTTPException(404, "Task not found")

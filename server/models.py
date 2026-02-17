@@ -55,6 +55,7 @@ class TaskIn(BaseModel):
     title: str
     description: Optional[str] = None
     assigned_to: Optional[str] = None
+    branch: Optional[str] = None
     priority: int = Field(default=2, ge=1, le=3)
     subtasks: list[dict] = Field(default_factory=list)
     linked_files: list[str] = Field(default_factory=list)
@@ -67,6 +68,7 @@ class TaskUpdateIn(BaseModel):
     description: Optional[str] = None
     status: Optional[Literal["backlog", "in_progress", "review", "blocked", "done"]] = None
     assigned_to: Optional[str] = None
+    branch: Optional[str] = None
     priority: Optional[int] = Field(default=None, ge=1, le=3)
     subtasks: Optional[list[dict]] = None
     linked_files: Optional[list[str]] = None
@@ -79,6 +81,7 @@ class TaskOut(BaseModel):
     description: Optional[str]
     status: str
     assigned_to: Optional[str]
+    branch: str = "main"
     created_by: Optional[str]
     priority: int
     subtasks: list[dict] = Field(default_factory=list)
@@ -119,6 +122,31 @@ class ProjectCreateIn(BaseModel):
 class ProjectSwitchIn(BaseModel):
     channel: str = "main"
     name: str
+
+
+class BranchSwitchIn(BaseModel):
+    channel: str = "main"
+    branch: str = Field(..., min_length=1, max_length=120)
+    create_if_missing: bool = False
+
+
+class MergePreviewIn(BaseModel):
+    source_branch: str = Field(..., min_length=1, max_length=120)
+    target_branch: str = Field(..., min_length=1, max_length=120)
+
+
+class MergeApplyIn(BaseModel):
+    source_branch: str = Field(..., min_length=1, max_length=120)
+    target_branch: str = Field(..., min_length=1, max_length=120)
+    allow_dirty_override: bool = False
+
+
+class ProjectActiveOut(BaseModel):
+    channel: str
+    project: str
+    path: str
+    is_app_root: bool = False
+    branch: str = "main"
 
 
 class BuildConfigIn(BaseModel):

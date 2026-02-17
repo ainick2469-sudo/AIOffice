@@ -230,7 +230,15 @@ async def tool_read_file(agent_id: str, filepath: str, channel: str = "main") ->
 
         await _audit_log(agent_id, "read", f"read_file: {filepath}",
                          output=f"{len(content)} chars", exit_code=0)
-        return {"ok": True, "content": content, "path": str(resolved), "channel": channel, "policy": policy}
+        return {
+            "ok": True,
+            "content": content,
+            "path": str(resolved),
+            "channel": channel,
+            "project": policy.get("project"),
+            "branch": policy.get("branch", "main"),
+            "policy": policy,
+        }
     except Exception as e:
         result = {"ok": False, "error": str(e)}
         await _audit_log(agent_id, "read", f"read_file: {filepath}",
@@ -272,7 +280,14 @@ async def tool_search_files(agent_id: str, pattern: str, directory: str = ".", c
 
         await _audit_log(agent_id, "read", f"search: {pattern} in {directory}",
                          output=f"{len(matches)} matches", exit_code=0)
-        return {"ok": True, "matches": matches, "channel": channel, "policy": policy}
+        return {
+            "ok": True,
+            "matches": matches,
+            "channel": channel,
+            "project": policy.get("project"),
+            "branch": policy.get("branch", "main"),
+            "policy": policy,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -306,7 +321,12 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
             source="tool_gateway",
             message=result["error"],
             severity="warning",
-            data={"agent_id": agent_id, "command": normalized_command},
+            data={
+                "agent_id": agent_id,
+                "command": normalized_command,
+                "project": policy.get("project"),
+                "branch": policy.get("branch", "main"),
+            },
         )
         return result
 
@@ -342,6 +362,8 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
             "stderr": stderr_str,
             "exit_code": exit_code,
             "channel": channel,
+            "project": policy.get("project"),
+            "branch": policy.get("branch", "main"),
             "policy": policy,
         }
     except asyncio.TimeoutError:
@@ -352,12 +374,22 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
             "error": f"Command timed out ({timeout_seconds}s)",
             "cwd": str(target_dir),
             "channel": channel,
+            "project": policy.get("project"),
+            "branch": policy.get("branch", "main"),
             "policy": policy,
         }
     except Exception as e:
         await _audit_log(agent_id, "run", f"{normalized_command} @ {target_dir}",
                          output=str(e), exit_code=-1)
-        return {"ok": False, "error": str(e), "cwd": str(target_dir), "channel": channel, "policy": policy}
+        return {
+            "ok": False,
+            "error": str(e),
+            "cwd": str(target_dir),
+            "channel": channel,
+            "project": policy.get("project"),
+            "branch": policy.get("branch", "main"),
+            "policy": policy,
+        }
 
 
 async def tool_write_file(
@@ -408,6 +440,8 @@ async def tool_write_file(
             "size": len(content),
             "requires_approval": True,
             "channel": channel,
+            "project": policy.get("project"),
+            "branch": policy.get("branch", "main"),
             "policy": policy,
         }
 
@@ -424,6 +458,8 @@ async def tool_write_file(
             "path": str(resolved),
             "size": len(content),
             "channel": channel,
+            "project": policy.get("project"),
+            "branch": policy.get("branch", "main"),
             "policy": policy,
         }
     except Exception as e:
