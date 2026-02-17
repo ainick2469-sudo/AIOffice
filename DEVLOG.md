@@ -4,6 +4,22 @@
 
 ---
 
+## SESSION 38 - Process Tool Tags (2026-02-17)
+
+### Background process tool tags
+- [x] Added tool tags to `server/tool_executor.py`:
+  - `[TOOL:start_process] <command | json>`
+  - `[TOOL:stop_process] <process_id | json>`
+  - `[TOOL:list_processes]`
+  - `[TOOL:tail_process_logs] <process_id [lines] | json>`
+- [x] Tool executor now routes these to `server/process_manager.py` and returns results to chat.
+
+### Verification
+- [x] `with-runtime.cmd python -m pytest -q tests` PASS
+- [x] `tools/toolchain_smoke.py` PASS
+
+---
+
 ## SESSION 37 - Argv-Based Tool Run Execution (2026-02-17)
 
 ### Tool execution modernization

@@ -119,6 +119,8 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
   - `POST /api/tools/run` supports structured `{cmd:[...], cwd, env, timeout}` payloads
   - `npm`/`npx` executed via `node` + `npm-cli.js`/`npx-cli.js` for reliability
   - new test: `tests/test_tool_run_argv_exec.py`
+- Process tool tags added (agent-usable background process control):
+  - `[TOOL:start_process]`, `[TOOL:stop_process]`, `[TOOL:list_processes]`, `[TOOL:tail_process_logs]`
 - Current backend test count: `52 passed`
 
 ---
