@@ -6,9 +6,12 @@ import time
 import threading
 import logging
 import subprocess
+from pathlib import Path
+
+from server.runtime_paths import APP_ROOT, build_runtime_env
 
 # Ensure we're running from the right directory
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = str(APP_ROOT)
 os.chdir(APP_DIR)
 
 # Add app dir to path
@@ -20,31 +23,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ai-office.app")
 SYSTEM_ROOT = os.environ.get("SystemRoot", r"C:\Windows")
-CMD_EXE = os.path.join(SYSTEM_ROOT, "System32", "cmd.exe")
-RUNTIME_WRAPPER = os.path.join(APP_DIR, "with-runtime.cmd")
-CLIENT_BUILD_CMD = os.path.join(APP_DIR, "client", "dev-build.cmd")
+CMD_EXE = str(Path(SYSTEM_ROOT) / "System32" / "cmd.exe")
+RUNTIME_WRAPPER = APP_ROOT / "with-runtime.cmd"
+CLIENT_BUILD_CMD = APP_ROOT / "client" / "dev-build.cmd"
 
 
 def _build_runtime_env():
-    env = os.environ.copy()
-    path_parts = [
-        os.path.join(SYSTEM_ROOT, "System32"),
-        SYSTEM_ROOT,
-        r"C:\Program Files\nodejs",
-        r"C:\Users\nickb\AppData\Local\Programs\Python\Python312",
-    ]
-    existing = env.get("PATH", "")
-    env["PATH"] = ";".join(path_parts + [existing])
-    return env
+    return build_runtime_env(os.environ.copy())
 
 
 def check_build():
     """Check if frontend is built. Build if not."""
-    dist = os.path.join(APP_DIR, "client-dist")
-    if not os.path.exists(dist) or not os.path.exists(os.path.join(dist, "index.html")):
+    dist = APP_ROOT / "client-dist"
+    if not dist.exists() or not (dist / "index.html").exists():
         logger.info("Frontend not built. Building now...")
         result = subprocess.run(
-            [CMD_EXE, "/c", RUNTIME_WRAPPER, CLIENT_BUILD_CMD],
+            [CMD_EXE, "/c", str(RUNTIME_WRAPPER), str(CLIENT_BUILD_CMD)],
             cwd=APP_DIR,
             env=_build_runtime_env(),
             capture_output=True,

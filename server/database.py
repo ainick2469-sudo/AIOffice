@@ -2,10 +2,11 @@
 
 import aiosqlite
 import json
-from pathlib import Path
 from typing import Optional
 
-DB_PATH = Path(__file__).parent.parent / "data" / "office.db"
+from .runtime_paths import APP_ROOT, DB_PATH as RUNTIME_DB_PATH, ensure_runtime_dirs
+
+DB_PATH = RUNTIME_DB_PATH
 ALLOWED_AGENT_UPDATE_FIELDS = {
     "display_name",
     "role",
@@ -19,6 +20,7 @@ ALLOWED_AGENT_UPDATE_FIELDS = {
 }
 
 TASK_STATUSES = {"backlog", "in_progress", "review", "done", "blocked"}
+VALID_AUTONOMY_MODES = {"SAFE", "TRUSTED", "ELEVATED"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS channels (
@@ -142,11 +144,30 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS project_autonomy_modes (
+    project_name TEXT PRIMARY KEY,
+    mode TEXT NOT NULL DEFAULT 'SAFE',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS console_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL,
+    project_name TEXT,
+    event_type TEXT NOT NULL,
+    source TEXT NOT NULL,
+    severity TEXT DEFAULT 'info',
+    message TEXT,
+    data TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
 async def get_db() -> aiosqlite.Connection:
     """Get a database connection."""
+    ensure_runtime_dirs()
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     db = await aiosqlite.connect(str(DB_PATH))
     db.row_factory = aiosqlite.Row
@@ -157,6 +178,7 @@ async def get_db() -> aiosqlite.Connection:
 
 async def init_db():
     """Create all tables and seed default agents from registry."""
+    ensure_runtime_dirs()
     db = await get_db()
     try:
         await db.executescript(SCHEMA)
@@ -216,7 +238,7 @@ async def _ensure_column(db: aiosqlite.Connection, table: str, column: str, colu
 
 async def _seed_agents(db: aiosqlite.Connection):
     """Load agents from registry.json into DB if not already present."""
-    registry_path = Path(__file__).parent.parent / "agents" / "registry.json"
+    registry_path = APP_ROOT / "agents" / "registry.json"
     agents = []
     if not registry_path.exists():
         agents = []
@@ -918,6 +940,115 @@ async def set_setting(key: str, value: str):
             (key, value),
         )
         await db.commit()
+    finally:
+        await db.close()
+
+
+async def get_project_autonomy_mode(project_name: str) -> str:
+    db = await get_db()
+    try:
+        row = await db.execute(
+            "SELECT mode FROM project_autonomy_modes WHERE project_name = ?",
+            (project_name,),
+        )
+        result = await row.fetchone()
+        if not result:
+            return "SAFE"
+        mode = str(result["mode"] or "SAFE").strip().upper()
+        return mode if mode in VALID_AUTONOMY_MODES else "SAFE"
+    finally:
+        await db.close()
+
+
+async def set_project_autonomy_mode(project_name: str, mode: str) -> str:
+    normalized = str(mode or "SAFE").strip().upper()
+    if normalized not in VALID_AUTONOMY_MODES:
+        raise ValueError(f"Invalid autonomy mode: {mode}")
+
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO project_autonomy_modes (project_name, mode, updated_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(project_name) DO UPDATE SET
+                 mode = excluded.mode,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (project_name, normalized),
+        )
+        await db.commit()
+        return normalized
+    finally:
+        await db.close()
+
+
+async def log_console_event(
+    *,
+    channel: str,
+    event_type: str,
+    source: str,
+    message: str = "",
+    project_name: Optional[str] = None,
+    severity: str = "info",
+    data: Optional[dict] = None,
+) -> dict:
+    payload = _json_dumps(data or {}, {})
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            """INSERT INTO console_events (
+                   channel, project_name, event_type, source, severity, message, data
+               ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                channel,
+                project_name,
+                event_type,
+                source,
+                (severity or "info").strip().lower(),
+                (message or "")[:1000],
+                payload[:12000],
+            ),
+        )
+        await db.commit()
+        row = await db.execute("SELECT * FROM console_events WHERE id = ?", (cursor.lastrowid,))
+        result = await row.fetchone()
+        entry = dict(result) if result else {}
+        if entry:
+            entry["data"] = _json_loads(entry.get("data"), {})
+        return entry
+    finally:
+        await db.close()
+
+
+async def get_console_events(
+    *,
+    channel: str,
+    limit: int = 200,
+    event_type: Optional[str] = None,
+    source: Optional[str] = None,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        where = ["channel = ?"]
+        params: list = [channel]
+        if event_type:
+            where.append("event_type = ?")
+            params.append(event_type)
+        if source:
+            where.append("source = ?")
+            params.append(source)
+        safe_limit = max(1, min(int(limit), 1000))
+        rows = await db.execute(
+            f"""SELECT * FROM console_events
+                WHERE {' AND '.join(where)}
+                ORDER BY id DESC
+                LIMIT ?""",
+            (*params, safe_limit),
+        )
+        results = [dict(r) for r in await rows.fetchall()]
+        for item in results:
+            item["data"] = _json_loads(item.get("data"), {})
+        results.reverse()
+        return results
     finally:
         await db.close()
 

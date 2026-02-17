@@ -4,7 +4,7 @@ AI Office is a local multi-agent workspace that feels like a real staff room: ag
 
 ## Security Note
 
-If any API key was ever pasted into chat, logs, screenshots, or commits, treat it as exposed. Rotate it immediately and replace `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in `C:\AI_WORKSPACE\ai-office\.env`.
+If any API key was ever pasted into chat, logs, screenshots, or commits, treat it as exposed. Rotate it immediately and replace `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in `.env`.
 
 ## Stack
 
@@ -35,7 +35,7 @@ If any API key was ever pasted into chat, logs, screenshots, or commits, treat i
 - `scribe` (Technical Writer)
 - `critic` (Formal Critic / Red Team)
 
-Registry source of truth: `C:\AI_WORKSPACE\ai-office\agents\registry.json`
+Registry source of truth: `agents/registry.json`
 
 ## Current Features
 
@@ -50,6 +50,9 @@ Registry source of truth: `C:\AI_WORKSPACE\ai-office\agents\registry.json`
 - Build/test/run command config (`.ai-office/config.json`) + auto-detect presets
 - Post-write build/test/fix loop with deterministic Nova escalation
 - `/work` autonomous background execution mode
+- Project autonomy modes (`SAFE`, `TRUSTED`, `ELEVATED`) with kill switch reset
+- Channel process manager (start/stop/list) for project services
+- Console events panel for router/tool/verification observability
 - Web research tools (`[TOOL:web]`, `[TOOL:fetch]`) with provider fallback
 - Git panel + `/git` and `/branch`/`/merge` commands
 - Inline code execution for code blocks (`python`, `javascript`, `bash`)
@@ -86,6 +89,8 @@ Registry source of truth: `C:\AI_WORKSPACE\ai-office\agents\registry.json`
 - `GET /api/projects`
 - `POST /api/projects/switch`
 - `GET /api/projects/active/{channel}`
+- `GET /api/projects/{name}/autonomy-mode`
+- `PUT /api/projects/{name}/autonomy-mode`
 - `DELETE /api/projects/{name}`
 - `GET /api/projects/{name}/build-config`
 - `PUT /api/projects/{name}/build-config`
@@ -101,6 +106,11 @@ Registry source of truth: `C:\AI_WORKSPACE\ai-office\agents\registry.json`
 - `POST /api/work/start`
 - `POST /api/work/stop`
 - `GET /api/work/status/{channel}`
+- `POST /api/process/start`
+- `POST /api/process/stop`
+- `GET /api/process/list/{channel}`
+- `POST /api/process/kill-switch`
+- `GET /api/console/events/{channel}`
 - `GET /api/audit`
 - `GET /api/audit/count`
 - `DELETE /api/audit/logs`
@@ -108,6 +118,8 @@ Registry source of truth: `C:\AI_WORKSPACE\ai-office\agents\registry.json`
 - `DELETE /api/audit/all`
 - `POST /api/tools/web`
 - `POST /api/tools/fetch`
+- `POST /api/tools/create-skill`
+- `POST /api/skills/reload`
 - `POST /api/execute`
 - `GET /api/performance/agents`
 - `GET /api/usage`
@@ -117,18 +129,18 @@ Registry source of truth: `C:\AI_WORKSPACE\ai-office\agents\registry.json`
 
 ## Windows Reproducible Commands
 
-Run these from `C:\AI_WORKSPACE\ai-office`.
+Run these from the repository root.
 
 1. Install backend deps
 
 ```bat
-C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 2. Frontend checks (PATH-safe wrappers)
 
 ```bat
-cd /d C:\AI_WORKSPACE\ai-office\client
+cd /d client
 dev-build.cmd
 dev-lint.cmd
 ```
@@ -136,21 +148,19 @@ dev-lint.cmd
 3. Start app (desktop-first launcher)
 
 ```bat
-cd /d C:\AI_WORKSPACE\ai-office
-C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe start.py
+python start.py
 ```
 
 4. Dev web mode (backend + Vite)
 
 ```bat
-cd /d C:\AI_WORKSPACE\ai-office
-C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe dev.py
+python dev.py
 ```
 
 Or double-click:
 
 ```bat
-C:\AI_WORKSPACE\ai-office\desktop-launch.cmd
+desktop-launch.cmd
 ```
 
 Desktop mode requires `pywebview` and runs as a standalone native window (not browser fallback).
@@ -158,15 +168,25 @@ Desktop mode requires `pywebview` and runs as a standalone native window (not br
 5. Build standalone Windows `.exe`
 
 ```bat
-cd /d C:\AI_WORKSPACE\ai-office
 build-desktop.cmd
 ```
 
 Output:
 
 ```text
-C:\AI_WORKSPACE\ai-office\dist\AI Office\AI Office.exe
+dist\AI Office\AI Office.exe
 ```
+
+## Runtime Data Paths
+
+Runtime state now uses platform-default user data storage plus env overrides:
+
+- `AI_OFFICE_HOME` (base runtime directory)
+- `AI_OFFICE_DB_PATH` (SQLite DB location)
+- `AI_OFFICE_MEMORY_DIR` (memory JSONL directory)
+- `AI_OFFICE_PROJECTS_DIR` (projects workspace root)
+
+Default on Windows: `%LOCALAPPDATA%\AIOffice`.
 
 ## Full App Build Workflow
 
@@ -189,17 +209,17 @@ For command execution in subdirectories, agents can use:
 - Set/replace OpenAI key:
 
 ```bat
-C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe tools\set_openai_key.py sk-...
+python tools\set_openai_key.py sk-...
 ```
 
 - Clear OpenAI key:
 
 ```bat
-C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe tools\set_openai_key.py --clear
+python tools\set_openai_key.py --clear
 ```
 
 - Check config (masked output):
 
 ```bat
-C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe tools\check_openai_config.py
+python tools\check_openai_config.py
 ```

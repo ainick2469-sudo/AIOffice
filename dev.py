@@ -6,25 +6,21 @@ import subprocess
 import sys
 import time
 import webbrowser
+from pathlib import Path
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-CLIENT = os.path.join(ROOT, "client")
+from server.runtime_paths import APP_ROOT, build_runtime_env
+
+ROOT = str(APP_ROOT)
+CLIENT = str(APP_ROOT / "client")
 SYSTEM_ROOT = os.environ.get("SystemRoot", r"C:\Windows")
-CMD_EXE = os.path.join(SYSTEM_ROOT, "System32", "cmd.exe")
-RUNTIME_WRAPPER = os.path.join(ROOT, "with-runtime.cmd")
-CLIENT_WITH_NODE = os.path.join(CLIENT, "tools", "with-node.cmd")
+CMD_EXE = str(Path(SYSTEM_ROOT) / "System32" / "cmd.exe")
+RUNTIME_WRAPPER = str(APP_ROOT / "with-runtime.cmd")
+CLIENT_WITH_NODE = str(APP_ROOT / "client" / "tools" / "with-node.cmd")
 PROCS = []
 
 
 def _build_runtime_env():
-    env = os.environ.copy()
-    path_parts = [
-        os.path.join(SYSTEM_ROOT, "System32"),
-        SYSTEM_ROOT,
-        r"C:\Program Files\nodejs",
-        r"C:\Users\nickb\AppData\Local\Programs\Python\Python312",
-    ]
-    env["PATH"] = ";".join(path_parts + [env.get("PATH", "")])
+    env = build_runtime_env(os.environ.copy())
     env["NODE_ENV"] = "development"
     return env
 

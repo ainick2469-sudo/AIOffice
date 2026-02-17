@@ -9,6 +9,13 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
   const [buildConfig, setBuildConfig] = useState({ build_cmd: '', test_cmd: '', run_cmd: '' });
   const [running, setRunning] = useState({ build: false, test: false, run: false });
   const [result, setResult] = useState(null);
+  const [autonomyMode, setAutonomyMode] = useState('SAFE');
+  const [savingMode, setSavingMode] = useState(false);
+  const [processes, setProcesses] = useState([]);
+  const [processLoading, setProcessLoading] = useState(false);
+  const [processCommand, setProcessCommand] = useState('');
+  const [processName, setProcessName] = useState('');
+  const [processBusy, setProcessBusy] = useState({ start: false, kill: false });
 
   const activeProjectName = active?.project || 'ai-office';
 
@@ -21,6 +28,22 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
       .then(r => r.json())
       .then((data) => setActive(data || { project: 'ai-office', path: '' }))
       .catch(() => {});
+  }, [channel]);
+
+  const loadAutonomyMode = useCallback((projectName) => {
+    fetch(`/api/projects/${projectName}/autonomy-mode`)
+      .then(r => (r.ok ? r.json() : { mode: 'SAFE' }))
+      .then((data) => setAutonomyMode(data?.mode || 'SAFE'))
+      .catch(() => setAutonomyMode('SAFE'));
+  }, []);
+
+  const loadProcesses = useCallback(() => {
+    setProcessLoading(true);
+    fetch(`/api/process/list/${channel}`)
+      .then(r => r.json())
+      .then((data) => setProcesses(Array.isArray(data?.processes) ? data.processes : []))
+      .catch(() => setProcesses([]))
+      .finally(() => setProcessLoading(false));
   }, [channel]);
 
   const loadBuildConfig = (projectName) => {
@@ -44,7 +67,21 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
   useEffect(() => {
     if (!activeProjectName) return;
     loadBuildConfig(activeProjectName);
-  }, [activeProjectName]);
+    loadAutonomyMode(activeProjectName);
+  }, [activeProjectName, loadAutonomyMode]);
+
+  useEffect(() => {
+    const immediate = setTimeout(() => {
+      loadProcesses();
+    }, 0);
+    const interval = setInterval(() => {
+      loadProcesses();
+    }, 3000);
+    return () => {
+      clearTimeout(immediate);
+      clearInterval(interval);
+    };
+  }, [loadProcesses]);
 
   const projectNames = useMemo(() => projects.map(p => p.name), [projects]);
 
@@ -141,6 +178,85 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
       .finally(() => setRunning(prev => ({ ...prev, [stage]: false })));
   };
 
+  const saveAutonomyMode = () => {
+    setSavingMode(true);
+    setStatus(`Saving autonomy mode ${autonomyMode}...`);
+    fetch(`/api/projects/${activeProjectName}/autonomy-mode`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: autonomyMode }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data?.detail) throw new Error(data.detail);
+        setStatus(`Autonomy mode updated to ${data.mode}.`);
+      })
+      .catch((err) => setStatus(err?.message || 'Failed to save autonomy mode.'))
+      .finally(() => setSavingMode(false));
+  };
+
+  const startProcess = () => {
+    const command = processCommand.trim();
+    if (!command) return;
+    setProcessBusy(prev => ({ ...prev, start: true }));
+    setStatus('Starting process...');
+    fetch('/api/process/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel,
+        command,
+        name: processName.trim() || null,
+        project: activeProjectName,
+      }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data?.detail) throw new Error(data.detail);
+        setProcessCommand('');
+        setProcessName('');
+        setStatus(`Started process ${data?.process?.name || ''}.`);
+        loadProcesses();
+      })
+      .catch((err) => setStatus(err?.message || 'Failed to start process.'))
+      .finally(() => setProcessBusy(prev => ({ ...prev, start: false })));
+  };
+
+  const stopProcess = (processId) => {
+    fetch('/api/process/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel, process_id: processId }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data?.detail) throw new Error(data.detail);
+        setStatus(`Stopped process ${processId}.`);
+        loadProcesses();
+      })
+      .catch((err) => setStatus(err?.message || 'Failed to stop process.'));
+  };
+
+  const killSwitch = () => {
+    const confirmed = window.confirm('Kill switch will stop all processes and set autonomy mode to SAFE. Continue?');
+    if (!confirmed) return;
+    setProcessBusy(prev => ({ ...prev, kill: true }));
+    fetch('/api/process/kill-switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data?.detail) throw new Error(data.detail);
+        setAutonomyMode(data?.autonomy_mode || 'SAFE');
+        setStatus(`Kill switch complete. Stopped ${data?.stopped_count || 0} process(es).`);
+        loadProcesses();
+      })
+      .catch((err) => setStatus(err?.message || 'Kill switch failed.'))
+      .finally(() => setProcessBusy(prev => ({ ...prev, kill: false })));
+  };
+
   return (
     <div className="panel">
       <div className="panel-header">
@@ -219,6 +335,75 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
             <button onClick={() => runStage('build')} disabled={running.build}>Build</button>
             <button onClick={() => runStage('test')} disabled={running.test}>Test</button>
             <button onClick={() => runStage('run')} disabled={running.run}>Run</button>
+          </div>
+        </div>
+
+        <div className="project-build-config">
+          <h4>Autonomy Mode</h4>
+          <label>
+            Mode
+            <select value={autonomyMode} onChange={(e) => setAutonomyMode(e.target.value)}>
+              <option value="SAFE">SAFE</option>
+              <option value="TRUSTED">TRUSTED</option>
+              <option value="ELEVATED">ELEVATED</option>
+            </select>
+          </label>
+          <div className="project-item-actions">
+            <button onClick={saveAutonomyMode} disabled={savingMode}>
+              {savingMode ? 'Saving...' : 'Save Mode'}
+            </button>
+            <button className="danger" onClick={killSwitch} disabled={processBusy.kill}>
+              {processBusy.kill ? 'Stopping...' : 'Kill Switch'}
+            </button>
+          </div>
+        </div>
+
+        <div className="project-build-config">
+          <h4>Process Manager</h4>
+          <label>
+            Command
+            <input
+              type="text"
+              value={processCommand}
+              onChange={(e) => setProcessCommand(e.target.value)}
+              placeholder="python -m uvicorn app:app --reload"
+            />
+          </label>
+          <label>
+            Name (optional)
+            <input
+              type="text"
+              value={processName}
+              onChange={(e) => setProcessName(e.target.value)}
+              placeholder="dev-server"
+            />
+          </label>
+          <div className="project-item-actions">
+            <button onClick={startProcess} disabled={processBusy.start || !processCommand.trim()}>
+              {processBusy.start ? 'Starting...' : 'Start Process'}
+            </button>
+            <button onClick={loadProcesses} disabled={processLoading}>
+              {processLoading ? 'Refreshing...' : 'Refresh Processes'}
+            </button>
+          </div>
+          <div className="project-process-list">
+            {processes.length === 0 && <div className="panel-empty">No running processes.</div>}
+            {processes.map((proc) => (
+              <div key={proc.id} className="project-process-item">
+                <div className="project-process-main">
+                  <div className="project-process-title">
+                    {proc.name} [{proc.status}]
+                  </div>
+                  <div className="project-path">{proc.command}</div>
+                  <div className="project-path">pid={proc.pid || '-'} cwd={proc.cwd || '-'}</div>
+                </div>
+                <div className="project-item-actions">
+                  {proc.status === 'running' && (
+                    <button className="danger" onClick={() => stopProcess(proc.id)}>Stop</button>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 

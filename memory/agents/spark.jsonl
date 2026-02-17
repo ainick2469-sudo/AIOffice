@@ -16,3 +16,8 @@
 {"type": "todo", "content": "Max will build a basic Flask prototype focusing on volume measurement and noise cancellation.", "source": "audio", "timestamp": "2026-02-14T16:23:04.023212", "agent": "spark"}
 {"type": "constraint", "content": "The app should gracefully handle speech-to-text API network issues by displaying an error message and offering retry or manual input options.", "source": "audio", "timestamp": "2026-02-14T16:23:04.116552", "agent": "spark"}
 {"type": "fact", "content": "Refer to `docs/MVP_MILESTONES.md` for MVP milestones and acceptance tests.", "source": "audio", "timestamp": "2026-02-14T16:23:04.198104", "agent": "spark"}
+{"type": "decision", "content": "The team will build a voice meter app focusing solely on volume measurement and noise cancellation.", "source": "main", "timestamp": "2026-02-16T14:12:28.022616", "agent": "spark"}
+{"type": "todo", "content": "Max will start working on the Flask prototype for the baseline feature set of volume measurement and noise cancellation.", "source": "main", "timestamp": "2026-02-16T14:12:28.058381", "agent": "spark"}
+{"type": "decision", "content": "The project will focus on building a voice meter app that measures volume levels and includes noise cancellation.", "source": "main", "timestamp": "2026-02-16T19:21:02.390751", "agent": "spark"}
+{"type": "constraint", "content": "No inclusion of emotional tone indicators in the initial version of the app.", "source": "main", "timestamp": "2026-02-16T19:21:02.422630", "agent": "spark"}
+{"type": "todo", "content": "Max is assigned to work on the Flask prototype for the baseline feature set focusing on volume measurement and noise cancellation.", "source": "main", "timestamp": "2026-02-16T19:21:02.470278", "agent": "spark"}

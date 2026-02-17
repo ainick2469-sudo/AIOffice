@@ -1157,6 +1157,30 @@ body {
   color: #fca5a5;
 }
 
+.console-panel .audit-filter-bar {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.console-entry {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  border-left: 3px solid var(--border);
+  background: var(--bg-msg);
+}
+
+.console-entry.severity-info {
+  border-left-color: #60a5fa;
+}
+
+.console-entry.severity-warning {
+  border-left-color: #f59e0b;
+}
+
+.console-entry.severity-error {
+  border-left-color: #ef4444;
+}
+
 .audit-group {
   margin-bottom: 10px;
 }
@@ -1592,6 +1616,15 @@ body {
   font-size: 13px;
 }
 
+.project-build-config select {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
 .project-result {
   margin: 0;
   border: 1px solid var(--border);
@@ -1602,6 +1635,33 @@ body {
   font-size: 12px;
   max-height: 260px;
   overflow: auto;
+}
+
+.project-process-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.project-process-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 8px 10px;
+}
+
+.project-process-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.project-process-title {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 4px;
 }
 
 

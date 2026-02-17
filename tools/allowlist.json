@@ -21,7 +21,7 @@
     ".md", ".txt", ".css", ".html", ".toml", ".yaml", ".yml",
     ".cfg", ".ini", ".sql", ".sh", ".bat", ".ps1", ".csv"
   ],
-  "sandbox_root": "C:/AI_WORKSPACE/ai-office",
+  "sandbox_root": "dynamic:app-root-or-active-project",
   "max_file_read_chars": 10000,
   "command_timeout_seconds": 30
 }

@@ -7,6 +7,8 @@ from .tool_gateway import tool_read_file, tool_search_files, tool_run_command, t
 from .database import insert_message, update_task_from_tag, get_agent, create_task_record
 from .websocket import manager
 from . import web_search
+from . import skills_loader
+from .observability import emit_console_event
 
 logger = logging.getLogger("ai-office.toolexec")
 
@@ -26,7 +28,10 @@ TOOL_PATTERNS = [
     (r'\[TOOL:task\]\s*(.+)', 'task'),
     (r'\[TOOL:web\]\s*(.+)', 'web'),
     (r'\[TOOL:fetch\]\s*(.+)', 'fetch'),
+    (r'\[TOOL:create-skill\]\s*(.+)', 'create_skill'),
 ]
+GENERIC_TOOL_PATTERN = re.compile(r"\[TOOL:([a-zA-Z0-9_-]+)\]\s*(.*)")
+KNOWN_TOOL_TYPES = {"read", "run", "search", "write", "task", "web", "fetch", "create-skill"}
 
 TASK_TAG_PATTERN = re.compile(
     r"\[TASK:(start|done|blocked)\]\s*#(\d+)(?:\s*[—\-]\s*(.+))?",
@@ -68,6 +73,15 @@ def parse_tool_calls(text: str) -> list[dict]:
             matches = re.finditer(pattern, text, re.MULTILINE)
             for m in matches:
                 calls.append({"type": tool_type, "arg": m.group(1).strip()})
+    for line in (text or "").splitlines():
+        match = GENERIC_TOOL_PATTERN.search(line)
+        if not match:
+            continue
+        tool_name = match.group(1).strip().lower()
+        arg = (match.group(2) or "").strip()
+        if tool_name in KNOWN_TOOL_TYPES:
+            continue
+        calls.append({"type": "plugin", "tool_name": tool_name, "arg": arg})
 
     # If no explicit tool calls, check alt patterns
     if not calls:
@@ -88,6 +102,33 @@ def parse_tool_calls(text: str) -> list[dict]:
         })
 
     return calls
+
+
+def validate_tool_call_format(call: dict) -> tuple[bool, str]:
+    tool_type = call.get("type")
+    if tool_type == "write":
+        path = (call.get("path") or "").strip()
+        content = call.get("content")
+        if not path:
+            return False, "Write tool is missing target path."
+        if content is None or not str(content).strip():
+            return False, "Write tool requires a fenced content block with file contents."
+        return True, ""
+    if tool_type == "write_noblock":
+        return False, "Write tool missing fenced content block."
+    if tool_type in {"read", "run", "search", "task", "web", "fetch", "create_skill"}:
+        if not (call.get("arg") or "").strip():
+            return False, f"{tool_type} tool requires an argument."
+        return True, ""
+    if tool_type == "plugin":
+        if not (call.get("tool_name") or "").strip():
+            return False, "Plugin tool name is missing."
+        return True, ""
+    if tool_type == "task_tag":
+        if not call.get("task_id"):
+            return False, "Task tag is missing task id."
+        return True, ""
+    return False, f"Unknown tool type: {tool_type}"
 
 
 async def _create_task(agent_id: str, task_text: str) -> dict:
@@ -130,6 +171,31 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
         tool_type = call["type"]
         result = {}
         logger.info(f"[{agent_id}] executing {tool_type}: {call.get('arg', call.get('path', ''))[:80]}")
+        is_valid, validation_error = validate_tool_call_format(call)
+        if not is_valid:
+            msg = (
+                "⚠️ **Tool format invalid.**\n"
+                f"Reason: {validation_error}\n"
+                "Please re-emit the tool call in valid format only."
+            )
+            saved = await insert_message(channel=channel, sender=agent_id, content=msg, msg_type="tool_result")
+            await manager.broadcast(channel, {"type": "chat", "message": saved})
+            await emit_console_event(
+                channel=channel,
+                event_type="tool_format_invalid",
+                source="tool_executor",
+                message=validation_error,
+                data={"agent_id": agent_id, "tool_type": tool_type},
+            )
+            results.append({"type": tool_type, "result": {"ok": False, "error": validation_error}, "msg": msg})
+            continue
+        await emit_console_event(
+            channel=channel,
+            event_type="tool_call",
+            source="tool_executor",
+            message=f"{agent_id} -> {tool_type}",
+            data={"agent_id": agent_id, "call": {k: v for k, v in call.items() if k != "content"}},
+        )
 
         try:
             if tool_type == "read":
@@ -263,6 +329,32 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                         )
                     else:
                         msg = f"❌ **Fetch failed:** {result.get('error', 'unknown error')}"
+            elif tool_type == "create_skill":
+                result = skills_loader.create_skill_scaffold(call["arg"])
+                if result.get("ok"):
+                    msg = (
+                        f"🧩 **Skill created:** `{result.get('skill')}`\n"
+                        f"Path: `{result.get('path', '')}`\n"
+                        f"Tools: {', '.join(result.get('tools', [])) or 'none'}"
+                    )
+                else:
+                    msg = f"❌ **Create skill failed:** {result.get('error', 'unknown error')}"
+            elif tool_type == "plugin":
+                result = await skills_loader.invoke_tool(
+                    call["tool_name"],
+                    call.get("arg", ""),
+                    {"agent_id": agent_id, "channel": channel},
+                )
+                if result.get("ok"):
+                    out = str(result.get("output", "")).strip()
+                    if len(out) > 1500:
+                        out = out[:1500] + "\n... (truncated)"
+                    msg = (
+                        f"🧠 **Plugin tool `{call['tool_name']}`** via `{result.get('skill', 'unknown')}`\n"
+                        f"```text\n{out}\n```"
+                    )
+                else:
+                    msg = f"❌ **Plugin tool failed:** {result.get('error', 'unknown error')}"
             else:
                 continue
 
@@ -274,6 +366,18 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                 msg_type="tool_result",
             )
             await manager.broadcast(channel, {"type": "chat", "message": saved})
+            await emit_console_event(
+                channel=channel,
+                event_type="tool_result",
+                source="tool_executor",
+                message=f"{tool_type} {'ok' if bool(result.get('ok')) else 'failed'}",
+                data={
+                    "agent_id": agent_id,
+                    "tool_type": tool_type,
+                    "ok": bool(result.get("ok")),
+                    "exit_code": result.get("exit_code"),
+                },
+            )
             results.append({
                 "type": tool_type,
                 "path": call.get("path"),
@@ -287,6 +391,14 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
             err_msg = f"❌ **Tool error:** {e}"
             saved = await insert_message(channel=channel, sender=agent_id, content=err_msg, msg_type="tool_result")
             await manager.broadcast(channel, {"type": "chat", "message": saved})
+            await emit_console_event(
+                channel=channel,
+                event_type="tool_error",
+                source="tool_executor",
+                message=str(e),
+                severity="error",
+                data={"agent_id": agent_id, "tool_type": tool_type},
+            )
             results.append({
                 "type": tool_type,
                 "path": call.get("path"),

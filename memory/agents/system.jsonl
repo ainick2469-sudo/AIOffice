@@ -1,0 +1,5 @@
+{"type": "decision", "content": "The team will build a voice meter app focusing solely on volume measurement and noise cancellation.", "source": "main", "timestamp": "2026-02-16T14:12:28.022616", "agent": "system"}
+{"type": "todo", "content": "Max will start working on the Flask prototype for the baseline feature set of volume measurement and noise cancellation.", "source": "main", "timestamp": "2026-02-16T14:12:28.069223", "agent": "system"}
+{"type": "decision", "content": "The project will focus on building a voice meter app that measures volume levels and includes noise cancellation.", "source": "main", "timestamp": "2026-02-16T19:21:02.390751", "agent": "system"}
+{"type": "constraint", "content": "No inclusion of emotional tone indicators in the initial version of the app.", "source": "main", "timestamp": "2026-02-16T19:21:02.438443", "agent": "system"}
+{"type": "todo", "content": "Max is assigned to work on the Flask prototype for the baseline feature set focusing on volume measurement and noise cancellation.", "source": "main", "timestamp": "2026-02-16T19:21:02.470278", "agent": "system"}

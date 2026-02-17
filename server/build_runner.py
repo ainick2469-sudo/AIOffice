@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional
 
-from .project_manager import APP_ROOT, get_project_root, PROJECTS_ROOT
+from .project_manager import APP_ROOT, get_project_root
+from .runtime_paths import build_runtime_env
 
 CONFIG_FILE = ".ai-office/config.json"
 DEFAULT_TIMEOUT_SECONDS = 180
@@ -18,17 +18,7 @@ _latest_results: dict[str, dict] = {}
 
 
 def _runtime_env() -> dict:
-    env = os.environ.copy()
-    system_root = env.get("SystemRoot", r"C:\Windows")
-    path_parts = [
-        str(Path(system_root) / "System32"),
-        system_root,
-        r"C:\Program Files\Git\cmd",
-        r"C:\Program Files\nodejs",
-        r"C:\Users\nickb\AppData\Local\Programs\Python\Python312",
-    ]
-    env["PATH"] = ";".join(path_parts + [env.get("PATH", "")])
-    return env
+    return build_runtime_env()
 
 
 def _project_root(project_name: str) -> Path:

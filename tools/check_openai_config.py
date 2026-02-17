@@ -2,7 +2,7 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path("C:/AI_WORKSPACE/ai-office")
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from server import openai_client  # noqa: E402

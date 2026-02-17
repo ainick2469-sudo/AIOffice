@@ -7,6 +7,7 @@ from typing import Optional
 from . import ollama_client
 from .memory import write_memory, read_memory
 from .database import get_messages, get_agents
+from . import project_manager
 
 logger = logging.getLogger("ai-office.distiller")
 
@@ -121,6 +122,8 @@ async def maybe_distill(channel: str):
     for m in new_msgs:
         if m["sender"] != "user":
             participating_agents.add(m["sender"])
+    active_project = await project_manager.get_active_project(channel)
+    project_name = active_project["project"]
 
     written = 0
     for fact in facts[:5]:  # Cap at 5
@@ -129,12 +132,12 @@ async def maybe_distill(channel: str):
 
         # Shared memory for decisions and constraints
         if fact["type"] in ("decision", "constraint", "preference"):
-            if write_memory(None, fact.copy()):
+            if write_memory(None, fact.copy(), project_name=project_name):
                 written += 1
 
         # Per-agent memory for participants
         for agent_id in participating_agents:
-            write_memory(agent_id, fact.copy())
+            write_memory(agent_id, fact.copy(), project_name=project_name)
 
     logger.info(f"Distilled {written} new facts from #{channel} (filtered {len(facts) - written} dupes/vague)")
     _last_distilled[channel] = last_id

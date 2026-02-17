@@ -3,11 +3,11 @@
 import asyncio
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
 
 from .database import init_db, insert_message, get_messages
 from .websocket import manager
@@ -15,6 +15,8 @@ from .routes_api import router as api_router
 from .models import WSMessage
 from .agent_engine import process_message
 from . import ollama_client
+from .runtime_paths import AI_OFFICE_HOME, APP_ROOT, ensure_runtime_dirs
+from . import skills_loader
 
 # ── Logging ────────────────────────────────────────────────
 logging.basicConfig(
@@ -28,8 +30,14 @@ logger = logging.getLogger("ai-office")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🏢 AI Office starting up...")
+    ensure_runtime_dirs()
     await init_db()
     logger.info("✅ Database initialized")
+    skills_info = skills_loader.load_skills()
+    logger.info("✅ Skills loaded (%s tools)", len(skills_info.get("loaded_tools", [])))
+    skills_loader.ensure_dev_watcher(
+        os.environ.get("AI_OFFICE_SKILLS_WATCH", "").strip().lower() in {"1", "true", "yes"}
+    )
     if await ollama_client.is_available():
         logger.info("✅ Ollama connected")
     else:
@@ -94,10 +102,10 @@ async def websocket_endpoint(ws: WebSocket, channel: str):
 
 
 # ── Static files (frontend) ───────────────────────────────
-uploads_dir = Path(__file__).parent.parent / "uploads"
+uploads_dir = AI_OFFICE_HOME / "uploads"
 uploads_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
 
-client_dist = Path(__file__).parent.parent / "client-dist"
+client_dist = APP_ROOT / "client-dist"
 if client_dist.exists():
     app.mount("/", StaticFiles(directory=str(client_dist), html=True), name="static")

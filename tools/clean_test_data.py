@@ -9,10 +9,27 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "office.db"
+from platformdirs import user_data_dir
+
+
+def _resolve_db_path() -> Path:
+    explicit = os.environ.get("AI_OFFICE_DB_PATH", "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+
+    home = os.environ.get("AI_OFFICE_HOME", "").strip()
+    if home:
+        return (Path(home).expanduser().resolve() / "data" / "office.db")
+
+    default_home = Path(user_data_dir("AIOffice", appauthor=False))
+    return (default_home / "data" / "office.db").resolve()
+
+
+DB_PATH = _resolve_db_path()
 
 DEFAULT_PATTERNS = (
     "smoke",

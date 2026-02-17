@@ -4,35 +4,34 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
 
 ---
 
-## LATEST STATUS UPDATE (2026-02-15)
-- Stage 1 + Stage 1.5 + Stage 2 core are implemented.
-- Stage 3 major items are implemented (export/templates/performance/cost/branch context/theme/startup selector), with only deeper multi-branch orchestration polish remaining.
-- Added collab core:
-  - `/meeting`, `/vote`
-  - reactions API + WS fanout
-  - vote persistence into `decisions`
-- Added execution engine:
-  - `/project` lifecycle, channel-scoped active projects
-  - channel-aware tool sandboxing
-  - file context injection
-  - post-write build/test/fix loop + Nova escalation
-  - task status tags `[TASK:start|done|blocked]`
-- Added Stage 2 operations:
-  - `/work start|stop|status`
-  - web research tools `[TOOL:web]`, `[TOOL:fetch]`
-  - Git APIs and Git panel
-  - `POST /api/execute` + inline Run button in code blocks
-- Added Stage 3 support:
-  - `/export`
-  - project templates (`react`, `python`, `rust`)
-  - agent performance metrics
-  - API usage + budget threshold APIs
-  - theme toggle
-  - startup mode selector in `start.py --mode web|desktop`
+## LATEST STATUS UPDATE (2026-02-17)
+- Portability, env overrides, and test isolation are active:
+  - centralized runtime path module (`server/runtime_paths.py`)
+  - env override contract (`AI_OFFICE_HOME`, `AI_OFFICE_DB_PATH`, `AI_OFFICE_MEMORY_DIR`, `AI_OFFICE_PROJECTS_DIR`)
+  - `tests/conftest.py` enforces temp DB/memory/projects and bootstraps isolated DB schema
+- Autonomy/process/observability upgrades are implemented:
+  - autonomy policy engine (`server/policy.py`)
+  - channel process manager + kill switch (`server/process_manager.py`)
+  - verification loop extraction (`server/verification_loop.py`)
+  - console event persistence + API (`/api/console/events/{channel}`)
+  - skills plugin loader + create/reload APIs
+- Frontend wiring completed:
+  - Console tab in `client/src/App.jsx`
+  - Project autonomy + process controls in `client/src/components/ProjectPanel.jsx`
+  - kill switch + autonomy badge in `client/src/components/ChatRoom.jsx`
+- Added new backend tests:
+  - `test_autonomy_policy.py`
+  - `test_process_manager.py`
+  - `test_verification_loop.py`
+  - `test_tool_format_compliance.py`
+  - `test_skills_plugin_loader.py`
+  - `test_create_skill_tool.py`
+  - `test_project_scoped_memory.py`
+  - `test_console_events_api.py`
 - Latest checks pass:
+  - `python -m pytest -q tests` (`35 passed`)
   - `client/dev-lint.cmd`
   - `client/dev-build.cmd`
-  - `python -m pytest tests -q`
   - `tools/runtime_smoke.py`
   - `tools/startup_smoke.py`
   - `tools/desktop_smoke.py`

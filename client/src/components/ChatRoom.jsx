@@ -13,6 +13,7 @@ export default function ChatRoom({ channel }) {
   const [convoStatus, setConvoStatus] = useState(null);
   const [collabMode, setCollabMode] = useState({ mode: 'chat', active: false });
   const [activeProject, setActiveProject] = useState({ project: 'ai-office', path: '' });
+  const [autonomyMode, setAutonomyMode] = useState('SAFE');
   const [workStatus, setWorkStatus] = useState({ running: false, processed: 0, errors: 0 });
   const [reactionsByMessage, setReactionsByMessage] = useState({});
   const [channelName, setChannelName] = useState(null);
@@ -97,8 +98,19 @@ export default function ChatRoom({ channel }) {
         .catch(() => {});
       fetch(`/api/projects/active/${channel}`)
         .then(r => r.json())
-        .then(setActiveProject)
-        .catch(() => {});
+        .then((project) => {
+          setActiveProject(project);
+          const projectName = project?.project || 'ai-office';
+          return fetch(`/api/projects/${projectName}/autonomy-mode`)
+            .then(resp => (resp.ok ? resp.json() : { mode: 'SAFE' }))
+            .then((modePayload) => {
+              setAutonomyMode(modePayload?.mode || 'SAFE');
+            });
+        })
+        .catch(() => {
+          setAutonomyMode('SAFE');
+          setActiveProject({ project: 'ai-office', path: '' });
+        });
       fetch(`/api/work/status/${channel}`)
         .then(r => r.json())
         .then(setWorkStatus)
@@ -161,6 +173,14 @@ export default function ChatRoom({ channel }) {
     }
     if (lastEvent.type === 'project_switched' && lastEvent.active) {
       setActiveProject(lastEvent.active);
+      const projectName = lastEvent.active?.project || 'ai-office';
+      fetch(`/api/projects/${projectName}/autonomy-mode`)
+        .then(r => (r.ok ? r.json() : { mode: 'SAFE' }))
+        .then((payload) => setAutonomyMode(payload?.mode || 'SAFE'))
+        .catch(() => setAutonomyMode('SAFE'));
+    }
+    if (lastEvent.type === 'kill_switch') {
+      setAutonomyMode(lastEvent.autonomy_mode || 'SAFE');
     }
   }, [lastEvent]);
 
@@ -468,6 +488,22 @@ export default function ChatRoom({ channel }) {
       .catch(() => {});
   };
 
+  const runKillSwitch = () => {
+    const confirmed = window.confirm('Kill switch will stop all running processes in this channel and set autonomy mode to SAFE. Continue?');
+    if (!confirmed) return;
+
+    fetch('/api/process/kill-switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel }),
+    })
+      .then(r => r.json())
+      .then((payload) => {
+        setAutonomyMode(payload?.autonomy_mode || 'SAFE');
+      })
+      .catch(() => {});
+  };
+
   const toggleReaction = (messageId, emoji) => {
     fetch(`/api/messages/${messageId}/reactions`, {
       method: 'POST',
@@ -530,8 +566,14 @@ export default function ChatRoom({ channel }) {
           <span className="convo-status">
             Project: {activeProject?.project || 'ai-office'}
           </span>
+          <span className={`convo-status ${autonomyMode === 'SAFE' ? '' : 'active'}`}>
+            Autonomy: {autonomyMode}
+          </span>
         </div>
         <div className="chat-header-right">
+          <button className="stop-btn" onClick={runKillSwitch}>
+            Kill Switch
+          </button>
           <button className="stop-btn" onClick={clearChat}>
             Clear Chat
           </button>

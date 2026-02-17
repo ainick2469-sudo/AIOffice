@@ -32,15 +32,17 @@ from .database import (
     list_tasks,
 )
 from .websocket import manager
-from .memory import read_all_memory_for_agent
+from .memory import get_known_context
 from .distiller import maybe_distill
-from .tool_executor import parse_tool_calls, execute_tool_calls
+from .tool_executor import parse_tool_calls, execute_tool_calls, validate_tool_call_format
 from . import claude_adapter
 from . import openai_adapter
 from . import build_runner
 from . import project_manager
 from . import git_tools
 from . import autonomous_worker
+from . import verification_loop
+from .observability import emit_console_event
 
 logger = logging.getLogger("ai-office.engine")
 
@@ -1402,10 +1404,18 @@ async def _handle_work_command(channel: str, user_message: str) -> bool:
 
     from .autonomous_worker import get_work_status, start_work, stop_work
 
-    action = raw.split(maxsplit=1)[1].strip().lower() if len(raw.split()) > 1 else "status"
+    tokens = raw.split()
+    action = tokens[1].strip().lower() if len(tokens) > 1 else "status"
+    approved = any(token in {"--approve", "--go"} for token in tokens[2:])
     if action == "start":
-        status = start_work(channel)
-        await _send_system_message(channel, f"Autonomous work started for `{channel}`.")
+        status = start_work(channel, approved=approved)
+        if status.get("awaiting_approval"):
+            await _send_system_message(
+                channel,
+                "Autonomous work requires explicit approval. Run `/work start --approve` to proceed.",
+            )
+        else:
+            await _send_system_message(channel, f"Autonomous work started for `{channel}`.")
         await manager.broadcast(channel, {"type": "work_status", "status": status})
         return True
     if action == "stop":
@@ -1817,9 +1827,11 @@ def _build_system(
     channel: str,
     is_followup: bool,
     project_root: Path,
+    project_name: str,
     branch_name: str,
     file_context: str,
     assigned_tasks: list[dict],
+    memory_entries: list[dict],
 ) -> str:
     """Build system prompt. Tells agent to be themselves, not a bot."""
     s = agent.get("system_prompt", "You are a helpful team member.")
@@ -1925,11 +1937,11 @@ def _build_system(
         s += "\nIntegrate with these existing files; do not hallucinate missing files."
         s += f"\n```text\n{file_context}\n```"
 
-    # Memory
-    memories = read_all_memory_for_agent(agent["id"], limit=12)
-    if memories:
-        mem_text = "\n".join(f"- {m.get('content', '')}" for m in memories[-8:])
-        s += f"\n\nThings you remember:\n{mem_text}"
+    if memory_entries:
+        mem_text = "\n".join(f"- {m.get('content', '')}" for m in memory_entries[-10:])
+        s += "\n\n=== KNOWN CONTEXT ==="
+        s += f"\nProject: `{project_name}`"
+        s += f"\n{mem_text}"
 
     return s
 
@@ -1945,14 +1957,22 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
     branch_name = git_tools.current_branch(active_project["project"])
     file_context = await _build_file_context(channel, context[-1200:], agent)
     assigned_tasks = await get_tasks_for_agent(agent["id"])
+    memory_entries = get_known_context(
+        active_project["project"],
+        agent["id"],
+        query_hint=context[-400:],
+        limit=12,
+    )
     system = _build_system(
         agent,
         channel,
         is_followup,
         project_root=project_root,
+        project_name=active_project["project"],
         branch_name=branch_name,
         file_context=file_context,
         assigned_tasks=assigned_tasks,
+        memory_entries=memory_entries,
     )
 
     # Find latest user message to highlight
@@ -1998,8 +2018,25 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
     )
 
     backend = agent.get("backend", "ollama")
+    await emit_console_event(
+        channel=channel,
+        event_type="prompt",
+        source="agent_engine",
+        message=f"{agent['id']} generating via {backend}",
+        project_name=active_project["project"],
+        data={
+            "agent_id": agent["id"],
+            "backend": backend,
+            "model": agent.get("model"),
+            "followup": bool(is_followup),
+            "context_chars": len(context),
+            "file_context_chars": len(file_context or ""),
+            "task_count": len(assigned_tasks or []),
+        },
+    )
 
     try:
+        started_at = time.time()
         if backend in {"claude", "openai"}:
             budget_state = await _api_budget_state(channel, active_project["project"])
             budget = budget_state["budget_usd"]
@@ -2038,6 +2075,21 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                 temperature=0.75,
                 max_tokens=400,
             )
+        elapsed_ms = int((time.time() - started_at) * 1000)
+        await emit_console_event(
+            channel=channel,
+            event_type="model_response",
+            source="agent_engine",
+            message=f"{agent['id']} response received",
+            project_name=active_project["project"],
+            data={
+                "agent_id": agent["id"],
+                "backend": backend,
+                "model": agent.get("model"),
+                "latency_ms": elapsed_ms,
+                "response_chars": len(response or ""),
+            },
+        )
         if not response:
             return None
 
@@ -2081,114 +2133,42 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
         return response.strip()
     except Exception as e:
         logger.error(f"Agent {agent['id']} failed: {e}")
+        await emit_console_event(
+            channel=channel,
+            event_type="model_error",
+            source="agent_engine",
+            message=str(e),
+            project_name=active_project["project"],
+            severity="error",
+            data={"agent_id": agent["id"], "backend": backend},
+        )
         return None
 
 
 async def _run_build_test_loop(agent: dict, channel: str) -> None:
-    active = await project_manager.get_active_project(channel)
-    project_name = active["project"]
-    config = build_runner.get_build_config(project_name)
-    build_cmd = (config.get("build_cmd") or "").strip()
-    test_cmd = (config.get("test_cmd") or "").strip()
-    if not build_cmd:
-        return
-
-    failure_context = ""
-    build_passed = False
-    for attempt in range(1, BUILD_FIX_MAX_ATTEMPTS + 1):
-        build_result = build_runner.run_build(project_name)
-        await log_build_result(
-            agent_id=agent["id"],
-            channel=channel,
-            project_name=project_name,
-            stage="build",
-            success=bool(build_result.get("ok")),
-            exit_code=build_result.get("exit_code"),
-            summary=(build_result.get("stderr") or build_result.get("error") or build_result.get("stdout") or "")[:500],
-        )
-        await manager.broadcast(channel, {"type": "build_result", "stage": "build", "result": build_result})
-        await _send_system_message(channel, _format_runner_result("build", build_result), msg_type="tool_result")
-        if build_result.get("ok"):
-            _reset_agent_failure(channel, agent["id"])
-            build_passed = True
-            break
-
-        failure_context = (
-            f"Build attempt {attempt} failed.\n"
-            f"Command: {build_result.get('command', build_cmd)}\n"
-            f"Error:\n{(build_result.get('stderr') or build_result.get('error') or '')[:3000]}"
-        )
-        if attempt >= BUILD_FIX_MAX_ATTEMPTS:
-            await _enter_war_room(
-                channel,
-                issue=f"Build failing repeatedly in project `{project_name}`",
-                trigger="auto-build-failure",
-            )
-            await _maybe_escalate_to_nova(channel, agent["id"], "repeated build failure", failure_context)
-            return
-
-        await _send_system_message(
-            channel,
-            f"Build failed (attempt {attempt}/{BUILD_FIX_MAX_ATTEMPTS}). Asking {agent['display_name']} to fix.",
-            msg_type="system",
-        )
-        fix_response = await _generate(agent, channel, is_followup=True)
-        if not fix_response:
-            await _maybe_escalate_to_nova(channel, agent["id"], "empty response during build-fix loop", failure_context)
-            return
-        await _send(agent, channel, fix_response, run_post_checks=False)
-
-    if not test_cmd:
-        if build_passed and _war_room_mode(channel):
-            await _exit_war_room(channel, reason="build passing again", resolved_by=agent["display_name"])
-        return
-
-    for attempt in range(1, BUILD_FIX_MAX_ATTEMPTS + 1):
-        test_result = build_runner.run_test(project_name)
-        await log_build_result(
-            agent_id=agent["id"],
-            channel=channel,
-            project_name=project_name,
-            stage="test",
-            success=bool(test_result.get("ok")),
-            exit_code=test_result.get("exit_code"),
-            summary=(test_result.get("stderr") or test_result.get("error") or test_result.get("stdout") or "")[:500],
-        )
-        await manager.broadcast(channel, {"type": "build_result", "stage": "test", "result": test_result})
-        await _send_system_message(channel, _format_runner_result("test", test_result), msg_type="tool_result")
-        if test_result.get("ok"):
-            _reset_agent_failure(channel, agent["id"])
-            if _war_room_mode(channel):
-                await _exit_war_room(channel, reason="build and tests passing again", resolved_by=agent["display_name"])
-            return
-
-        failure_context = (
-            f"Test attempt {attempt} failed.\n"
-            f"Command: {test_result.get('command', test_cmd)}\n"
-            f"Error:\n{(test_result.get('stderr') or test_result.get('error') or '')[:3000]}"
-        )
-        if attempt >= BUILD_FIX_MAX_ATTEMPTS:
-            await _enter_war_room(
-                channel,
-                issue=f"Tests failing repeatedly in project `{project_name}`",
-                trigger="auto-test-failure",
-            )
-            await _maybe_escalate_to_nova(channel, agent["id"], "repeated test failure", failure_context)
-            return
-
-        await _send_system_message(
-            channel,
-            f"Tests failed (attempt {attempt}/{BUILD_FIX_MAX_ATTEMPTS}). Asking {agent['display_name']} to fix.",
-            msg_type="system",
-        )
-        fix_response = await _generate(agent, channel, is_followup=True)
-        if not fix_response:
-            await _maybe_escalate_to_nova(channel, agent["id"], "empty response during test-fix loop", failure_context)
-            return
-        await _send(agent, channel, fix_response, run_post_checks=False)
+    await verification_loop.run_post_write_verification(
+        agent=agent,
+        channel=channel,
+        max_attempts=BUILD_FIX_MAX_ATTEMPTS,
+        format_result=_format_runner_result,
+        send_system_message=_send_system_message,
+        generate_fix_response=lambda a, ch: _generate(a, ch, is_followup=True),
+        send_agent_message=lambda a, ch, content: _send(a, ch, content, run_post_checks=False),
+        reset_agent_failure=_reset_agent_failure,
+        maybe_escalate_to_nova=_maybe_escalate_to_nova,
+        enter_war_room=lambda ch, issue, trigger: _enter_war_room(ch, issue, trigger),
+        exit_war_room=lambda ch, reason, resolved_by: _exit_war_room(ch, reason, resolved_by),
+        war_room_active=lambda ch: _war_room_mode(ch) is not None,
+    )
 
 
-async def _send(agent: dict, channel: str, content: str, run_post_checks: bool = True):
+async def _send(
+    agent: dict,
+    channel: str,
+    content: str,
+    run_post_checks: bool = True,
+    format_retry: bool = False,
+):
     """Save + broadcast an agent message, then execute any tool calls."""
     saved = await insert_message(channel=channel, sender=agent["id"], content=content, msg_type="message")
     await manager.broadcast(channel, {"type": "chat", "message": saved})
@@ -2203,6 +2183,37 @@ async def _send(agent: dict, channel: str, content: str, run_post_checks: bool =
     # Check for tool calls in the message
     tool_calls = parse_tool_calls(content)
     if tool_calls:
+        invalid = []
+        for call in tool_calls:
+            ok, reason = validate_tool_call_format(call)
+            if not ok:
+                invalid.append((call, reason))
+        if invalid:
+            await emit_console_event(
+                channel=channel,
+                event_type="tool_format_invalid",
+                source="agent_engine",
+                message=f"{agent['id']} emitted invalid tool format",
+                severity="warning",
+                data={"agent_id": agent["id"], "errors": [item[1] for item in invalid]},
+            )
+            await _send_system_message(
+                channel,
+                "Tool format invalid. Output tool calls in valid format only, with required args and fenced blocks.",
+                msg_type="system",
+            )
+            if not format_retry:
+                repair = await _generate(agent, channel, is_followup=True)
+                if repair:
+                    await _send(
+                        agent,
+                        channel,
+                        repair,
+                        run_post_checks=False,
+                        format_retry=True,
+                    )
+            return saved
+
         logger.info(f"  [{agent['display_name']}] executing {len(tool_calls)} tool call(s)")
         results = await execute_tool_calls(agent["id"], tool_calls, channel)
         successful_writes = [
@@ -2411,6 +2422,15 @@ async def _handle_interrupt(channel: str, spoke_set: set) -> int:
     else:
         new_agents = await route(new_msg)
         new_agents = new_agents[: int(turn_policy.get("max_initial_agents", 3))]
+    active_project = await project_manager.get_active_project(channel)
+    await emit_console_event(
+        channel=channel,
+        event_type="router_decision",
+        source="agent_engine",
+        message="Router selected agents after user interrupt.",
+        project_name=active_project["project"],
+        data={"interrupt": True, "message": new_msg[:220], "agents": new_agents, "turn_policy": turn_policy},
+    )
     spoke_set.clear()
     count = 0
     for aid in new_agents:
@@ -2677,6 +2697,15 @@ async def process_message(channel: str, user_message: str):
         # Conversation running — interrupt it
         logger.info(f"User interrupt in #{channel}")
         _user_interrupt[channel] = user_message
+        active_project = await project_manager.get_active_project(channel)
+        await emit_console_event(
+            channel=channel,
+            event_type="user_interrupt",
+            source="agent_engine",
+            message="User interrupted active conversation.",
+            project_name=active_project["project"],
+            data={"message": user_message[:220]},
+        )
         return
 
     # Start new conversation
@@ -2690,6 +2719,15 @@ async def process_message(channel: str, user_message: str):
         initial_agents = await route(user_message)
         initial_agents = initial_agents[: int(turn_policy.get("max_initial_agents", 3))]
     logger.info(f"Initial agents: {initial_agents}")
+    active_project = await project_manager.get_active_project(channel)
+    await emit_console_event(
+        channel=channel,
+        event_type="router_decision",
+        source="agent_engine",
+        message="Router selected initial agents.",
+        project_name=active_project["project"],
+        data={"message": user_message[:220], "agents": initial_agents, "turn_policy": turn_policy},
+    )
     asyncio.create_task(_conversation_loop(channel, initial_agents))
 
 

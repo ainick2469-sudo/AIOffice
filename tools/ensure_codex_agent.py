@@ -1,8 +1,12 @@
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
-DB_PATH = Path("C:/AI_WORKSPACE/ai-office/data/office.db")
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from server.runtime_paths import DB_PATH
 
 SQL_INSERT = """
 INSERT INTO agents (
@@ -33,7 +37,7 @@ VALUES = (
 
 def main():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(str(DB_PATH))
     cur = conn.cursor()
     exists = cur.execute("SELECT 1 FROM agents WHERE id = ?", ("codex",)).fetchone()
     if exists:

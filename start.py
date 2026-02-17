@@ -3,31 +3,21 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+from server.runtime_paths import APP_ROOT, build_runtime_env
+
 SYSTEM_ROOT = os.environ.get("SystemRoot", r"C:\Windows")
-CMD_EXE = os.path.join(SYSTEM_ROOT, "System32", "cmd.exe")
-RUNTIME_WRAPPER = os.path.join(ROOT, "with-runtime.cmd")
-
-
-def _build_runtime_env():
-    env = os.environ.copy()
-    path_parts = [
-        os.path.join(SYSTEM_ROOT, "System32"),
-        SYSTEM_ROOT,
-        r"C:\Program Files\nodejs",
-        r"C:\Users\nickb\AppData\Local\Programs\Python\Python312",
-    ]
-    env["PATH"] = ";".join(path_parts + [env.get("PATH", "")])
-    return env
+CMD_EXE = str(Path(SYSTEM_ROOT) / "System32" / "cmd.exe")
+RUNTIME_WRAPPER = APP_ROOT / "with-runtime.cmd"
 
 
 def main():
     print("AI Office starting in desktop mode...")
     rc = subprocess.call(
-        [CMD_EXE, "/c", RUNTIME_WRAPPER, sys.executable, "app.py"],
-        cwd=ROOT,
-        env=_build_runtime_env(),
+        [CMD_EXE, "/c", str(RUNTIME_WRAPPER), sys.executable, "app.py"],
+        cwd=str(APP_ROOT),
+        env=build_runtime_env(),
     )
     raise SystemExit(rc)
 

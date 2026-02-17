@@ -13,9 +13,8 @@ from pathlib import Path
 from typing import Optional
 
 from . import database as db
+from .runtime_paths import APP_ROOT, PROJECTS_ROOT, build_runtime_env
 
-APP_ROOT = Path("C:/AI_WORKSPACE/ai-office").resolve()
-PROJECTS_ROOT = Path("C:/AI_WORKSPACE/projects").resolve()
 PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,49}$")
 
 DELETE_CONFIRM_TTL_SECONDS = 60
@@ -23,17 +22,7 @@ _pending_delete_tokens: dict[str, dict] = {}
 
 
 def _runtime_env() -> dict:
-    env = dict(**__import__("os").environ)
-    system_root = env.get("SystemRoot", r"C:\Windows")
-    path_parts = [
-        str(Path(system_root) / "System32"),
-        system_root,
-        r"C:\Program Files\Git\cmd",
-        r"C:\Program Files\nodejs",
-        r"C:\Users\nickb\AppData\Local\Programs\Python\Python312",
-    ]
-    env["PATH"] = ";".join(path_parts + [env.get("PATH", "")])
-    return env
+    return build_runtime_env()
 
 
 def validate_project_name(name: str) -> bool:
@@ -53,7 +42,8 @@ def _cleanup_expired_tokens():
 
 def _ensure_inside_projects(path: Path) -> bool:
     try:
-        return str(path.resolve()).startswith(str(PROJECTS_ROOT))
+        path.resolve().relative_to(PROJECTS_ROOT.resolve())
+        return True
     except Exception:
         return False
 

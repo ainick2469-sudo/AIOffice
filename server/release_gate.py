@@ -9,6 +9,7 @@ from . import ollama_client
 from .database import get_agent, get_agents, insert_message, get_db
 from .websocket import manager
 from .memory import read_memory
+from .runtime_paths import APP_ROOT
 
 logger = logging.getLogger("ai-office.release")
 
@@ -85,9 +86,8 @@ async def _run_single_review(agent: dict, focus: str, project_context: str) -> d
 
 async def _get_project_context() -> str:
     """Build project context for reviewers."""
-    from pathlib import Path
-    state_path = Path("C:/AI_WORKSPACE/ai-office/docs/PROJECT_STATE.md")
-    decisions_path = Path("C:/AI_WORKSPACE/ai-office/docs/DECISIONS.md")
+    state_path = APP_ROOT / "docs" / "PROJECT_STATE.md"
+    decisions_path = APP_ROOT / "docs" / "DECISIONS.md"
 
     context = ""
     if state_path.exists():

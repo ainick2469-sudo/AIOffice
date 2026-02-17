@@ -25,6 +25,7 @@ async def _latest_task_title() -> str:
 async def main() -> int:
     await db.init_db()
     failures: list[str] = []
+    await db.set_project_autonomy_mode("ai-office", "TRUSTED")
 
     sample = (
         "[TOOL:read] README.md\n"
@@ -65,6 +66,8 @@ async def main() -> int:
 
     if GENERATED_TOOL.exists():
         GENERATED_TOOL.unlink()
+
+    await db.set_project_autonomy_mode("ai-office", "SAFE")
 
     if failures:
         print("TOOLCHAIN_SMOKE_FAIL")

@@ -3,13 +3,18 @@ from __future__ import annotations
 import os
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 import httpx
-
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON_EXE = Path(r"C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from server.runtime_paths import build_runtime_env
+
+PYTHON_EXE = Path(sys.executable).resolve()
 
 
 def wait_for_port(host: str, port: int, timeout: float = 45.0) -> bool:
@@ -29,14 +34,7 @@ def wait_for_port(host: str, port: int, timeout: float = 45.0) -> bool:
 
 
 def main() -> int:
-    env = os.environ.copy()
-    env["PATH"] = ";".join([
-        r"C:\Windows\System32",
-        r"C:\Windows",
-        r"C:\Program Files\nodejs",
-        r"C:\Users\nickb\AppData\Local\Programs\Python\Python312",
-        env.get("PATH", ""),
-    ])
+    env = build_runtime_env(os.environ.copy())
 
     proc = subprocess.Popen(
         [str(PYTHON_EXE), "app.py"],

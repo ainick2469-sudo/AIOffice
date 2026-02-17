@@ -1,49 +1,69 @@
-"""Clean ALL old messages, tool logs, and smoke data from the database."""
-import sqlite3
+"""Clean messages/logs/tasks/decisions from the active AI Office database."""
+
+from __future__ import annotations
+
 import os
+import sqlite3
+from pathlib import Path
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ai_office.db")
+from platformdirs import user_data_dir
 
-def main():
-    if not os.path.exists(DB_PATH):
-        print(f"Database not found: {DB_PATH}")
-        return
 
-    conn = sqlite3.connect(DB_PATH)
+def resolve_db_path() -> Path:
+    explicit = os.environ.get("AI_OFFICE_DB_PATH", "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+
+    home = os.environ.get("AI_OFFICE_HOME", "").strip()
+    if home:
+        return (Path(home).expanduser().resolve() / "data" / "office.db")
+
+    default_home = Path(user_data_dir("AIOffice", appauthor=False))
+    return (default_home / "data" / "office.db").resolve()
+
+
+def table_exists(cursor: sqlite3.Cursor, table_name: str) -> bool:
+    row = cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone()
+    return bool(row)
+
+
+def main() -> int:
+    db_path = resolve_db_path()
+    if not db_path.exists():
+        print(f"Database not found: {db_path}")
+        return 1
+
+    conn = sqlite3.connect(str(db_path))
     cur = conn.cursor()
+    try:
+        targets = ["messages", "tool_logs", "decisions", "tasks", "reactions", "build_results", "api_usage"]
 
-    # Count before
-    msg_count = cur.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
-    tool_count = cur.execute("SELECT COUNT(*) FROM tool_logs").fetchone()[0]
-    decision_count = cur.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
-    task_count = cur.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        print(f"Using database: {db_path}")
+        print("Before cleanup:")
+        for table in targets:
+            if table_exists(cur, table):
+                count = cur.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                print(f"  {table}: {count}")
+        print()
 
-    print(f"Before cleanup:")
-    print(f"  Messages:  {msg_count}")
-    print(f"  Tool logs: {tool_count}")
-    print(f"  Decisions: {decision_count}")
-    print(f"  Tasks:     {task_count}")
-    print()
+        deleted_summary: dict[str, int] = {}
+        for table in targets:
+            if table_exists(cur, table):
+                deleted = cur.execute(f"DELETE FROM {table}").rowcount or 0
+                deleted_summary[table] = int(deleted)
 
-    # Delete everything
-    cur.execute("DELETE FROM messages")
-    cur.execute("DELETE FROM tool_logs")
-    cur.execute("DELETE FROM decisions")
-    cur.execute("DELETE FROM tasks")
+        conn.commit()
 
-    # Also clean reactions and build_results if they exist
-    for table in ["reactions", "build_results"]:
-        try:
-            cur.execute(f"DELETE FROM {table}")
-        except sqlite3.OperationalError:
-            pass
+        print("Cleanup complete:")
+        for table, deleted in deleted_summary.items():
+            print(f"  {table}: deleted {deleted}")
+        return 0
+    finally:
+        conn.close()
 
-    conn.commit()
-
-    print("Deleted ALL messages, tool logs, decisions, tasks, reactions, and build results.")
-    print("Database is clean. Restart the app for a fresh start.")
-
-    conn.close()
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -11,6 +11,7 @@ from server import build_runner, ollama_client, project_manager
 from server.agent_engine import get_conversation_status, process_message
 from server.database import DB_PATH, init_db, insert_message
 
+ROOT = Path(__file__).resolve().parents[1]
 
 PROJECT_NAME = "test-calculator"
 CHANNEL = "main"
@@ -36,7 +37,7 @@ def _write_placeholder_test():
 
 
 def _log_failures_md() -> Path:
-    out = Path("C:/AI_WORKSPACE/ai-office/tests/e2e_test_log.md")
+    out = ROOT / "tests" / "e2e_test_log.md"
     out.parent.mkdir(parents=True, exist_ok=True)
 
     lines = [

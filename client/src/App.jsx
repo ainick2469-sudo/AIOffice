@@ -12,6 +12,7 @@ import AgentProfile from './components/AgentProfile';
 import AgentConfig from './components/AgentConfig';
 import ProjectPanel from './components/ProjectPanel';
 import GitPanel from './components/GitPanel';
+import ConsolePanel from './components/ConsolePanel';
 import './App.css';
 
 export default function App() {
@@ -97,6 +98,9 @@ export default function App() {
           <button className={panel === 'git' ? 'active' : ''} onClick={() => setPanel('git')}>
             Git
           </button>
+          <button className={panel === 'console' ? 'active' : ''} onClick={() => setPanel('console')}>
+            Console
+          </button>
           <button className={panel === 'agents' ? 'active' : ''} onClick={() => setPanel('agents')}>
             Agents
           </button>
@@ -129,6 +133,7 @@ export default function App() {
         {panel === 'controls' && <Controls />}
         {panel === 'projects' && <ProjectPanel channel={channel} />}
         {panel === 'git' && <GitPanel channel={channel} />}
+        {panel === 'console' && <ConsolePanel channel={channel} />}
         {panel === 'agents' && <AgentConfig />}
       </div>
 

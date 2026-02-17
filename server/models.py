@@ -132,6 +132,77 @@ class ExecuteCodeIn(BaseModel):
     code: str = Field(..., min_length=1, max_length=60000)
 
 
+AutonomyMode = Literal["SAFE", "TRUSTED", "ELEVATED"]
+
+
+class AutonomyModeIn(BaseModel):
+    mode: AutonomyMode
+
+
+class ProcessStartIn(BaseModel):
+    channel: str = "main"
+    command: str = Field(..., min_length=1, max_length=1000)
+    name: Optional[str] = None
+    project: Optional[str] = None
+
+
+class ProcessStopIn(BaseModel):
+    channel: str = "main"
+    process_id: str = Field(..., min_length=1, max_length=80)
+
+
+class ProcessInfoOut(BaseModel):
+    id: str
+    name: str
+    channel: str
+    project: Optional[str] = None
+    cwd: Optional[str] = None
+    command: str
+    pid: Optional[int] = None
+    status: str
+    started_at: Optional[int] = None
+    ended_at: Optional[int] = None
+    exit_code: Optional[int] = None
+
+
+class ConsoleEventOut(BaseModel):
+    id: int
+    channel: str
+    project_name: Optional[str] = None
+    event_type: str
+    source: str
+    severity: str = "info"
+    message: Optional[str] = None
+    data: dict = Field(default_factory=dict)
+    created_at: str
+
+
+class CreateSkillIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=50)
+    channel: str = "main"
+    agent_id: str = "user"
+
+
+class PolicyDecisionOut(BaseModel):
+    allowed: bool
+    requires_approval: bool = False
+    mode: AutonomyMode
+    project: str
+    tool_type: str
+    reason: str
+    timeout_seconds: int = 45
+    output_limit: int = 12000
+
+
+class VerificationLoopEventOut(BaseModel):
+    project: str
+    stage: Literal["build", "test"]
+    ok: bool
+    exit_code: Optional[int] = None
+    attempt: int = 1
+    summary: Optional[str] = None
+
+
 class WSMessage(BaseModel):
     """WebSocket message envelope."""
     type: Literal["chat", "typing", "ping", "system"] = "chat"

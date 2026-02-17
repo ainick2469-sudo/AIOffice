@@ -1,6 +1,58 @@
 # AI OFFICE — Development Log
 # Complete changelog from project inception to current state
-# Last updated: 2026-02-15
+# Last updated: 2026-02-17
+
+---
+
+## SESSION 30 - Autonomy/Process/Console Stabilization + Test Expansion (2026-02-17)
+
+### Backend reliability and policy execution
+- [x] Added/validated autonomy policy engine (`server/policy.py`) with mode-aware command/path guardrails.
+- [x] Added process manager (`server/process_manager.py`) with channel-scoped start/stop/list and kill switch.
+- [x] Added extracted post-write verification module (`server/verification_loop.py`) and confirmed integration path.
+- [x] Added observability helper (`server/observability.py`) and console-event persistence routes.
+- [x] Added skills loader runtime (`server/skills_loader.py`) + create/reload route coverage.
+
+### Test isolation + smoke stability fixes
+- [x] Hardened `tests/conftest.py` to bootstrap isolated DB and assert env-root isolation.
+- [x] Updated `with-runtime.cmd` to include common LocalAppData Python paths for shell reproducibility.
+- [x] Fixed smoke script import path portability for:
+  - `tools/runtime_smoke.py`
+  - `tools/startup_smoke.py`
+  - `tools/desktop_smoke.py`
+- [x] Updated `tools/toolchain_smoke.py` for SAFE/TRUSTED mode behavior during run-tool checks.
+- [x] Updated runtime upload assertion to support runtime-home upload location.
+
+### New backend tests added
+- [x] `tests/test_autonomy_policy.py`
+- [x] `tests/test_process_manager.py`
+- [x] `tests/test_verification_loop.py`
+- [x] `tests/test_tool_format_compliance.py`
+- [x] `tests/test_skills_plugin_loader.py`
+- [x] `tests/test_create_skill_tool.py`
+- [x] `tests/test_project_scoped_memory.py`
+- [x] `tests/test_console_events_api.py`
+
+### Frontend wiring completed
+- [x] Added Console tab wiring in `client/src/App.jsx` using `client/src/components/ConsolePanel.jsx`.
+- [x] Extended `client/src/components/ProjectPanel.jsx` with:
+  - autonomy mode get/set UI
+  - process start/stop/list controls
+  - kill-switch control
+- [x] Extended `client/src/components/ChatRoom.jsx` with:
+  - active autonomy mode badge
+  - channel kill-switch button
+- [x] Added supporting styles in `client/src/App.css`.
+
+### Verification (this session)
+- [x] `python -m pytest -q tests` PASS (`35 passed`)
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
+- [x] `tools/runtime_smoke.py` PASS
+- [x] `tools/startup_smoke.py` PASS
+- [x] `tools/desktop_smoke.py` PASS
+- [x] `tools/toolchain_smoke.py` PASS
+- [x] `tools/personality_smoke.py` PASS
 
 ---
 
@@ -1158,3 +1210,60 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - [x] `client/dev-lint.cmd` PASS
 - [x] `client/dev-build.cmd` PASS
 - [x] `build-desktop.cmd` PASS (PyInstaller build complete, executable created)
+
+---
+
+## SESSION 29 - Path Portability + Test Isolation Baseline (2026-02-17)
+
+### Runtime path portability foundation
+- [x] Added `server/runtime_paths.py` as centralized path/env source of truth:
+  - app root from `Path(__file__).resolve()`
+  - runtime storage defaults from `platformdirs` (`%LOCALAPPDATA%\\AIOffice`)
+  - env overrides:
+    - `AI_OFFICE_HOME`
+    - `AI_OFFICE_PROJECTS_DIR`
+    - `AI_OFFICE_DB_PATH`
+    - `AI_OFFICE_MEMORY_DIR`
+- [x] Refactored path/runtime env usage in:
+  - `server/project_manager.py`
+  - `server/build_runner.py`
+  - `server/routes_api.py`
+  - `server/database.py`
+  - `server/memory.py`
+  - `server/main.py`
+  - `server/tool_gateway.py`
+- [x] Removed user-specific Python path and repo-absolute assumptions from launchers/wrappers:
+  - `start.py`
+  - `app.py`
+  - `dev.py`
+  - `with-runtime.cmd`
+  - `desktop-launch.cmd`
+  - `build-desktop.cmd`
+  - `tools/build_desktop_exe.py` (default Python now `sys.executable`)
+
+### Test/data isolation
+- [x] Added `tests/conftest.py` to force test-only runtime paths:
+  - temp `AI_OFFICE_HOME`
+  - temp `AI_OFFICE_PROJECTS_DIR`
+  - temp `AI_OFFICE_MEMORY_DIR`
+  - temp `AI_OFFICE_DB_PATH`
+- [x] Updated cleanup scripts to use env/platformdirs DB resolution (no hardcoded DB paths):
+  - `tools/clean_test_data.py`
+  - `tools/clean_all.py`
+  - `tools/nuke_data.py`
+
+### Smoke script portability
+- [x] Removed hardcoded Python path from:
+  - `tools/runtime_smoke.py`
+  - `tools/startup_smoke.py`
+  - `tools/desktop_smoke.py`
+  (now use `sys.executable` + centralized runtime PATH helper)
+
+### Documentation
+- [x] Updated `README.md` runtime command examples to remove user-specific absolute paths.
+- [x] Documented runtime env override variables in `README.md`.
+
+### Verification status
+- [!] In this execution shell, `python`/`py` are not available, so backend/runtime checks could not be executed in-session.
+- [x] `node` and `git` were available via `with-runtime.cmd`; frontend checks were runnable.
+- [x] Code changes are staged in source; run validation once toolchain binaries are available in shell.

@@ -12,3 +12,6 @@
 {"type": "constraint", "content": "No complex emotions or features beyond basic emotional tone indicators are to be included in the initial version.", "source": "audio", "timestamp": "2026-02-14T16:20:07.852307", "agent": "shared"}
 {"type": "decision", "content": "The app will focus solely on volume measurement and noise cancellation without any emotional indicators.", "source": "audio", "timestamp": "2026-02-14T16:23:03.944843", "agent": "shared"}
 {"type": "constraint", "content": "The app should gracefully handle speech-to-text API network issues by displaying an error message and offering retry or manual input options.", "source": "audio", "timestamp": "2026-02-14T16:23:04.034283", "agent": "shared"}
+{"type": "decision", "content": "The team will build a voice meter app focusing solely on volume measurement and noise cancellation.", "source": "main", "timestamp": "2026-02-16T14:12:28.017731", "agent": "shared"}
+{"type": "decision", "content": "The project will focus on building a voice meter app that measures volume levels and includes noise cancellation.", "source": "main", "timestamp": "2026-02-16T19:21:02.387853", "agent": "shared"}
+{"type": "constraint", "content": "No inclusion of emotional tone indicators in the initial version of the app.", "source": "main", "timestamp": "2026-02-16T19:21:02.406557", "agent": "shared"}

@@ -13,7 +13,12 @@ import httpx
 import websockets
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON_EXE = Path(r"C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe")
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from server.runtime_paths import AI_OFFICE_HOME, build_runtime_env
+
+PYTHON_EXE = Path(sys.executable).resolve()
 RUN_CMD = [
     str(PYTHON_EXE),
     "-m",
@@ -76,14 +81,7 @@ async def websocket_echo_check(marker: str) -> bool:
 
 
 def main() -> int:
-    env = os.environ.copy()
-    env["PATH"] = ";".join([
-        r"C:\Windows\System32",
-        r"C:\Windows",
-        r"C:\Program Files\nodejs",
-        r"C:\Users\nickb\AppData\Local\Programs\Python\Python312",
-        env.get("PATH", ""),
-    ])
+    env = build_runtime_env(os.environ.copy())
 
     server = subprocess.Popen(
         RUN_CMD,
@@ -95,7 +93,7 @@ def main() -> int:
     )
 
     failures: list[str] = []
-    uploaded_file: Path | None = None
+    uploaded_files: list[Path] = []
     try:
         if not wait_for_port("127.0.0.1", 8000, timeout=40):
             failures.append("server_port_8000_not_ready")
@@ -158,9 +156,13 @@ def main() -> int:
                 if not rel:
                     failures.append("file_upload_missing_path")
                 else:
-                    uploaded_file = ROOT / rel
-                    if not uploaded_file.exists():
+                    repo_candidate = ROOT / rel
+                    runtime_candidate = AI_OFFICE_HOME / rel
+                    target = repo_candidate if repo_candidate.exists() else runtime_candidate
+                    if not target.exists():
                         failures.append("uploaded_file_missing_on_disk")
+                    else:
+                        uploaded_files.append(target)
 
         marker = f"[runtime-smoke-{int(time.time())}]"
         ws_ok = asyncio.run(websocket_echo_check(marker))
@@ -168,7 +170,9 @@ def main() -> int:
             failures.append("websocket_echo_failed")
 
     finally:
-        if uploaded_file and uploaded_file.exists():
+        for uploaded_file in uploaded_files:
+            if not uploaded_file.exists():
+                continue
             try:
                 uploaded_file.unlink()
             except Exception:

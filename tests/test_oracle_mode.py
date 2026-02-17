@@ -4,10 +4,11 @@ from pathlib import Path
 
 from server import agent_engine as engine
 from server.database import get_messages, init_db
+from server.runtime_paths import APP_ROOT
 
 
 def test_oracle_file_selection_prefers_routes_for_endpoint_questions():
-    root = Path("C:/AI_WORKSPACE/ai-office")
+    root = Path(APP_ROOT)
     selected = engine._oracle_select_files(root, "how many API endpoints do we have?")
     assert selected, "Oracle should select at least one file"
     assert any("routes_api.py" in path.as_posix().lower() for path in selected)

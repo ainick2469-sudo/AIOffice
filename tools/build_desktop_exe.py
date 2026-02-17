@@ -70,7 +70,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build standalone AI Office desktop executable.")
     parser.add_argument(
         "--python",
-        default=r"C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe",
+        default=sys.executable,
         help="Python executable to use for build steps.",
     )
     parser.add_argument("--skip-install", action="store_true", help="Skip PyInstaller installation check.")

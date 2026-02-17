@@ -3,26 +3,21 @@
 import asyncio
 import json
 import logging
-import os
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from .database import get_db
+from .observability import emit_console_event
+from .policy import evaluate_tool_policy
 from .project_manager import APP_ROOT, get_sandbox_root
+from .runtime_paths import build_runtime_env
 
 logger = logging.getLogger("ai-office.tools")
 
 # Default sandbox root — tools cannot escape this or active project root.
 SANDBOX = APP_ROOT
-SYSTEM_ROOT = os.environ.get("SystemRoot", r"C:\Windows")
-RUNTIME_PATH_PREFIX = [
-    str(Path(SYSTEM_ROOT) / "System32"),
-    SYSTEM_ROOT,
-    r"C:\Program Files\nodejs",
-    r"C:\Users\nickb\AppData\Local\Programs\Python\Python312",
-]
 
 # Allow-listed command prefixes (exact shell operators are blocked below)
 ALLOWED_COMMAND_PREFIXES = [
@@ -195,6 +190,16 @@ async def _audit_log(agent_id: str, tool_type: str, command: str,
 
 async def tool_read_file(agent_id: str, filepath: str, channel: str = "main") -> dict:
     """Read a file within the sandbox."""
+    policy = await evaluate_tool_policy(
+        channel=channel,
+        tool_type="read",
+        agent_id=agent_id,
+        target_path=filepath,
+        approved=True,
+    )
+    if not policy.get("allowed"):
+        return {"ok": False, "error": policy.get("reason", "Policy denied read."), "policy": policy}
+
     sandbox = await get_sandbox_root(channel)
     if not _is_safe_path(filepath, sandbox):
         result = {"ok": False, "error": f"Path outside sandbox: {filepath}"}
@@ -225,7 +230,7 @@ async def tool_read_file(agent_id: str, filepath: str, channel: str = "main") ->
 
         await _audit_log(agent_id, "read", f"read_file: {filepath}",
                          output=f"{len(content)} chars", exit_code=0)
-        return {"ok": True, "content": content, "path": str(resolved), "channel": channel}
+        return {"ok": True, "content": content, "path": str(resolved), "channel": channel, "policy": policy}
     except Exception as e:
         result = {"ok": False, "error": str(e)}
         await _audit_log(agent_id, "read", f"read_file: {filepath}",
@@ -235,6 +240,16 @@ async def tool_read_file(agent_id: str, filepath: str, channel: str = "main") ->
 
 async def tool_search_files(agent_id: str, pattern: str, directory: str = ".", channel: str = "main") -> dict:
     """Search for files matching a glob pattern within sandbox."""
+    policy = await evaluate_tool_policy(
+        channel=channel,
+        tool_type="read",
+        agent_id=agent_id,
+        target_path=directory,
+        approved=True,
+    )
+    if not policy.get("allowed"):
+        return {"ok": False, "error": policy.get("reason", "Policy denied search."), "policy": policy}
+
     sandbox = await get_sandbox_root(channel)
     base = sandbox / directory if not Path(directory).is_absolute() else Path(directory)
     if not str(base.resolve()).startswith(str(sandbox.resolve())):
@@ -257,12 +272,12 @@ async def tool_search_files(agent_id: str, pattern: str, directory: str = ".", c
 
         await _audit_log(agent_id, "read", f"search: {pattern} in {directory}",
                          output=f"{len(matches)} matches", exit_code=0)
-        return {"ok": True, "matches": matches, "channel": channel}
+        return {"ok": True, "matches": matches, "channel": channel, "policy": policy}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
-async def tool_run_command(agent_id: str, command: str, channel: str = "main") -> dict:
+async def tool_run_command(agent_id: str, command: str, channel: str = "main", approved: bool = False) -> dict:
     """Run an allow-listed command within the sandbox."""
     sandbox = await get_sandbox_root(channel)
     try:
@@ -273,23 +288,32 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main") -
                          output=result["error"], exit_code=-1)
         return result
 
-    if not _is_command_allowed(normalized_command):
-        result = {"ok": False, "error": f"Command not in allowlist: {normalized_command}"}
+    policy = await evaluate_tool_policy(
+        channel=channel,
+        tool_type="run",
+        agent_id=agent_id,
+        command=normalized_command,
+        target_path=str(target_dir),
+        approved=approved,
+    )
+    if not policy.get("allowed"):
+        result = {"ok": False, "error": policy.get("reason", "Policy denied command."), "policy": policy}
         await _audit_log(agent_id, "run", command,
                          output=result["error"], exit_code=-1)
+        await emit_console_event(
+            channel=channel,
+            event_type="policy_block",
+            source="tool_gateway",
+            message=result["error"],
+            severity="warning",
+            data={"agent_id": agent_id, "command": normalized_command},
+        )
         return result
 
-    timeout_seconds = _command_timeout_seconds(normalized_command)
+    timeout_seconds = int(policy.get("timeout_seconds") or _command_timeout_seconds(normalized_command))
 
     try:
-        env = os.environ.copy()
-        existing = env.get("PATH", "")
-        env["PATH"] = ";".join(
-            RUNTIME_PATH_PREFIX + [
-                r"C:\Program Files\Git\cmd",
-                existing,
-            ]
-        )
+        env = build_runtime_env()
 
         proc = await asyncio.create_subprocess_shell(
             normalized_command,
@@ -318,6 +342,7 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main") -
             "stderr": stderr_str,
             "exit_code": exit_code,
             "channel": channel,
+            "policy": policy,
         }
     except asyncio.TimeoutError:
         await _audit_log(agent_id, "run", f"{normalized_command} @ {target_dir}",
@@ -327,11 +352,12 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main") -
             "error": f"Command timed out ({timeout_seconds}s)",
             "cwd": str(target_dir),
             "channel": channel,
+            "policy": policy,
         }
     except Exception as e:
         await _audit_log(agent_id, "run", f"{normalized_command} @ {target_dir}",
                          output=str(e), exit_code=-1)
-        return {"ok": False, "error": str(e), "cwd": str(target_dir), "channel": channel}
+        return {"ok": False, "error": str(e), "cwd": str(target_dir), "channel": channel, "policy": policy}
 
 
 async def tool_write_file(
@@ -342,6 +368,16 @@ async def tool_write_file(
     channel: str = "main",
 ) -> dict:
     """Write a file with diff preview. Auto-approved for sandboxed writes."""
+    policy = await evaluate_tool_policy(
+        channel=channel,
+        tool_type="write",
+        agent_id=agent_id,
+        target_path=filepath,
+        approved=approved,
+    )
+    if not policy.get("allowed"):
+        return {"ok": False, "error": policy.get("reason", "Policy denied write."), "policy": policy}
+
     sandbox = await get_sandbox_root(channel)
     if not _is_safe_path(filepath, sandbox):
         return {"ok": False, "error": f"Path outside sandbox: {filepath}"}
@@ -372,6 +408,7 @@ async def tool_write_file(
             "size": len(content),
             "requires_approval": True,
             "channel": channel,
+            "policy": policy,
         }
 
     # Actually write
@@ -381,7 +418,14 @@ async def tool_write_file(
         await _audit_log(agent_id, "write", f"write_file: {filepath}",
                          output=f"Written {len(content)} chars", exit_code=0,
                          approved_by="user")
-        return {"ok": True, "action": "written", "path": str(resolved), "size": len(content), "channel": channel}
+        return {
+            "ok": True,
+            "action": "written",
+            "path": str(resolved),
+            "size": len(content),
+            "channel": channel,
+            "policy": policy,
+        }
     except Exception as e:
         await _audit_log(agent_id, "write", f"write_file: {filepath}",
                          output=str(e), exit_code=-1)

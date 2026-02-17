@@ -1,21 +1,52 @@
-import sqlite3, os
-db = r'C:\AI_WORKSPACE\ai-office\data\office.db'
-print(f"DB exists: {os.path.exists(db)}")
-conn = sqlite3.connect(db)
-c = conn.cursor()
+"""Hard reset of dynamic database tables for the active AI Office environment."""
 
-tables = [t[0] for t in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-print(f"\nTables: {tables}\n")
-for t in tables:
-    count = c.execute(f"SELECT COUNT(*) FROM [{t}]").fetchone()[0]
-    print(f"  {t}: {count} rows")
+from __future__ import annotations
 
-print("\nCleaning ALL data...")
-for t in ["messages", "tool_logs", "decisions", "tasks", "reactions", "build_results", "api_usage"]:
-    if t in tables:
-        c.execute(f"DELETE FROM [{t}]")
-        print(f"  Cleared {t}")
+import os
+import sqlite3
+from pathlib import Path
 
-conn.commit()
-conn.close()
-print("\nDone! Database is clean.")
+from platformdirs import user_data_dir
+
+
+def resolve_db_path() -> Path:
+    explicit = os.environ.get("AI_OFFICE_DB_PATH", "").strip()
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+
+    home = os.environ.get("AI_OFFICE_HOME", "").strip()
+    if home:
+        return (Path(home).expanduser().resolve() / "data" / "office.db")
+
+    default_home = Path(user_data_dir("AIOffice", appauthor=False))
+    return (default_home / "data" / "office.db").resolve()
+
+
+def main() -> int:
+    db_path = resolve_db_path()
+    print(f"DB path: {db_path}")
+    if not db_path.exists():
+        print("Database does not exist; nothing to clear.")
+        return 0
+
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    try:
+        tables = [row[0] for row in cur.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        print(f"Tables detected: {tables}")
+
+        targets = ["messages", "tool_logs", "decisions", "tasks", "message_reactions", "build_results", "api_usage"]
+        for table in targets:
+            if table in tables:
+                cur.execute(f"DELETE FROM [{table}]")
+                print(f"Cleared {table}")
+
+        conn.commit()
+        print("Done.")
+        return 0
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

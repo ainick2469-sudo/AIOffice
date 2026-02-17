@@ -2,7 +2,6 @@
 
 import json
 import re
-import shutil
 import os
 from datetime import datetime
 from pathlib import Path
@@ -10,10 +9,14 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from typing import Optional
 from . import database as db
 from .models import (
+    AutonomyModeIn,
     AgentOut,
     AgentUpdateIn,
     AppBuilderStartIn,
     BuildConfigIn,
+    CreateSkillIn,
+    ProcessStartIn,
+    ProcessStopIn,
     ExecuteCodeIn,
     OllamaPullIn,
     ProjectCreateIn,
@@ -22,35 +25,26 @@ from .models import (
     TaskIn,
     TaskUpdateIn,
 )
+from .runtime_paths import (
+    AI_OFFICE_HOME,
+    APP_ROOT,
+    build_runtime_env,
+    executable_candidates,
+    resolve_executable as resolve_runtime_executable,
+)
 
 router = APIRouter(prefix="/api", tags=["api"])
-PROJECT_ROOT = Path("C:/AI_WORKSPACE/ai-office")
-UPLOADS_DIR = PROJECT_ROOT / "uploads"
+PROJECT_ROOT = APP_ROOT
+UPLOADS_DIR = AI_OFFICE_HOME / "uploads"
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 def _resolve_executable(name: str, candidates: list[str]) -> str:
-    found = shutil.which(name)
-    if found:
-        return found
-    for path in candidates:
-        if Path(path).exists():
-            return path
-    return name
+    return resolve_runtime_executable(name, candidates)
 
 
 def _runtime_env() -> dict:
-    env = os.environ.copy()
-    path_prefix = [
-        r"C:\Windows\System32",
-        r"C:\Windows",
-        r"C:\Program Files\Git\cmd",
-        r"C:\Program Files\Git\bin",
-        r"C:\Program Files\nodejs",
-        r"C:\Users\nickb\AppData\Local\Programs\Python\Python312",
-    ]
-    env["PATH"] = ";".join(path_prefix + [env.get("PATH", "")])
-    return env
+    return build_runtime_env(os.environ.copy())
 
 
 def _safe_filename(name: str) -> str:
@@ -288,6 +282,21 @@ async def get_project_status_route(channel: str):
     return await pm.get_project_status(channel)
 
 
+@router.get("/projects/{name}/autonomy-mode")
+async def get_project_autonomy_mode(name: str):
+    mode = await db.get_project_autonomy_mode(name)
+    return {"project": name, "mode": mode}
+
+
+@router.put("/projects/{name}/autonomy-mode")
+async def set_project_autonomy_mode(name: str, body: AutonomyModeIn):
+    try:
+        mode = await db.set_project_autonomy_mode(name, body.mode)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "project": name, "mode": mode}
+
+
 @router.delete("/projects/{name}")
 async def delete_project_route(name: str, confirm_token: Optional[str] = Query(default=None)):
     from . import project_manager as pm
@@ -385,25 +394,9 @@ async def execute_code(body: ExecuteCodeIn):
     if "&&" in code or "||" in code:
         raise HTTPException(400, "Shell chaining is not allowed.")
 
-    python_exe = _resolve_executable(
-        "python",
-        [
-            r"C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe",
-            r"C:\Program Files\Python312\python.exe",
-        ],
-    )
-    node_exe = _resolve_executable(
-        "node",
-        [
-            r"C:\Program Files\nodejs\node.exe",
-        ],
-    )
-    bash_exe = _resolve_executable(
-        "bash",
-        [
-            r"C:\Program Files\Git\bin\bash.exe",
-        ],
-    )
+    python_exe = _resolve_executable("python", executable_candidates("python"))
+    node_exe = _resolve_executable("node", executable_candidates("node"))
+    bash_exe = _resolve_executable("bash", executable_candidates("bash"))
 
     suffix_map = {"python": ".py", "javascript": ".js", "bash": ".sh"}
     run_map = {
@@ -652,6 +645,21 @@ async def clear_audit_all():
         await conn.close()
 
 
+@router.get("/console/events/{channel}")
+async def get_console_events_route(
+    channel: str,
+    limit: int = 200,
+    event_type: Optional[str] = None,
+    source: Optional[str] = None,
+):
+    return await db.get_console_events(
+        channel=channel,
+        limit=limit,
+        event_type=event_type,
+        source=source,
+    )
+
+
 @router.post("/tools/read")
 async def tool_read(filepath: str, agent_id: str = "user", channel: str = "main"):
     from .tool_gateway import tool_read_file
@@ -687,6 +695,22 @@ async def tool_web_search(query: str):
 async def tool_web_fetch(url: str):
     from . import web_search
     return await web_search.fetch_url(url)
+
+
+@router.post("/tools/create-skill")
+async def create_skill_route(body: CreateSkillIn):
+    from . import skills_loader
+
+    created = skills_loader.create_skill_scaffold(body.name)
+    if not created.get("ok"):
+        raise HTTPException(400, created.get("error", "Failed to create skill."))
+    return {"ok": True, "skill": created}
+
+
+@router.post("/skills/reload")
+async def reload_skills_route():
+    from . import skills_loader
+    return skills_loader.reload_skills()
 
 
 @router.post("/release-gate")
@@ -750,7 +774,8 @@ async def work_start(body: dict):
     from .autonomous_worker import start_work
 
     channel = str(body.get("channel", "main")).strip() or "main"
-    return start_work(channel)
+    approved = bool(body.get("approved", False))
+    return start_work(channel, approved=approved)
 
 
 @router.post("/work/stop")
@@ -766,6 +791,53 @@ async def work_status(channel: str):
     from .autonomous_worker import get_work_status
 
     return get_work_status(channel)
+
+
+@router.post("/process/start")
+async def process_start(body: ProcessStartIn):
+    from . import process_manager
+
+    try:
+        result = await process_manager.start_process(
+            channel=(body.channel or "main").strip() or "main",
+            command=body.command,
+            name=body.name,
+            project=body.project,
+        )
+        return {"ok": True, "process": result}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.post("/process/stop")
+async def process_stop(body: ProcessStopIn):
+    from . import process_manager
+
+    try:
+        result = await process_manager.stop_process(
+            channel=(body.channel or "main").strip() or "main",
+            process_id=body.process_id,
+        )
+        return {"ok": True, "process": result}
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.get("/process/list/{channel}")
+async def process_list(channel: str, include_logs: bool = False):
+    from . import process_manager
+
+    processes = await process_manager.list_processes(channel, include_logs=include_logs)
+    return {"channel": channel, "processes": processes}
+
+
+@router.post("/process/kill-switch")
+async def process_kill_switch(body: dict):
+    from . import process_manager
+
+    channel = str(body.get("channel", "main")).strip() or "main"
+    result = await process_manager.kill_switch(channel)
+    return result
 
 
 @router.get("/conversation/{channel}")
@@ -801,9 +873,11 @@ async def update_task_status(task_id: int, body: dict):
 @router.get("/files/tree")
 async def file_tree(path: str = "."):
     """Get directory tree for file viewer."""
-    from pathlib import Path
-    base = Path("C:/AI_WORKSPACE/ai-office") / path
-    if not str(base.resolve()).startswith(str(Path("C:/AI_WORKSPACE/ai-office").resolve())):
+    root = PROJECT_ROOT.resolve()
+    base = (root / path).resolve()
+    try:
+        base.relative_to(root)
+    except Exception:
         return {"error": "Outside sandbox"}
 
     items = []
@@ -813,7 +887,7 @@ async def file_tree(path: str = "."):
                 continue
             items.append({
                 "name": entry.name,
-                "path": str(entry.relative_to(Path("C:/AI_WORKSPACE/ai-office"))).replace("\\", "/"),
+                "path": str(entry.relative_to(root)).replace("\\", "/"),
                 "type": "dir" if entry.is_dir() else "file",
                 "size": entry.stat().st_size if entry.is_file() else None,
             })

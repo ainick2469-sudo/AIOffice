@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from server.main import app
 from server import database as db
 from server import agent_engine
+from server.runtime_paths import APP_ROOT
 
 
 def test_usage_budget_threshold_summary():
@@ -74,7 +75,7 @@ def test_budget_exceeded_blocks_hosted_generation():
             patch("server.agent_engine._build_context", new=AsyncMock(return_value="User: hi")),
             patch("server.agent_engine.project_manager.get_active_project", new=AsyncMock(return_value={
                 "project": "ai-office",
-                "path": "C:/AI_WORKSPACE/ai-office",
+                "path": str(APP_ROOT),
                 "is_app_root": True,
             })),
             patch("server.agent_engine._build_file_context", new=AsyncMock(return_value="")),

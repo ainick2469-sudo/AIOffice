@@ -8,6 +8,8 @@ from server import ollama_client
 from server.agent_engine import get_conversation_status, process_message
 from server.database import get_messages, init_db, insert_message
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 async def main():
     channel = f"seg2-quality-baseline-{int(time.time())}"
@@ -45,7 +47,7 @@ async def main():
             content = (msg.get("content") or "").replace("\n", " ")
             output.append(f"- {msg.get('sender')}: {content}")
 
-        out_path = Path("C:/AI_WORKSPACE/ai-office/tests/segment2_conversation_baseline.md")
+        out_path = ROOT / "tests" / "segment2_conversation_baseline.md"
         out_path.write_text("\n".join(output), encoding="utf-8")
         print("BASELINE_LOG_WRITTEN", out_path)
         print("BASELINE_TOTAL_MESSAGES", len(messages))
