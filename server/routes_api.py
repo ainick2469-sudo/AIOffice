@@ -5,7 +5,7 @@ import re
 import os
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from typing import Optional
 from . import database as db
@@ -30,6 +30,7 @@ from .models import (
     PermissionPolicyOut,
     PermissionGrantIn,
     PermissionRevokeIn,
+    RunCommandIn,
     ProjectCreateIn,
     ProjectSwitchIn,
     ReactionToggleIn,
@@ -918,9 +919,34 @@ async def tool_search(pattern: str, directory: str = ".", channel: str = "main")
 
 
 @router.post("/tools/run")
-async def tool_run(command: str, agent_id: str = "user", channel: str = "main"):
+async def tool_run(request: Request, command: Optional[str] = None, agent_id: str = "user", channel: str = "main", approved: bool = False):
     from .tool_gateway import tool_run_command
-    return await tool_run_command(agent_id, command, channel=channel)
+
+    # Prefer structured JSON payloads (argv execution) when provided.
+    if (request.headers.get("content-type") or "").lower().startswith("application/json"):
+        try:
+            raw = await request.json()
+        except Exception:
+            raw = None
+        if isinstance(raw, dict) and raw:
+            try:
+                body = RunCommandIn(**raw)
+            except Exception as exc:
+                raise HTTPException(400, str(exc))
+            return await tool_run_command(
+                (body.agent_id or "user").strip() or "user",
+                body.command or "",
+                channel=(body.channel or "main").strip() or "main",
+                approved=bool(body.approved),
+                cmd=body.cmd,
+                cwd=body.cwd,
+                env=body.env,
+                timeout=body.timeout,
+            )
+
+    if not (command or "").strip():
+        raise HTTPException(400, "command is required")
+    return await tool_run_command(agent_id, command, channel=channel, approved=bool(approved))
 
 
 @router.post("/tools/write")

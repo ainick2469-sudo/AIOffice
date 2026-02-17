@@ -1,5 +1,6 @@
 """AI Office — Tool Executor. Parses tool calls from agent messages and runs them."""
 
+import json
 import re
 import logging
 from typing import Optional
@@ -230,12 +231,47 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                     msg = f"❌ **Read failed:** {result['error']}"
 
             elif tool_type == "run":
-                result = await tool_run_command(agent_id, call["arg"], channel=channel, approved=False)
+                run_arg = call.get("arg") or ""
+                run_payload = None
+                raw_arg = str(run_arg).strip()
+                if raw_arg.startswith("{") and raw_arg.endswith("}"):
+                    try:
+                        parsed = json.loads(raw_arg)
+                        if isinstance(parsed, dict) and isinstance(parsed.get("cmd"), list):
+                            run_payload = parsed
+                    except Exception:
+                        run_payload = None
+
+                if run_payload:
+                    result = await tool_run_command(
+                        agent_id,
+                        run_payload.get("command") or run_arg,
+                        channel=channel,
+                        approved=False,
+                        cmd=run_payload.get("cmd"),
+                        cwd=run_payload.get("cwd"),
+                        env=run_payload.get("env"),
+                        timeout=run_payload.get("timeout"),
+                    )
+                else:
+                    result = await tool_run_command(agent_id, call["arg"], channel=channel, approved=False)
                 if result.get("status") == "needs_approval":
                     request = result.get("request") or {}
                     approved = await wait_for_approval_response(request.get("id", ""), timeout_seconds=180)
                     if approved is True:
-                        result = await tool_run_command(agent_id, call["arg"], channel=channel, approved=True)
+                        if run_payload:
+                            result = await tool_run_command(
+                                agent_id,
+                                run_payload.get("command") or run_arg,
+                                channel=channel,
+                                approved=True,
+                                cmd=run_payload.get("cmd"),
+                                cwd=run_payload.get("cwd"),
+                                env=run_payload.get("env"),
+                                timeout=run_payload.get("timeout"),
+                            )
+                        else:
+                            result = await tool_run_command(agent_id, call["arg"], channel=channel, approved=True)
                     elif approved is False:
                         msg = (
                             f"🛑 **Run denied by user:** `{call['arg']}`\n"

@@ -3,7 +3,11 @@
 import asyncio
 import json
 import logging
+import os
 import re
+import shlex
+import shutil
+import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -390,16 +394,66 @@ async def tool_search_files(agent_id: str, pattern: str, directory: str = ".", c
         return {"ok": False, "error": str(e)}
 
 
-async def tool_run_command(agent_id: str, command: str, channel: str = "main", approved: bool = False) -> dict:
-    """Run an allow-listed command within the sandbox."""
+async def tool_run_command(
+    agent_id: str,
+    command: str = "",
+    channel: str = "main",
+    approved: bool = False,
+    *,
+    cmd: Optional[list[str]] = None,
+    cwd: Optional[str] = None,
+    env: Optional[dict[str, str]] = None,
+    timeout: Optional[int] = None,
+) -> dict:
+    """Run an allow-listed command within the sandbox.
+
+    - Legacy path: `command` shell-ish string (kept for backward compatibility).
+    - Preferred path: argv execution via `cmd=[...]` using `create_subprocess_exec`.
+    """
+
+    def _needs_cmd_wrapper(argv0: str) -> bool:
+        lower = (argv0 or "").strip().lower()
+        return lower in {"dir", "type", "copy", "move", "mkdir"}
+
     sandbox = await get_sandbox_root(channel)
-    try:
-        normalized_command, target_dir = _parse_command_target(command, sandbox)
-    except ValueError as e:
-        result = {"ok": False, "error": str(e)}
-        await _audit_log(agent_id, "run", command,
-                         output=result["error"], exit_code=-1)
-        return result
+    structured = bool(cmd)
+    target_dir = sandbox
+
+    if cmd:
+        argv = [str(item) for item in cmd if str(item).strip()]
+        if not argv:
+            result = {"ok": False, "error": "cmd is empty"}
+            await _audit_log(agent_id, "run", "(argv)",
+                             output=result["error"], exit_code=-1, channel=channel)
+            return result
+        if cwd:
+            candidate = Path(cwd)
+            if not candidate.is_absolute():
+                candidate = sandbox / candidate
+            resolved = candidate.resolve()
+            if not str(resolved).startswith(str(sandbox.resolve())):
+                return {"ok": False, "error": "cwd escapes sandbox", "channel": channel}
+            if resolved.exists() and not resolved.is_dir():
+                return {"ok": False, "error": "cwd is not a directory", "channel": channel}
+            target_dir = resolved
+        normalized_command = " ".join(argv)
+    else:
+        try:
+            normalized_command, target_dir = _parse_command_target(command, sandbox)
+        except ValueError as e:
+            result = {"ok": False, "error": str(e)}
+            await _audit_log(agent_id, "run", command,
+                             output=result["error"], exit_code=-1, channel=channel)
+            return result
+        try:
+            argv = shlex.split(normalized_command, posix=False)
+        except Exception:
+            argv = normalized_command.split()
+        if not argv:
+            result = {"ok": False, "error": "Command parsed to empty argv"}
+            await _audit_log(agent_id, "run", normalized_command,
+                             output=result["error"], exit_code=-1, channel=channel)
+            return result
 
     policy = await evaluate_tool_policy(
         channel=channel,
@@ -408,6 +462,7 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
         command=normalized_command,
         target_path=str(target_dir),
         approved=approved,
+        structured=structured,
     )
     if not policy.get("allowed"):
         if policy.get("requires_approval"):
@@ -416,13 +471,13 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
                 agent_id=agent_id,
                 tool_type="run",
                 command=normalized_command,
-                args={"cwd": str(target_dir)},
+                args={"cwd": str(target_dir), "cmd": argv},
                 policy=policy,
             )
             await _audit_log(
                 agent_id,
                 "run",
-                command,
+                normalized_command,
                 output="Awaiting approval response.",
                 exit_code=0,
                 approved_by="pending",
@@ -441,9 +496,16 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
                 "branch": policy.get("branch", "main"),
             }
         result = {"ok": False, "error": policy.get("reason", "Policy denied command."), "policy": policy}
-        await _audit_log(agent_id, "run", command,
-                         output=result["error"], exit_code=-1, channel=channel,
-                         policy_mode=policy.get("permission_mode"), reason=policy.get("reason"))
+        await _audit_log(
+            agent_id,
+            "run",
+            normalized_command,
+            output=result["error"],
+            exit_code=-1,
+            channel=channel,
+            policy_mode=policy.get("permission_mode"),
+            reason=policy.get("reason"),
+        )
         await emit_console_event(
             channel=channel,
             event_type="policy_block",
@@ -459,37 +521,77 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
         )
         return result
 
-    timeout_seconds = int(policy.get("timeout_seconds") or _command_timeout_seconds(normalized_command))
+    timeout_seconds = int(timeout or policy.get("timeout_seconds") or _command_timeout_seconds(normalized_command))
 
     try:
-        runtime_command = await runtime_manager.rewrite_command_for_workspace(channel, normalized_command)
-        env = build_runtime_env()
+        # Rewrite argv for per-workspace venv where applicable.
+        argv = await runtime_manager.rewrite_argv_for_workspace(channel, argv)
+        if _needs_cmd_wrapper(argv[0]):
+            command_line = subprocess.list2cmdline(argv)
+            if command_line.startswith('"'):
+                command_line = f'"{command_line}"'
+            argv = ["cmd", "/d", "/s", "/c", command_line]
 
-        proc = await asyncio.create_subprocess_shell(
-            runtime_command,
+        base_env = os.environ.copy()
+        if env:
+            for k, v in dict(env).items():
+                if k and v is not None:
+                    base_env[str(k)] = str(v)
+        run_env = build_runtime_env(base_env)
+
+        if argv:
+            head = (argv[0] or "").strip().lower()
+            if head in {"npm", "npx"}:
+                node_exe = shutil.which("node", path=run_env.get("PATH")) or "node"
+                node_dir = Path(node_exe).resolve().parent if Path(node_exe).exists() else None
+                if node_dir:
+                    cli_name = "npm-cli.js" if head == "npm" else "npx-cli.js"
+                    cli_path = (node_dir / "node_modules" / "npm" / "bin" / cli_name).resolve()
+                    if cli_path.exists():
+                        argv = [node_exe, str(cli_path)] + list(argv[1:])
+
+        if argv and (argv[0] or "").strip().lower() not in {"cmd", "cmd.exe"}:
+            resolved = shutil.which(str(argv[0]), path=run_env.get("PATH"))
+            if resolved and resolved.lower().endswith((".cmd", ".bat")):
+                command_line = subprocess.list2cmdline([resolved] + list(argv[1:]))
+                if command_line.startswith('"'):
+                    command_line = f'"{command_line}"'
+                argv = ["cmd", "/d", "/s", "/c", command_line]
+
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
             cwd=str(target_dir),
-            env=env,
+            env=run_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
 
-        stdout_str = stdout.decode("utf-8", errors="replace")[:5000]
-        stderr_str = stderr.decode("utf-8", errors="replace")[:2000]
+        output_limit = int(policy.get("output_limit") or 12000)
+        stdout_str = stdout.decode("utf-8", errors="replace")[:output_limit]
+        stderr_str = stderr.decode("utf-8", errors="replace")[:output_limit]
         exit_code = proc.returncode
 
         output = stdout_str
         if stderr_str:
             output += f"\nSTDERR:\n{stderr_str}"
 
-        await _audit_log(agent_id, "run", f"{runtime_command} @ {target_dir}",
-                         output=output, exit_code=exit_code,
-                         approved_by=("trusted_session" if policy.get("permission_mode") == "trusted" else "user"),
-                         channel=channel, policy_mode=policy.get("permission_mode"),
-                         reason=policy.get("reason"))
+        await _audit_log(
+            agent_id,
+            "run",
+            f"{normalized_command} @ {target_dir}",
+            args={"cmd": argv, "cwd": str(target_dir)},
+            output=output,
+            exit_code=exit_code,
+            approved_by=("trusted_session" if policy.get("permission_mode") == "trusted" else "user"),
+            channel=channel,
+            policy_mode=policy.get("permission_mode"),
+            reason=policy.get("reason"),
+        )
 
         return {
             "ok": exit_code == 0,
+            "cmd": argv,
             "cwd": str(target_dir),
             "stdout": stdout_str,
             "stderr": stderr_str,
@@ -500,10 +602,16 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
             "policy": policy,
         }
     except asyncio.TimeoutError:
-        await _audit_log(agent_id, "run", f"{normalized_command} @ {target_dir}",
-                         output=f"TIMEOUT after {timeout_seconds}s", exit_code=-1,
-                         channel=channel, policy_mode=policy.get("permission_mode"),
-                         reason=policy.get("reason"))
+        await _audit_log(
+            agent_id,
+            "run",
+            f"{normalized_command} @ {target_dir}",
+            output=f"TIMEOUT after {timeout_seconds}s",
+            exit_code=-1,
+            channel=channel,
+            policy_mode=policy.get("permission_mode"),
+            reason=policy.get("reason"),
+        )
         return {
             "ok": False,
             "error": f"Command timed out ({timeout_seconds}s)",
@@ -514,9 +622,16 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
             "policy": policy,
         }
     except Exception as e:
-        await _audit_log(agent_id, "run", f"{normalized_command} @ {target_dir}",
-                         output=str(e), exit_code=-1, channel=channel,
-                         policy_mode=policy.get("permission_mode"), reason=policy.get("reason"))
+        await _audit_log(
+            agent_id,
+            "run",
+            f"{normalized_command} @ {target_dir}",
+            output=str(e),
+            exit_code=-1,
+            channel=channel,
+            policy_mode=policy.get("permission_mode"),
+            reason=policy.get("reason"),
+        )
         return {
             "ok": False,
             "error": str(e),

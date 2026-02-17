@@ -79,11 +79,13 @@ def _mode_patterns(mode: str) -> tuple[str, ...]:
     return _SAFE_PATTERNS + _TRUSTED_EXTRA_PATTERNS + _ELEVATED_EXTRA_PATTERNS
 
 
-def _is_command_shape_safe(command: str) -> tuple[bool, str]:
+def _is_command_shape_safe(command: str, *, structured: bool = False) -> tuple[bool, str]:
     normalized = (command or "").strip().lower()
     if not normalized:
         return False, "Command is empty."
-    if any(token in normalized for token in SHELL_META_TOKENS):
+    # Only treat shell tokens as dangerous when we're executing a legacy shell-string command.
+    # For argv-based exec calls, these tokens are passed as literal arguments.
+    if not structured and any(token in normalized for token in SHELL_META_TOKENS):
         return False, "Shell chaining/redirection is blocked."
     for pattern in BLOCKED_PATTERNS:
         if re.search(pattern, normalized):
@@ -124,6 +126,7 @@ async def evaluate_tool_policy(
     command: str | None = None,
     target_path: str | None = None,
     approved: bool = False,
+    structured: bool = False,
 ) -> dict[str, Any]:
     active = await get_active_project(channel)
     project_name = active["project"]
@@ -209,7 +212,7 @@ async def evaluate_tool_policy(
         return decision
 
     command_text = (command or "").strip()
-    shape_ok, shape_reason = _is_command_shape_safe(command_text)
+    shape_ok, shape_reason = _is_command_shape_safe(command_text, structured=structured)
     if not shape_ok:
         decision.update({
             "allowed": False,

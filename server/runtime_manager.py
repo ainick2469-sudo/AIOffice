@@ -83,3 +83,27 @@ async def rewrite_command_for_workspace(channel: str, command: str) -> str:
 
     return cmd
 
+
+async def rewrite_argv_for_workspace(channel: str, argv: list[str]) -> list[str]:
+    """Rewrite argv to use the channel workspace venv when applicable.
+
+    This avoids quoting/escaping issues and enables safe exec-based subprocess calls.
+    """
+    if not argv:
+        return argv
+
+    info = await get_channel_workspace(channel)
+    venv_python = await ensure_workspace_venv(channel)
+    if info.get("venv") is None or not venv_python:
+        return argv
+
+    head = str(argv[0] or "").strip()
+    head_lower = head.lower()
+    if head_lower == "python" and len(argv) >= 3 and argv[1] == "-m" and argv[2] == "pip":
+        return [str(venv_python), "-m", "pip"] + argv[3:]
+    if head_lower == "python":
+        return [str(venv_python)] + argv[1:]
+    if head_lower == "pip":
+        return [str(venv_python), "-m", "pip"] + argv[1:]
+
+    return argv
