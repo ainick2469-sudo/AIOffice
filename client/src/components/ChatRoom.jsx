@@ -16,6 +16,7 @@ export default function ChatRoom({ channel }) {
   const [autonomyMode, setAutonomyMode] = useState('SAFE');
   const [permissionPolicy, setPermissionPolicy] = useState({ mode: 'ask', expires_at: null });
   const [workStatus, setWorkStatus] = useState({ running: false, processed: 0, errors: 0 });
+  const [processState, setProcessState] = useState({ total: 0, running: 0, items: [] });
   const [reactionsByMessage, setReactionsByMessage] = useState({});
   const [channelName, setChannelName] = useState(null);
   const [replyTo, setReplyTo] = useState(null);
@@ -29,6 +30,7 @@ export default function ChatRoom({ channel }) {
   const [activeApproval, setActiveApproval] = useState(null);
   const [trustMinutes, setTrustMinutes] = useState(30);
   const [approvalBusy, setApprovalBusy] = useState(false);
+  const [processActionBusy, setProcessActionBusy] = useState(false);
   const bottomRef = useRef(null);
   const statusInterval = useRef(null);
   const fileInputRef = useRef(null);
@@ -120,6 +122,14 @@ export default function ChatRoom({ channel }) {
         .then(r => r.json())
         .then(setWorkStatus)
         .catch(() => {});
+      fetch(`/api/process/list/${channel}`)
+        .then(r => (r.ok ? r.json() : { processes: [] }))
+        .then((data) => {
+          const items = Array.isArray(data?.processes) ? data.processes : [];
+          const running = items.filter((item) => item.status === 'running').length;
+          setProcessState({ total: items.length, running, items });
+        })
+        .catch(() => setProcessState({ total: 0, running: 0, items: [] }));
       fetch(`/api/permissions?channel=${encodeURIComponent(channel)}`)
         .then(r => (r.ok ? r.json() : { mode: 'ask', expires_at: null }))
         .then(setPermissionPolicy)
@@ -190,6 +200,11 @@ export default function ChatRoom({ channel }) {
     }
     if (lastEvent.type === 'kill_switch') {
       setAutonomyMode(lastEvent.autonomy_mode || 'SAFE');
+      setPermissionPolicy((prev) => ({
+        ...prev,
+        mode: lastEvent.permission_mode || 'ask',
+        expires_at: null,
+      }));
     }
     if (lastEvent.type === 'approval_request' && lastEvent.request?.id) {
       setApprovalQueue(prev => {
@@ -528,8 +543,37 @@ export default function ChatRoom({ channel }) {
       .then(r => r.json())
       .then((payload) => {
         setAutonomyMode(payload?.autonomy_mode || 'SAFE');
+        setPermissionPolicy((prev) => ({
+          ...prev,
+          mode: payload?.permission_mode || 'ask',
+          expires_at: null,
+        }));
+        refreshProcesses();
       })
       .catch(() => {});
+  };
+
+  const refreshProcesses = () => {
+    fetch(`/api/process/list/${channel}`)
+      .then(r => (r.ok ? r.json() : { processes: [] }))
+      .then((data) => {
+        const items = Array.isArray(data?.processes) ? data.processes : [];
+        const running = items.filter((item) => item.status === 'running').length;
+        setProcessState({ total: items.length, running, items });
+      })
+      .catch(() => setProcessState({ total: 0, running: 0, items: [] }));
+  };
+
+  const stopHeaderProcess = (processId) => {
+    if (!processId || processActionBusy) return;
+    setProcessActionBusy(true);
+    fetch('/api/process/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel, process_id: processId }),
+    })
+      .then(() => refreshProcesses())
+      .finally(() => setProcessActionBusy(false));
   };
 
   const resolveApproval = async (approved, approveAllForTask = false) => {
@@ -610,6 +654,12 @@ export default function ChatRoom({ channel }) {
   const sprintLabel = `SPRINT - ${formatElapsed(sprintRemaining)} remaining - Goal: ${sprintGoal}`;
   const approvalMode = (permissionPolicy?.mode || 'ask').toUpperCase();
   const approvalExpiry = permissionPolicy?.expires_at ? ` until ${new Date(permissionPolicy.expires_at).toLocaleTimeString()}` : '';
+  const runningProcesses = processState.items.filter((item) => item.status === 'running');
+  const processSummaryTitle = runningProcesses.length
+    ? runningProcesses
+      .map((item) => `${item.name} (pid ${item.pid || '-'}${item.port ? `, :${item.port}` : ''})`)
+      .join('\n')
+    : 'No running processes';
 
   return (
     <div className="chat-room">
@@ -634,8 +684,14 @@ export default function ChatRoom({ channel }) {
           <span className={`convo-status ${approvalMode === 'TRUSTED' ? 'active' : ''}`}>
             Approval: {approvalMode}{approvalExpiry}
           </span>
+          <span className={`convo-status ${processState.running > 0 ? 'active' : ''}`} title={processSummaryTitle}>
+            Processes: {processState.running} running
+          </span>
         </div>
         <div className="chat-header-right">
+          <button className="stop-btn" onClick={refreshProcesses}>
+            Refresh Proc
+          </button>
           <button className="stop-btn" onClick={runKillSwitch}>
             Kill Switch
           </button>
@@ -662,6 +718,17 @@ export default function ChatRoom({ channel }) {
               </button>
             </>
           )}
+          {runningProcesses.slice(0, 2).map((proc) => (
+            <button
+              key={proc.id}
+              className="stop-btn"
+              onClick={() => stopHeaderProcess(proc.id)}
+              disabled={processActionBusy}
+              title={proc.command}
+            >
+              Stop {proc.name}
+            </button>
+          ))}
         </div>
       </div>
 

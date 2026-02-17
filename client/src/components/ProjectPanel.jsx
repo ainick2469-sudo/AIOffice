@@ -22,6 +22,7 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
   const [processCommand, setProcessCommand] = useState('');
   const [processName, setProcessName] = useState('');
   const [processBusy, setProcessBusy] = useState({ start: false, kill: false });
+  const [expandedProcessId, setExpandedProcessId] = useState(null);
 
   const activeProjectName = active?.project || 'ai-office';
 
@@ -65,9 +66,10 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
       .catch(() => setAutonomyMode('SAFE'));
   }, []);
 
-  const loadProcesses = useCallback(() => {
+  const loadProcesses = useCallback((includeLogs = false) => {
     setProcessLoading(true);
-    fetch(`/api/process/list/${channel}`)
+    const suffix = includeLogs ? '?include_logs=true' : '';
+    fetch(`/api/process/list/${channel}${suffix}`)
       .then(r => r.json())
       .then((data) => setProcesses(Array.isArray(data?.processes) ? data.processes : []))
       .catch(() => setProcesses([]))
@@ -104,16 +106,16 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
 
   useEffect(() => {
     const immediate = setTimeout(() => {
-      loadProcesses();
+      loadProcesses(Boolean(expandedProcessId));
     }, 0);
     const interval = setInterval(() => {
-      loadProcesses();
+      loadProcesses(Boolean(expandedProcessId));
     }, 3000);
     return () => {
       clearTimeout(immediate);
       clearInterval(interval);
     };
-  }, [loadProcesses]);
+  }, [expandedProcessId, loadProcesses]);
 
   const projectNames = useMemo(() => projects.map(p => p.name), [projects]);
 
@@ -355,6 +357,15 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
       .catch((err) => setStatus(err?.message || 'Failed to stop process.'));
   };
 
+  const toggleProcessLogs = (processId) => {
+    if (expandedProcessId === processId) {
+      setExpandedProcessId(null);
+      return;
+    }
+    setExpandedProcessId(processId);
+    loadProcesses(true);
+  };
+
   const killSwitch = () => {
     const confirmed = window.confirm('Kill switch will stop all processes and set autonomy mode to SAFE. Continue?');
     if (!confirmed) return;
@@ -577,8 +588,11 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
             <button onClick={startProcess} disabled={processBusy.start || !processCommand.trim()}>
               {processBusy.start ? 'Starting...' : 'Start Process'}
             </button>
-            <button onClick={loadProcesses} disabled={processLoading}>
+            <button onClick={() => loadProcesses(Boolean(expandedProcessId))} disabled={processLoading}>
               {processLoading ? 'Refreshing...' : 'Refresh Processes'}
+            </button>
+            <button className="danger" onClick={killSwitch} disabled={processBusy.kill}>
+              {processBusy.kill ? 'Stopping...' : 'Stop All (Kill Switch)'}
             </button>
           </div>
           <div className="project-process-list">
@@ -591,12 +605,30 @@ export default function ProjectPanel({ channel = 'main', onProjectSwitch }) {
                   </div>
                   <div className="project-path">{proc.command}</div>
                   <div className="project-path">pid={proc.pid || '-'} cwd={proc.cwd || '-'}</div>
+                  <div className="project-path">
+                    port={proc.port || '-'} policy={proc.policy_mode || '-'} approval={proc.permission_mode || '-'}
+                  </div>
                 </div>
                 <div className="project-item-actions">
                   {proc.status === 'running' && (
                     <button className="danger" onClick={() => stopProcess(proc.id)}>Stop</button>
                   )}
+                  <button onClick={() => toggleProcessLogs(proc.id)}>
+                    {expandedProcessId === proc.id ? 'Hide Logs' : 'View Logs'}
+                  </button>
+                  {proc.port && proc.status === 'running' && (
+                    <button onClick={() => window.open(`http://127.0.0.1:${proc.port}`, '_blank')}>
+                      Open URL
+                    </button>
+                  )}
                 </div>
+                {expandedProcessId === proc.id && (
+                  <pre className="project-result">
+                    {Array.isArray(proc.logs) && proc.logs.length > 0
+                      ? proc.logs.join('\n')
+                      : 'No process logs captured yet.'}
+                  </pre>
+                )}
               </div>
             ))}
           </div>

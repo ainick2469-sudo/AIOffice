@@ -84,6 +84,18 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
   - `tools/desktop_smoke.py`
   - `tools/toolchain_smoke.py`
   - `tools/personality_smoke.py`
+- EPIC 2.3 process manager hardening completed:
+  - process starts are now policy-aware (autonomy + channel permission policy)
+  - process start blocks on port collisions (managed + external)
+  - process payload includes `port`, `policy_mode`, `permission_mode`
+  - kill switch now resets both project autonomy (`SAFE`) and channel approvals (`ask`)
+  - shutdown lifecycle now stops all managed channel processes
+  - UI process controls upgraded with logs/port quick-open/status badges in ProjectPanel + ChatRoom
+- Updated process test coverage in `tests/test_process_manager.py`:
+  - lifecycle + kill switch permission reset
+  - collision guard
+  - locked-mode policy block
+- Current backend test count: `47 passed`
 
 ---
 

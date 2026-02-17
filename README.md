@@ -55,6 +55,10 @@ Registry source of truth: `agents/registry.json`
 - `/work` autonomous background execution mode
 - Project autonomy modes (`SAFE`, `TRUSTED`, `ELEVATED`) with kill switch reset
 - Channel process manager (start/stop/list) for project services
+- Policy-aware process starts (permission mode + autonomy checks) with explicit denial reasons
+- Process port collision guard (managed + external listener detection)
+- Process log viewing from UI (`include_logs=true`) and quick open-on-port actions
+- Kill switch now also resets channel approval mode back to `ask`
 - Console events panel for router/tool/verification observability
 - Web research tools (`[TOOL:web]`, `[TOOL:fetch]`) with provider fallback
 - Git panel + `/git` and `/branch`/`/merge` commands with merge preview/apply conflict surfacing
@@ -121,6 +125,7 @@ Registry source of truth: `agents/registry.json`
 - `POST /api/process/start`
 - `POST /api/process/stop`
 - `GET /api/process/list/{channel}`
+- `GET /api/process/list/{channel}?include_logs=true`
 - `POST /api/process/kill-switch`
 - `GET /api/console/events/{channel}`
 - `GET /api/audit`

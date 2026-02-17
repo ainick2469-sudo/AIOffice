@@ -208,6 +208,9 @@ class ProcessStartIn(BaseModel):
     command: str = Field(..., min_length=1, max_length=1000)
     name: Optional[str] = None
     project: Optional[str] = None
+    agent_id: str = "user"
+    approved: bool = False
+    task_id: Optional[str] = None
 
 
 class ProcessStopIn(BaseModel):
@@ -224,6 +227,9 @@ class ProcessInfoOut(BaseModel):
     command: str
     pid: Optional[int] = None
     status: str
+    port: Optional[int] = None
+    policy_mode: Optional[str] = None
+    permission_mode: Optional[str] = None
     started_at: Optional[int] = None
     ended_at: Optional[int] = None
     exit_code: Optional[int] = None

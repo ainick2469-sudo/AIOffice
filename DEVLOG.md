@@ -1523,3 +1523,47 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - [!] In this execution shell, `python`/`py` are not available, so backend/runtime checks could not be executed in-session.
 - [x] `node` and `git` were available via `with-runtime.cmd`; frontend checks were runnable.
 - [x] Code changes are staged in source; run validation once toolchain binaries are available in shell.
+
+## 2026-02-17 — EPIC 2.3 Process Manager Hardening
+
+### Backend changes
+- `server/process_manager.py`
+  - Added policy-aware process start validation via `evaluate_tool_policy(...)`.
+  - Added command port extraction and collision guards (managed-process conflict + external listener check).
+  - Process payload now includes `port`, `policy_mode`, and `permission_mode`.
+  - Kill switch now resets project autonomy to `SAFE` **and** channel approval policy to `ask`.
+  - Added `shutdown_all_processes()` plus an `atexit` fallback terminator for kill-on-exit safety.
+- `server/main.py`
+  - Lifespan shutdown now calls `process_manager.shutdown_all_processes()`.
+- `server/models.py`
+  - Extended `ProcessStartIn` with `agent_id`, `approved`, `task_id`.
+  - Extended `ProcessInfoOut` with `port`, `policy_mode`, `permission_mode`.
+- `server/routes_api.py`
+  - `/api/process/start` now forwards `agent_id`, `approved`, and `task_id`.
+
+### Frontend changes
+- `client/src/components/ProjectPanel.jsx`
+  - Added include-logs refresh mode (`/api/process/list/{channel}?include_logs=true`).
+  - Added per-process log expand/collapse.
+  - Added process metadata row (`port`, `policy`, `approval`).
+  - Added quick actions: `Open URL` (when port is known), `Stop`, and `Stop All (Kill Switch)`.
+- `client/src/components/ChatRoom.jsx`
+  - Added header process summary badge (`Processes: X running`).
+  - Added process refresh action and quick stop buttons for active processes.
+  - Kill switch updates now refresh both autonomy and approval-mode status badges.
+
+### Tests
+- `tests/test_process_manager.py` expanded to cover:
+  - process lifecycle + kill switch + permission reset to `ask`
+  - port collision rejection
+  - locked permission mode blocking process starts
+
+### Verification
+- `C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe -m pytest -q tests` ✅
+- `C:\AI_WORKSPACE\ai-office\client\dev-lint.cmd` ✅
+- `C:\AI_WORKSPACE\ai-office\client\dev-build.cmd` ✅
+- `tools/runtime_smoke.py` ✅
+- `tools/startup_smoke.py` ✅
+- `tools/desktop_smoke.py` ✅
+- `tools/toolchain_smoke.py` ✅
+- `tools/personality_smoke.py` ✅

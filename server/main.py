@@ -43,6 +43,9 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("⚠️  Ollama not reachable — agents will not respond")
     yield
+    from . import process_manager
+    shutdown = await process_manager.shutdown_all_processes()
+    logger.info("✅ Process manager shutdown complete (%s stopped)", shutdown.get("stopped_count", 0))
     logger.info("🏢 AI Office shutting down.")
 
 

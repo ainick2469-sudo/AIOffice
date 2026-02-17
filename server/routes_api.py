@@ -992,6 +992,9 @@ async def process_start(body: ProcessStartIn):
             command=body.command,
             name=body.name,
             project=body.project,
+            agent_id=(body.agent_id or "user").strip() or "user",
+            approved=bool(body.approved),
+            task_id=(body.task_id or "").strip() or None,
         )
         return {"ok": True, "process": result}
     except ValueError as exc:
