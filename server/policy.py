@@ -155,12 +155,21 @@ async def evaluate_tool_policy(
     if tool_type in MUTATING_TOOLS:
         required_scope = "run" if tool_type == "run" else "write"
         if required_scope not in permission_scopes:
-            decision.update({
-                "allowed": False,
-                "requires_approval": False,
-                "reason": f"Channel permission scope `{required_scope}` is required.",
-            })
-            return decision
+            if permission_mode == "locked":
+                decision.update({
+                    "allowed": False,
+                    "requires_approval": False,
+                    "reason": f"Channel is locked. `{required_scope}` is not permitted.",
+                })
+                return decision
+            else:
+                # Trigger approval flow instead of hard deny
+                decision.update({
+                    "allowed": False,
+                    "requires_approval": True,
+                    "reason": f"Agent wants to `{required_scope}`. Approve this action?",
+                })
+                return decision
         if permission_mode == "locked":
             decision.update({
                 "allowed": False,

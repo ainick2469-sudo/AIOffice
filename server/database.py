@@ -37,7 +37,7 @@ ALLOWED_AGENT_UPDATE_FIELDS = {
 TASK_STATUSES = {"backlog", "in_progress", "review", "done", "blocked"}
 VALID_AUTONOMY_MODES = {"SAFE", "TRUSTED", "ELEVATED"}
 VALID_PERMISSION_MODES = {"locked", "ask", "trusted"}
-DEFAULT_PERMISSION_SCOPES = ["read", "search"]
+DEFAULT_PERMISSION_SCOPES = ["read", "search", "run", "write", "task"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS channels (
