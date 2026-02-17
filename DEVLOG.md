@@ -4,6 +4,39 @@
 
 ---
 
+## SESSION 35 - Debug Bundle + Copy UX (2026-02-17)
+
+### Debug bundle export
+- [x] Added `POST /api/debug/bundle` to download a redacted zip containing:
+  - console events
+  - tool logs
+  - tasks snapshot
+  - permission/autonomy snapshot
+  - running process list + logs
+- [x] Added `server/debug_bundle.py` bundle builder + secret redaction.
+- [x] Added backend coverage: `tests/test_debug_bundle_export.py`.
+
+### Copy UX
+- [x] Chat: per-message Copy button (raw text including code blocks).
+- [x] Console: Copy JSON + Copy Markdown for filtered console events.
+- [x] Audit: Copy full tool payload/result as JSON per entry.
+- [x] Added Debug tab/panel for one-click debug bundle export.
+
+### Tooling reliability
+- [x] Updated `with-runtime.cmd` to prefer Python 3.12 so `with-runtime.cmd python -m pytest` is reproducible.
+
+### Verification
+- [x] `with-runtime.cmd python -m pytest -q tests` PASS
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
+- [x] `tools/runtime_smoke.py` PASS
+- [x] `tools/startup_smoke.py` PASS
+- [x] `tools/desktop_smoke.py` PASS
+- [x] `tools/toolchain_smoke.py` PASS
+- [x] `tools/personality_smoke.py` PASS
+
+---
+
 ## SESSION 34 - EPIC 2 Foundations (Workspace/Task Scope + Runtime Manager) (2026-02-17)
 
 ### Task/project isolation foundation

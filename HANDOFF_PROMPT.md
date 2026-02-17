@@ -76,7 +76,7 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
   - `test_project_switch_branch_persistence.py`
   - `test_agent_branch_prompt_context.py`
 - Latest checks pass:
-  - `python -m pytest -q tests` (`41 passed`)
+  - `python -m pytest -q tests` (`50 passed`)
   - `client/dev-lint.cmd`
   - `client/dev-build.cmd`
   - `tools/runtime_smoke.py`
@@ -104,7 +104,13 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
   - trusted + auto-proceed sessions skip gate; ask mode requires explicit gate approval
 - Added state-machine tests:
   - `tests/test_executor_state_machine.py`
-- Current backend test count: `49 passed`
+- Debuggability improvements added:
+  - `POST /api/debug/bundle` returns a redacted zip with console/tool/task/process/permission snapshots
+  - Debug tab added in UI for one-click bundle export
+  - Copy UX: per-message copy, console copy (JSON/Markdown), audit entry copy (JSON)
+  - `with-runtime.cmd` now prefers Python 3.12 so `with-runtime.cmd python -m pytest` is reproducible
+  - new test: `tests/test_debug_bundle_export.py`
+- Current backend test count: `50 passed`
 
 ---
 
