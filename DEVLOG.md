@@ -4,6 +4,61 @@
 
 ---
 
+## SESSION 32 - EPIC 0 Portability + Deterministic Test Hardening (2026-02-17)
+
+### Segment 0.0 baseline lock
+- [x] Re-ran verification matrix:
+  - `python -m pytest -q tests`
+  - `client/dev-lint.cmd`
+  - `client/dev-build.cmd`
+  - `tools/runtime_smoke.py`
+  - `tools/startup_smoke.py`
+  - `tools/desktop_smoke.py`
+  - `tools/toolchain_smoke.py`
+  - `tools/personality_smoke.py`
+- [x] Baseline snapshot pushed:
+  - commit: `5f18d9c`
+  - tag: `baseline-2026-02-17-prof1`
+
+### Segment 0.1 runtime config unification
+- [x] Added canonical runtime config module: `server/runtime_config.py`.
+- [x] Added `WORKSPACE_ROOT` in `server/runtime_paths.py` using env override:
+  - `AI_OFFICE_WORKSPACE_ROOT`
+  - fallback to `AI_OFFICE_PROJECTS_DIR`
+- [x] Migrated runtime imports across launcher/server/tools to `server.runtime_config`.
+
+### Segment 0.2 setup and deterministic test wiring
+- [x] Added one-command setup scripts:
+  - `scripts/dev_setup.ps1`
+  - `scripts/dev_setup.cmd`
+- [x] Added `pytest.ini` (`testpaths=tests`, `addopts=-q`).
+- [x] Added isolated test runtime helper: `tests/helpers/temp_db.py`.
+- [x] Updated `tests/conftest.py`:
+  - enforces `AI_OFFICE_TESTING=1`
+  - enforces temp `AI_OFFICE_HOME/DB/MEMORY/WORKSPACE` roots
+- [x] Hardened `server/database.py`:
+  - test-aware DB resolution via `AI_OFFICE_TESTING=1`
+  - env-forced DB path support
+  - avoids creating desktop runtime dirs during test mode
+
+### Docs and env contract updates
+- [x] Updated `README.md` with:
+  - setup scripts (`scripts/dev_setup.cmd` / `scripts/dev_setup.ps1`)
+  - runtime env var contract including `AI_OFFICE_WORKSPACE_ROOT`
+- [x] Updated baseline references in `HANDOFF_PROMPT.md`.
+
+### Verification (post-segment)
+- [x] `python -m pytest -q tests` PASS
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
+- [x] `tools/runtime_smoke.py` PASS
+- [x] `tools/startup_smoke.py` PASS
+- [x] `tools/desktop_smoke.py` PASS
+- [x] `tools/toolchain_smoke.py` PASS
+- [x] `tools/personality_smoke.py` PASS
+
+---
+
 ## SESSION 31 - Baseline Lock + Multi-Branch Orchestration Polish (2026-02-17)
 
 ### Baseline snapshot and tag
@@ -19,6 +74,10 @@
 - [x] Baseline commit created and pushed on `main`:
   - commit: `095f9b3`
   - tag: `baseline-2026-02-17`
+- [x] Segment 0.0 baseline refresh (post-branch-orchestration lock):
+  - commit: `5f18d9c`
+  - tag: `baseline-2026-02-17-prof1`
+  - matrix status: `41 passed` backend tests + frontend lint/build + all five smoke scripts passing
 
 ### Branch-aware backend state model
 - [x] Added task branch support in `server/database.py`:

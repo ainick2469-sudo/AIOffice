@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .runtime_paths import MEMORY_DIR as RUNTIME_MEMORY_DIR
+from .runtime_config import MEMORY_DIR as RUNTIME_MEMORY_DIR
 
 logger = logging.getLogger("ai-office.memory")
 

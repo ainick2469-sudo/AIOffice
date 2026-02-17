@@ -2,11 +2,25 @@
 
 import aiosqlite
 import json
+import os
+import tempfile
+from pathlib import Path
 from typing import Optional
 
-from .runtime_paths import APP_ROOT, DB_PATH as RUNTIME_DB_PATH, ensure_runtime_dirs
+from .runtime_config import APP_ROOT, DB_PATH as RUNTIME_DB_PATH, ensure_runtime_dirs
 
-DB_PATH = RUNTIME_DB_PATH
+
+def resolve_db_path() -> Path:
+    explicit = (os.environ.get("AI_OFFICE_DB_PATH") or "").strip()
+    testing = (os.environ.get("AI_OFFICE_TESTING") or "").strip() == "1"
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    if testing:
+        return (Path(tempfile.gettempdir()) / "ai-office-tests" / "office-test.db").resolve()
+    return Path(RUNTIME_DB_PATH).expanduser().resolve()
+
+
+DB_PATH = resolve_db_path()
 ALLOWED_AGENT_UPDATE_FIELDS = {
     "display_name",
     "role",
@@ -176,9 +190,12 @@ CREATE TABLE IF NOT EXISTS console_events (
 
 async def get_db() -> aiosqlite.Connection:
     """Get a database connection."""
-    ensure_runtime_dirs()
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = await aiosqlite.connect(str(DB_PATH))
+    testing = (os.environ.get("AI_OFFICE_TESTING") or "").strip() == "1"
+    if not testing:
+        ensure_runtime_dirs()
+    db_path = resolve_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db = await aiosqlite.connect(str(db_path))
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
@@ -187,7 +204,9 @@ async def get_db() -> aiosqlite.Connection:
 
 async def init_db():
     """Create all tables and seed default agents from registry."""
-    ensure_runtime_dirs()
+    testing = (os.environ.get("AI_OFFICE_TESTING") or "").strip() == "1"
+    if not testing:
+        ensure_runtime_dirs()
     db = await get_db()
     try:
         await db.executescript(SCHEMA)

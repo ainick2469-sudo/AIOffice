@@ -6,8 +6,17 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
 
 ## LATEST STATUS UPDATE (2026-02-17)
 - Baseline snapshot locked and tagged:
-  - commit: `095f9b3`
-  - tag: `baseline-2026-02-17`
+  - commit: `5f18d9c`
+  - tag: `baseline-2026-02-17-prof1`
+- EPIC 0 portability/test determinism hardening added:
+  - canonical runtime exports via `server/runtime_config.py`
+  - `WORKSPACE_ROOT` env support (`AI_OFFICE_WORKSPACE_ROOT`, legacy `AI_OFFICE_PROJECTS_DIR`)
+  - one-command setup scripts:
+    - `scripts/dev_setup.ps1`
+    - `scripts/dev_setup.cmd`
+  - test isolation helper `tests/helpers/temp_db.py`
+  - `pytest.ini` with deterministic defaults
+  - `server/database.py` now respects `AI_OFFICE_TESTING=1` for forced temp DB routing
 - Portability, env overrides, and test isolation are active:
   - centralized runtime path module (`server/runtime_paths.py`)
   - env override contract (`AI_OFFICE_HOME`, `AI_OFFICE_DB_PATH`, `AI_OFFICE_MEMORY_DIR`, `AI_OFFICE_PROJECTS_DIR`)

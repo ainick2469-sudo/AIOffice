@@ -9,7 +9,7 @@ from . import ollama_client
 from .database import get_agent, get_agents, insert_message, get_db
 from .websocket import manager
 from .memory import read_memory
-from .runtime_paths import APP_ROOT
+from .runtime_config import APP_ROOT
 
 logger = logging.getLogger("ai-office.release")
 

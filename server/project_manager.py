@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import database as db
-from .runtime_paths import APP_ROOT, PROJECTS_ROOT, build_runtime_env
+from .runtime_config import APP_ROOT, WORKSPACE_ROOT, build_runtime_env
 
 PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,49}$")
 
@@ -30,7 +30,7 @@ def validate_project_name(name: str) -> bool:
 
 
 def get_project_root(name: str) -> Path:
-    return (PROJECTS_ROOT / name).resolve()
+    return (WORKSPACE_ROOT / name).resolve()
 
 
 def _cleanup_expired_tokens():
@@ -42,7 +42,7 @@ def _cleanup_expired_tokens():
 
 def _ensure_inside_projects(path: Path) -> bool:
     try:
-        path.resolve().relative_to(PROJECTS_ROOT.resolve())
+        path.resolve().relative_to(WORKSPACE_ROOT.resolve())
         return True
     except Exception:
         return False
@@ -177,7 +177,7 @@ async def create_project(name: str, template: Optional[str] = None) -> dict:
     if not validate_project_name(normalized):
         raise ValueError("Invalid project name. Use lowercase letters, numbers, and hyphens (max 50 chars).")
 
-    PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
+    WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
     root = get_project_root(normalized)
     if not _ensure_inside_projects(root):
         raise ValueError("Project path would escape projects root.")
@@ -195,10 +195,10 @@ async def create_project(name: str, template: Optional[str] = None) -> dict:
 
 
 async def list_projects() -> list[dict]:
-    if not PROJECTS_ROOT.exists():
+    if not WORKSPACE_ROOT.exists():
         return []
     projects = []
-    for entry in sorted(PROJECTS_ROOT.iterdir(), key=lambda p: p.name.lower()):
+    for entry in sorted(WORKSPACE_ROOT.iterdir(), key=lambda p: p.name.lower()):
         if entry.is_dir():
             projects.append(_workspace_metadata(entry))
     return projects
@@ -364,7 +364,7 @@ async def get_project_status(channel: str) -> dict:
     return {
         "active": active,
         "projects_count": len(projects),
-        "projects_root": str(PROJECTS_ROOT),
+        "projects_root": str(WORKSPACE_ROOT),
         "known_projects": [p["name"] for p in projects],
     }
 

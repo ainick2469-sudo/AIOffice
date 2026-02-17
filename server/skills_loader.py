@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .runtime_paths import APP_ROOT
+from .runtime_config import APP_ROOT
 
 SKILLS_ROOT = APP_ROOT / "skills"
 _TOOL_REGISTRY: dict[str, dict[str, Any]] = {}

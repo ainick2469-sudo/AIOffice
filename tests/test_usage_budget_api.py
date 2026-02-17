@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from server.main import app
 from server import database as db
 from server import agent_engine
-from server.runtime_paths import APP_ROOT
+from server.runtime_config import APP_ROOT
 
 
 def test_usage_budget_threshold_summary():

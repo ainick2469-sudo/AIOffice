@@ -8,7 +8,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from server.runtime_paths import APP_ROOT, build_runtime_env
+from server.runtime_config import APP_ROOT, build_runtime_env
 
 # Ensure we're running from the right directory
 APP_DIR = str(APP_ROOT)

@@ -29,7 +29,7 @@ from .models import (
     TaskIn,
     TaskUpdateIn,
 )
-from .runtime_paths import (
+from .runtime_config import (
     AI_OFFICE_HOME,
     APP_ROOT,
     build_runtime_env,
@@ -258,7 +258,7 @@ async def list_projects_route():
     from . import project_manager as pm
 
     projects = await pm.list_projects()
-    return {"projects": projects, "projects_root": str(pm.PROJECTS_ROOT)}
+    return {"projects": projects, "projects_root": str(pm.WORKSPACE_ROOT)}
 
 
 @router.post("/projects/switch")
@@ -562,7 +562,7 @@ async def health():
 @router.get("/health/startup")
 async def startup_health():
     from . import claude_adapter, openai_adapter, ollama_client
-    from .project_manager import PROJECTS_ROOT
+    from .project_manager import WORKSPACE_ROOT
 
     db_ok = False
     db_error = ""
@@ -579,7 +579,7 @@ async def startup_health():
         except Exception:
             pass
 
-    projects_root_ok = PROJECTS_ROOT.exists() and PROJECTS_ROOT.is_dir()
+    projects_root_ok = WORKSPACE_ROOT.exists() and WORKSPACE_ROOT.is_dir()
     frontend_dist_ok = (PROJECT_ROOT / "client-dist" / "index.html").exists()
     backends = {
         "ollama": bool(await ollama_client.is_available()),
@@ -599,7 +599,7 @@ async def startup_health():
 
     checks = {
         "db": {"ok": db_ok, "error": db_error},
-        "projects_root": {"ok": projects_root_ok, "path": str(PROJECTS_ROOT)},
+        "projects_root": {"ok": projects_root_ok, "path": str(WORKSPACE_ROOT)},
         "frontend_dist": {"ok": frontend_dist_ok},
         "backends": backends,
     }

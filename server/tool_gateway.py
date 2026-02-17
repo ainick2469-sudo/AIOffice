@@ -12,7 +12,7 @@ from .database import get_db
 from .observability import emit_console_event
 from .policy import evaluate_tool_policy
 from .project_manager import APP_ROOT, get_sandbox_root
-from .runtime_paths import build_runtime_env
+from .runtime_config import build_runtime_env
 
 logger = logging.getLogger("ai-office.tools")
 

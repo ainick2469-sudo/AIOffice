@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from server.runtime_paths import build_runtime_env
+from server.runtime_config import build_runtime_env
 
 PYTHON_EXE = Path(sys.executable).resolve()
 

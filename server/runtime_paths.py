@@ -37,9 +37,13 @@ def _default_home() -> Path:
 AI_OFFICE_HOME = Path(
     os.environ.get("AI_OFFICE_HOME", str(_default_home()))
 ).expanduser().resolve()
-PROJECTS_ROOT = Path(
-    os.environ.get("AI_OFFICE_PROJECTS_DIR", str(AI_OFFICE_HOME / "projects"))
+WORKSPACE_ROOT = Path(
+    os.environ.get(
+        "AI_OFFICE_WORKSPACE_ROOT",
+        os.environ.get("AI_OFFICE_PROJECTS_DIR", str(AI_OFFICE_HOME / "projects")),
+    )
 ).expanduser().resolve()
+PROJECTS_ROOT = WORKSPACE_ROOT
 DB_PATH = Path(
     os.environ.get("AI_OFFICE_DB_PATH", str(AI_OFFICE_HOME / "data" / "office.db"))
 ).expanduser().resolve()
@@ -53,7 +57,7 @@ LOGS_DIR = Path(
 
 def ensure_runtime_dirs() -> None:
     AI_OFFICE_HOME.mkdir(parents=True, exist_ok=True)
-    PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
+    WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)

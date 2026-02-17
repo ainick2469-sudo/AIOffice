@@ -4,7 +4,7 @@ from pathlib import Path
 
 from server import agent_engine as engine
 from server.database import get_messages, init_db
-from server.runtime_paths import APP_ROOT
+from server.runtime_config import APP_ROOT
 
 
 def test_oracle_file_selection_prefers_routes_for_endpoint_questions():

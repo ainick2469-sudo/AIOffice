@@ -12,7 +12,7 @@ from typing import Any
 
 from . import database as db
 from .project_manager import get_active_project
-from .runtime_paths import build_runtime_env
+from .runtime_config import build_runtime_env
 from .websocket import manager
 
 MAX_LOG_LINES = 400

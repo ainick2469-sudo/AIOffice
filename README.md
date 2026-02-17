@@ -137,13 +137,25 @@ Registry source of truth: `agents/registry.json`
 
 Run these from the repository root.
 
-1. Install backend deps
+1. One-command setup (recommended)
+
+```bat
+scripts\dev_setup.cmd
+```
+
+Or PowerShell:
+
+```powershell
+.\scripts\dev_setup.ps1
+```
+
+2. Install backend deps manually
 
 ```bat
 python -m pip install -r requirements.txt
 ```
 
-2. Frontend checks (PATH-safe wrappers)
+3. Frontend checks (PATH-safe wrappers)
 
 ```bat
 cd /d client
@@ -151,13 +163,13 @@ dev-build.cmd
 dev-lint.cmd
 ```
 
-3. Start app (desktop-first launcher)
+4. Start app (desktop-first launcher)
 
 ```bat
 python start.py
 ```
 
-4. Dev web mode (backend + Vite)
+5. Dev web mode (backend + Vite)
 
 ```bat
 python dev.py
@@ -171,7 +183,7 @@ desktop-launch.cmd
 
 Desktop mode requires `pywebview` and runs as a standalone native window (not browser fallback).
 
-5. Build standalone Windows `.exe`
+6. Build standalone Windows `.exe`
 
 ```bat
 build-desktop.cmd
@@ -190,7 +202,8 @@ Runtime state now uses platform-default user data storage plus env overrides:
 - `AI_OFFICE_HOME` (base runtime directory)
 - `AI_OFFICE_DB_PATH` (SQLite DB location)
 - `AI_OFFICE_MEMORY_DIR` (memory JSONL directory)
-- `AI_OFFICE_PROJECTS_DIR` (projects workspace root)
+- `AI_OFFICE_WORKSPACE_ROOT` (workspace root for projects/channels)
+- `AI_OFFICE_PROJECTS_DIR` (legacy alias, still supported)
 
 Default on Windows: `%LOCALAPPDATA%\AIOffice`.
 

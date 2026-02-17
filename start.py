@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from server.runtime_paths import APP_ROOT, build_runtime_env
+from server.runtime_config import APP_ROOT, build_runtime_env
 
 SYSTEM_ROOT = os.environ.get("SystemRoot", r"C:\Windows")
 CMD_EXE = str(Path(SYSTEM_ROOT) / "System32" / "cmd.exe")

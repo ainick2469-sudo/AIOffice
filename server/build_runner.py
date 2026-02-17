@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from .project_manager import APP_ROOT, get_project_root
-from .runtime_paths import build_runtime_env
+from .runtime_config import build_runtime_env
 
 CONFIG_FILE = ".ai-office/config.json"
 DEFAULT_TIMEOUT_SECONDS = 180

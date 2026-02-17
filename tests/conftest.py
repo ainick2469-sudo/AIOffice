@@ -9,36 +9,33 @@ import atexit
 import asyncio
 import os
 import shutil
-import tempfile
 from pathlib import Path
 
-TEST_ROOT = Path(tempfile.mkdtemp(prefix="ai-office-tests-")).resolve()
-TEST_HOME = TEST_ROOT / "home"
-TEST_PROJECTS = TEST_ROOT / "projects"
-TEST_MEMORY = TEST_ROOT / "memory"
-TEST_DB = TEST_HOME / "data" / "office-test.db"
+from helpers.temp_db import bootstrap_test_environment
 
-os.environ["AI_OFFICE_HOME"] = str(TEST_HOME)
-os.environ["AI_OFFICE_PROJECTS_DIR"] = str(TEST_PROJECTS)
-os.environ["AI_OFFICE_MEMORY_DIR"] = str(TEST_MEMORY)
-os.environ["AI_OFFICE_DB_PATH"] = str(TEST_DB)
-
-TEST_HOME.mkdir(parents=True, exist_ok=True)
-TEST_PROJECTS.mkdir(parents=True, exist_ok=True)
-TEST_MEMORY.mkdir(parents=True, exist_ok=True)
-TEST_DB.parent.mkdir(parents=True, exist_ok=True)
+_TEST_ENV = bootstrap_test_environment()
+TEST_ROOT = _TEST_ENV["root"]
+TEST_HOME = _TEST_ENV["home"]
+TEST_PROJECTS = _TEST_ENV["workspace"]
+TEST_MEMORY = _TEST_ENV["memory"]
+TEST_DB = _TEST_ENV["db"]
 
 
 def _assert_test_isolation() -> None:
+    if os.environ.get("AI_OFFICE_TESTING") != "1":
+        raise RuntimeError("AI_OFFICE_TESTING must be 1 during pytest runs.")
     db_path = Path(os.environ["AI_OFFICE_DB_PATH"]).resolve()
     memory_dir = Path(os.environ["AI_OFFICE_MEMORY_DIR"]).resolve()
     projects_dir = Path(os.environ["AI_OFFICE_PROJECTS_DIR"]).resolve()
+    workspace_dir = Path(os.environ["AI_OFFICE_WORKSPACE_ROOT"]).resolve()
     if TEST_ROOT not in db_path.parents:
         raise RuntimeError(f"AI_OFFICE_DB_PATH escaped test root: {db_path}")
     if TEST_ROOT not in memory_dir.parents:
         raise RuntimeError(f"AI_OFFICE_MEMORY_DIR escaped test root: {memory_dir}")
     if TEST_ROOT not in projects_dir.parents:
         raise RuntimeError(f"AI_OFFICE_PROJECTS_DIR escaped test root: {projects_dir}")
+    if TEST_ROOT not in workspace_dir.parents:
+        raise RuntimeError(f"AI_OFFICE_WORKSPACE_ROOT escaped test root: {workspace_dir}")
 
 
 def _bootstrap_test_runtime() -> None:

@@ -15,7 +15,7 @@ from .routes_api import router as api_router
 from .models import WSMessage
 from .agent_engine import process_message
 from . import ollama_client
-from .runtime_paths import AI_OFFICE_HOME, APP_ROOT, ensure_runtime_dirs
+from .runtime_config import AI_OFFICE_HOME, APP_ROOT, ensure_runtime_dirs
 from . import skills_loader
 
 # ── Logging ────────────────────────────────────────────────

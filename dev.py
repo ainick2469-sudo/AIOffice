@@ -8,7 +8,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-from server.runtime_paths import APP_ROOT, build_runtime_env
+from server.runtime_config import APP_ROOT, build_runtime_env
 
 ROOT = str(APP_ROOT)
 CLIENT = str(APP_ROOT / "client")

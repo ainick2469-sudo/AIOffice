@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from server.runtime_paths import DB_PATH
+from server.runtime_config import DB_PATH
 
 SQL_INSERT = """
 INSERT INTO agents (
