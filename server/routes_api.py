@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, UploadFile, File
 from typing import Optional
 from . import database as db
 from .models import (
+    ApprovalResponseIn,
     AutonomyModeIn,
     AgentOut,
     AgentUpdateIn,
@@ -23,11 +24,14 @@ from .models import (
     ProjectActiveOut,
     ExecuteCodeIn,
     OllamaPullIn,
+    PermissionPolicyIn,
+    PermissionPolicyOut,
     ProjectCreateIn,
     ProjectSwitchIn,
     ReactionToggleIn,
     TaskIn,
     TaskUpdateIn,
+    TrustSessionIn,
 )
 from .runtime_config import (
     AI_OFFICE_HOME,
@@ -299,6 +303,60 @@ async def set_project_autonomy_mode(name: str, body: AutonomyModeIn):
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True, "project": name, "mode": mode}
+
+
+@router.get("/permissions", response_model=PermissionPolicyOut)
+async def get_channel_permissions(channel: str = "main"):
+    return await db.get_permission_policy(channel)
+
+
+@router.put("/permissions", response_model=PermissionPolicyOut)
+async def put_channel_permissions(body: PermissionPolicyIn):
+    try:
+        return await db.set_permission_policy(
+            body.channel,
+            mode=body.mode,
+            expires_at=body.expires_at,
+            scopes=body.scopes,
+            command_allowlist_profile=body.command_allowlist_profile,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.post("/permissions/trust_session", response_model=PermissionPolicyOut)
+async def trust_session_permissions(body: TrustSessionIn):
+    try:
+        return await db.issue_trusted_session(
+            body.channel,
+            minutes=body.minutes,
+            scopes=body.scopes,
+            command_allowlist_profile=body.command_allowlist_profile,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.post("/permissions/approval-response")
+async def permissions_approval_response(body: ApprovalResponseIn):
+    from . import tool_gateway
+    from .websocket import manager
+
+    resolved = await tool_gateway.resolve_approval_response(
+        body.request_id,
+        approved=body.approved,
+        decided_by=body.decided_by,
+    )
+    if not resolved:
+        raise HTTPException(404, "Approval request not found")
+
+    await manager.broadcast(resolved["channel"], {
+        "type": "approval_resolved",
+        "request_id": body.request_id,
+        "approved": bool(body.approved),
+        "decided_by": body.decided_by,
+    })
+    return {"ok": True, "request": resolved}
 
 
 @router.delete("/projects/{name}")
@@ -629,6 +687,9 @@ async def get_audit_logs(
     limit: int = 200,
     agent_id: Optional[str] = None,
     tool_type: Optional[str] = None,
+    channel: Optional[str] = None,
+    task_id: Optional[str] = None,
+    risk_level: Optional[str] = None,
     q: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -638,29 +699,42 @@ async def get_audit_logs(
         where = []
         params = []
         if agent_id:
-            where.append("agent_id = ?")
+            where.append("tl.agent_id = ?")
             params.append(agent_id)
         if tool_type:
-            where.append("tool_type = ?")
+            where.append("tl.tool_type = ?")
             params.append(tool_type)
+        if channel:
+            where.append("tl.channel = ?")
+            params.append(channel)
+        if task_id:
+            where.append("tl.task_id = ?")
+            params.append(task_id)
+        if risk_level:
+            where.append("COALESCE(ar.risk_level, '') = ?")
+            params.append(risk_level.strip().lower())
         if q:
-            where.append("(command LIKE ? OR args LIKE ? OR output LIKE ?)")
+            where.append("(tl.command LIKE ? OR tl.args LIKE ? OR tl.output LIKE ?)")
             like = f"%{q}%"
             params.extend([like, like, like])
         start_ts = _normalize_timestamp(date_from)
         end_ts = _normalize_timestamp(date_to)
         if start_ts:
-            where.append("created_at >= ?")
+            where.append("tl.created_at >= ?")
             params.append(start_ts)
         if end_ts:
-            where.append("created_at <= ?")
+            where.append("tl.created_at <= ?")
             params.append(end_ts)
 
-        sql = "SELECT * FROM tool_logs"
+        sql = (
+            "SELECT tl.*, COALESCE(ar.risk_level, '') AS risk_level "
+            "FROM tool_logs tl "
+            "LEFT JOIN approval_requests ar ON ar.id = tl.approval_request_id"
+        )
         if where:
             sql += " WHERE " + " AND ".join(where)
         safe_limit = max(1, min(int(limit), 1000))
-        sql += " ORDER BY id DESC LIMIT ?"
+        sql += " ORDER BY tl.id DESC LIMIT ?"
         params.append(safe_limit)
         rows = await conn.execute(sql, tuple(params))
         results = [dict(r) for r in await rows.fetchall()]
@@ -668,6 +742,33 @@ async def get_audit_logs(
         return results
     finally:
         await conn.close()
+
+
+@router.get("/audit/export")
+async def export_audit_logs(
+    channel: Optional[str] = None,
+    task_id: Optional[str] = None,
+    tool_type: Optional[str] = None,
+    risk_level: Optional[str] = None,
+):
+    rows = await get_audit_logs(
+        limit=1000,
+        channel=channel,
+        task_id=task_id,
+        tool_type=tool_type,
+        risk_level=risk_level,
+    )
+    return {
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "filters": {
+            "channel": channel,
+            "task_id": task_id,
+            "tool_type": tool_type,
+            "risk_level": risk_level,
+        },
+        "count": len(rows),
+        "rows": rows,
+    }
 
 
 @router.get("/audit/count")

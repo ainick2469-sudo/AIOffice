@@ -4,6 +4,68 @@
 
 ---
 
+## SESSION 33 - EPIC 1 Permissioned Autonomy + Approval Governance (2026-02-17)
+
+### Policy persistence model
+- [x] Added channel permission policy table in `server/database.py`:
+  - `permission_policies(channel, mode, expires_at, scopes, command_allowlist_profile, timestamps)`
+  - modes: `locked | ask | trusted`
+  - trusted mode now auto-reverts to `ask` on expiry read
+- [x] Added approval request table in `server/database.py`:
+  - `approval_requests(id, channel, task_id, agent_id, tool_type, payload_json, risk_level, status, decided_by, decided_at, created_at)`
+
+### Tool approval handshake
+- [x] Added API endpoints in `server/routes_api.py`:
+  - `GET /api/permissions?channel=...`
+  - `PUT /api/permissions`
+  - `POST /api/permissions/trust_session`
+  - `POST /api/permissions/approval-response`
+- [x] Integrated channel policy into `server/policy.py` decisions:
+  - `locked` blocks mutating tools
+  - `ask` returns `requires_approval`
+  - `trusted` auto-approves under policy constraints
+- [x] Added request/response approval flow in `server/tool_gateway.py`:
+  - approval request creation + websocket broadcast (`approval_request`)
+  - async waiter resolution (`approval_response`)
+  - trusted-session audit tagging
+- [x] Updated `server/tool_executor.py`:
+  - pauses on `needs_approval`
+  - waits for approval response
+  - reruns tool on approval, emits denial/timeout messages otherwise
+
+### Audit governance + UI controls
+- [x] Extended tool log schema and writer fields:
+  - `channel`, `task_id`, `approval_request_id`, `policy_mode`, `reason`
+- [x] Extended audit API:
+  - filter support: `channel`, `task_id`, `risk_level`
+  - export support: `GET /api/audit/export`
+- [x] Updated chat UI (`client/src/components/ChatRoom.jsx`):
+  - live approval request modal
+  - actions: `Approve Once`, `Approve All For This Task`, `Deny`
+  - trust-window selector (time-bounded trusted session)
+  - approval mode status badge in chat header
+- [x] Updated audit UI (`client/src/components/AuditLog.jsx`):
+  - new filters (channel/task/risk)
+  - export button for filtered audit data
+- [x] Added modal styles in `client/src/App.css`
+
+### New tests
+- [x] `tests/test_permission_policy_api.py`
+- [x] `tests/test_tool_approval_handshake.py`
+- [x] `tests/test_trusted_mode_expiry.py`
+
+### Verification (post-segment)
+- [x] `python -m pytest -q tests` PASS
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
+- [x] `tools/runtime_smoke.py` PASS
+- [x] `tools/startup_smoke.py` PASS
+- [x] `tools/desktop_smoke.py` PASS
+- [x] `tools/toolchain_smoke.py` PASS
+- [x] `tools/personality_smoke.py` PASS
+
+---
+
 ## SESSION 32 - EPIC 0 Portability + Deterministic Test Hardening (2026-02-17)
 
 ### Segment 0.0 baseline lock

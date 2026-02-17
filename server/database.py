@@ -4,6 +4,7 @@ import aiosqlite
 import json
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -35,6 +36,8 @@ ALLOWED_AGENT_UPDATE_FIELDS = {
 
 TASK_STATUSES = {"backlog", "in_progress", "review", "done", "blocked"}
 VALID_AUTONOMY_MODES = {"SAFE", "TRUSTED", "ELEVATED"}
+VALID_PERMISSION_MODES = {"locked", "ask", "trusted"}
+DEFAULT_PERMISSION_SCOPES = ["read", "search"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS channels (
@@ -98,7 +101,12 @@ CREATE TABLE IF NOT EXISTS tool_logs (
     args TEXT,
     output TEXT,
     exit_code INTEGER,
+    channel TEXT,
+    task_id TEXT,
+    approval_request_id TEXT,
     approved_by TEXT,
+    policy_mode TEXT,
+    reason TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -174,6 +182,30 @@ CREATE TABLE IF NOT EXISTS project_autonomy_modes (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS permission_policies (
+    channel TEXT PRIMARY KEY,
+    mode TEXT NOT NULL DEFAULT 'ask',
+    expires_at TEXT,
+    scopes TEXT,
+    command_allowlist_profile TEXT NOT NULL DEFAULT 'safe',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS approval_requests (
+    id TEXT PRIMARY KEY,
+    channel TEXT NOT NULL,
+    task_id TEXT,
+    agent_id TEXT NOT NULL,
+    tool_type TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    risk_level TEXT NOT NULL DEFAULT 'medium',
+    status TEXT NOT NULL DEFAULT 'pending',
+    decided_by TEXT,
+    decided_at TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS console_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL,
@@ -234,6 +266,38 @@ async def _run_migrations(db: aiosqlite.Connection):
     await _ensure_column(db, "tasks", "subtasks", "TEXT DEFAULT '[]'")
     await _ensure_column(db, "tasks", "linked_files", "TEXT DEFAULT '[]'")
     await _ensure_column(db, "tasks", "depends_on", "TEXT DEFAULT '[]'")
+    await _ensure_column(db, "tool_logs", "channel", "TEXT")
+    await _ensure_column(db, "tool_logs", "task_id", "TEXT")
+    await _ensure_column(db, "tool_logs", "approval_request_id", "TEXT")
+    await _ensure_column(db, "tool_logs", "policy_mode", "TEXT")
+    await _ensure_column(db, "tool_logs", "reason", "TEXT")
+
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS permission_policies (
+               channel TEXT PRIMARY KEY,
+               mode TEXT NOT NULL DEFAULT 'ask',
+               expires_at TEXT,
+               scopes TEXT,
+               command_allowlist_profile TEXT NOT NULL DEFAULT 'safe',
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS approval_requests (
+               id TEXT PRIMARY KEY,
+               channel TEXT NOT NULL,
+               task_id TEXT,
+               agent_id TEXT NOT NULL,
+               tool_type TEXT NOT NULL,
+               payload_json TEXT NOT NULL,
+               risk_level TEXT NOT NULL DEFAULT 'medium',
+               status TEXT NOT NULL DEFAULT 'pending',
+               decided_by TEXT,
+               decided_at TEXT,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
 
     await db.execute("UPDATE tasks SET branch = 'main' WHERE branch IS NULL OR TRIM(branch) = ''")
     await db.execute("UPDATE tasks SET subtasks = '[]' WHERE subtasks IS NULL OR subtasks = ''")
@@ -1128,6 +1192,236 @@ async def set_project_autonomy_mode(project_name: str, mode: str) -> str:
         return normalized
     finally:
         await db.close()
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_now_iso() -> str:
+    return _utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _normalize_permission_scopes(scopes: Optional[list[str] | str]) -> list[str]:
+    if scopes is None:
+        return list(DEFAULT_PERMISSION_SCOPES)
+    if isinstance(scopes, str):
+        text = scopes.strip()
+        if not text:
+            return list(DEFAULT_PERMISSION_SCOPES)
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                scopes = parsed
+            else:
+                scopes = [part.strip() for part in text.split(",") if part.strip()]
+        except Exception:
+            scopes = [part.strip() for part in text.split(",") if part.strip()]
+    unique = []
+    seen = set()
+    for item in scopes or []:
+        token = str(item or "").strip().lower()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        unique.append(token)
+    return unique or list(DEFAULT_PERMISSION_SCOPES)
+
+
+def _normalize_permission_mode(mode: Optional[str]) -> str:
+    normalized = (mode or "ask").strip().lower()
+    if normalized not in VALID_PERMISSION_MODES:
+        return "ask"
+    return normalized
+
+
+async def get_permission_policy(channel: str) -> dict:
+    channel_id = (channel or "main").strip() or "main"
+    db = await get_db()
+    try:
+        row = await db.execute(
+            "SELECT * FROM permission_policies WHERE channel = ?",
+            (channel_id,),
+        )
+        item = await row.fetchone()
+        if not item:
+            return {
+                "channel": channel_id,
+                "mode": "ask",
+                "expires_at": None,
+                "scopes": list(DEFAULT_PERMISSION_SCOPES),
+                "command_allowlist_profile": "safe",
+            }
+
+        policy = dict(item)
+        policy["mode"] = _normalize_permission_mode(policy.get("mode"))
+        policy["scopes"] = _normalize_permission_scopes(policy.get("scopes"))
+        policy["command_allowlist_profile"] = (policy.get("command_allowlist_profile") or "safe").strip().lower()
+
+        expires_at = _parse_iso(policy.get("expires_at"))
+        if policy["mode"] == "trusted" and expires_at and expires_at <= _utc_now():
+            await db.execute(
+                """UPDATE permission_policies
+                   SET mode = 'ask', expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE channel = ?""",
+                (channel_id,),
+            )
+            await db.commit()
+            policy["mode"] = "ask"
+            policy["expires_at"] = None
+        return policy
+    finally:
+        await db.close()
+
+
+async def set_permission_policy(
+    channel: str,
+    *,
+    mode: str,
+    expires_at: Optional[str] = None,
+    scopes: Optional[list[str] | str] = None,
+    command_allowlist_profile: str = "safe",
+) -> dict:
+    channel_id = (channel or "main").strip() or "main"
+    normalized_mode = _normalize_permission_mode(mode)
+    if normalized_mode not in VALID_PERMISSION_MODES:
+        raise ValueError(f"Invalid permission mode: {mode}")
+
+    normalized_scopes = _normalize_permission_scopes(scopes)
+    profile = (command_allowlist_profile or "safe").strip().lower() or "safe"
+    parsed_expiry = _parse_iso(expires_at)
+    expires_text = parsed_expiry.replace(microsecond=0).isoformat().replace("+00:00", "Z") if parsed_expiry else None
+
+    if normalized_mode != "trusted":
+        expires_text = None
+
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO permission_policies (
+                   channel, mode, expires_at, scopes, command_allowlist_profile
+               ) VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(channel) DO UPDATE SET
+                 mode = excluded.mode,
+                 expires_at = excluded.expires_at,
+                 scopes = excluded.scopes,
+                 command_allowlist_profile = excluded.command_allowlist_profile,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (
+                channel_id,
+                normalized_mode,
+                expires_text,
+                json.dumps(normalized_scopes),
+                profile,
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return await get_permission_policy(channel_id)
+
+
+async def issue_trusted_session(
+    channel: str,
+    *,
+    minutes: int = 30,
+    scopes: Optional[list[str] | str] = None,
+    command_allowlist_profile: str = "safe",
+) -> dict:
+    safe_minutes = max(1, min(int(minutes or 30), 24 * 60))
+    expires_at = (_utc_now() + timedelta(minutes=safe_minutes)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    policy = await set_permission_policy(
+        channel,
+        mode="trusted",
+        expires_at=expires_at,
+        scopes=scopes,
+        command_allowlist_profile=command_allowlist_profile,
+    )
+    policy["ttl_minutes"] = safe_minutes
+    return policy
+
+
+async def create_approval_request(
+    *,
+    request_id: str,
+    channel: str,
+    agent_id: str,
+    tool_type: str,
+    payload: dict,
+    risk_level: str = "medium",
+    task_id: Optional[str] = None,
+) -> dict:
+    channel_id = (channel or "main").strip() or "main"
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO approval_requests (
+                   id, channel, task_id, agent_id, tool_type, payload_json, risk_level, status
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')""",
+            (
+                request_id,
+                channel_id,
+                (task_id or "").strip() or None,
+                (agent_id or "unknown").strip() or "unknown",
+                (tool_type or "").strip() or "run",
+                json.dumps(payload or {}),
+                (risk_level or "medium").strip().lower(),
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return await get_approval_request(request_id)
+
+
+async def get_approval_request(request_id: str) -> Optional[dict]:
+    db = await get_db()
+    try:
+        row = await db.execute("SELECT * FROM approval_requests WHERE id = ?", (request_id,))
+        result = await row.fetchone()
+        if not result:
+            return None
+        data = dict(result)
+        data["payload"] = _json_loads(data.get("payload_json"), {})
+        return data
+    finally:
+        await db.close()
+
+
+async def resolve_approval_request(
+    request_id: str,
+    *,
+    approved: bool,
+    decided_by: str = "user",
+) -> Optional[dict]:
+    status = "approved" if approved else "denied"
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE approval_requests
+               SET status = ?, decided_by = ?, decided_at = ?
+               WHERE id = ? AND status = 'pending'""",
+            (
+                status,
+                (decided_by or "user").strip() or "user",
+                _utc_now_iso(),
+                request_id,
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return await get_approval_request(request_id)
 
 
 async def log_console_event(

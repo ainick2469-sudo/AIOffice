@@ -3,7 +3,13 @@
 import re
 import logging
 from typing import Optional
-from .tool_gateway import tool_read_file, tool_search_files, tool_run_command, tool_write_file
+from .tool_gateway import (
+    tool_read_file,
+    tool_search_files,
+    tool_run_command,
+    tool_write_file,
+    wait_for_approval_response,
+)
 from .database import insert_message, update_task_from_tag, get_agent, create_task_record
 from .websocket import manager
 from . import web_search
@@ -224,7 +230,51 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                     msg = f"❌ **Read failed:** {result['error']}"
 
             elif tool_type == "run":
-                result = await tool_run_command(agent_id, call["arg"], channel=channel)
+                result = await tool_run_command(agent_id, call["arg"], channel=channel, approved=False)
+                if result.get("status") == "needs_approval":
+                    request = result.get("request") or {}
+                    approved = await wait_for_approval_response(request.get("id", ""), timeout_seconds=180)
+                    if approved is True:
+                        result = await tool_run_command(agent_id, call["arg"], channel=channel, approved=True)
+                    elif approved is False:
+                        msg = (
+                            f"🛑 **Run denied by user:** `{call['arg']}`\n"
+                            f"Request: `{request.get('id', 'unknown')}`"
+                        )
+                        saved = await insert_message(
+                            channel=channel,
+                            sender=agent_id,
+                            content=msg,
+                            msg_type="tool_result",
+                        )
+                        await manager.broadcast(channel, {"type": "chat", "message": saved})
+                        results.append({
+                            "type": tool_type,
+                            "arg": call.get("arg"),
+                            "result": {"ok": False, "error": "Denied by user", "request": request},
+                            "msg": msg,
+                        })
+                        continue
+                    else:
+                        msg = (
+                            f"⏳ **Run approval timed out:** `{call['arg']}`\n"
+                            f"Request: `{request.get('id', 'unknown')}`"
+                        )
+                        saved = await insert_message(
+                            channel=channel,
+                            sender=agent_id,
+                            content=msg,
+                            msg_type="tool_result",
+                        )
+                        await manager.broadcast(channel, {"type": "chat", "message": saved})
+                        results.append({
+                            "type": tool_type,
+                            "arg": call.get("arg"),
+                            "result": {"ok": False, "error": "Approval timed out", "request": request},
+                            "msg": msg,
+                        })
+                        continue
+
                 if result["ok"]:
                     stdout = result.get("stdout", "").strip()
                     if len(stdout) > 1500:
@@ -246,7 +296,6 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                     msg = f"❌ **Search failed:** {result['error']}"
 
             elif tool_type == "write":
-                # Get diff preview first, then auto-write
                 preview = await tool_write_file(
                     agent_id,
                     call["path"],
@@ -254,15 +303,69 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                     approved=False,
                     channel=channel,
                 )
-                result = await tool_write_file(
-                    agent_id,
-                    call["path"],
-                    call["content"],
-                    approved=True,
-                    channel=channel,
-                )
+                if preview.get("status") == "needs_approval":
+                    request = preview.get("request") or {}
+                    approved = await wait_for_approval_response(request.get("id", ""), timeout_seconds=180)
+                    if approved is True:
+                        result = await tool_write_file(
+                            agent_id,
+                            call["path"],
+                            call["content"],
+                            approved=True,
+                            channel=channel,
+                        )
+                    elif approved is False:
+                        msg = (
+                            f"🛑 **Write denied by user:** `{call['path']}`\n"
+                            f"Request: `{request.get('id', 'unknown')}`"
+                        )
+                        saved = await insert_message(
+                            channel=channel,
+                            sender=agent_id,
+                            content=msg,
+                            msg_type="tool_result",
+                        )
+                        await manager.broadcast(channel, {"type": "chat", "message": saved})
+                        results.append({
+                            "type": tool_type,
+                            "path": call.get("path"),
+                            "result": {"ok": False, "error": "Denied by user", "request": request},
+                            "msg": msg,
+                        })
+                        continue
+                    else:
+                        msg = (
+                            f"⏳ **Write approval timed out:** `{call['path']}`\n"
+                            f"Request: `{request.get('id', 'unknown')}`"
+                        )
+                        saved = await insert_message(
+                            channel=channel,
+                            sender=agent_id,
+                            content=msg,
+                            msg_type="tool_result",
+                        )
+                        await manager.broadcast(channel, {"type": "chat", "message": saved})
+                        results.append({
+                            "type": tool_type,
+                            "path": call.get("path"),
+                            "result": {"ok": False, "error": "Approval timed out", "request": request},
+                            "msg": msg,
+                        })
+                        continue
+                else:
+                    # Trusted mode may write immediately on first call.
+                    result = preview if preview.get("ok") else await tool_write_file(
+                        agent_id,
+                        call["path"],
+                        call["content"],
+                        approved=True,
+                        channel=channel,
+                    )
+
                 if result.get("action") == "written" or result.get("ok"):
                     diff = preview.get("diff", "")
+                    if not diff and isinstance(result, dict):
+                        diff = result.get("diff", "")
                     if len(diff) > 1500:
                         diff = diff[:1500] + "\n... (truncated)"
                     msg = f"✅ **Wrote `{call['path']}`** ({result.get('size', 0)} chars)\n```diff\n{diff}\n```"

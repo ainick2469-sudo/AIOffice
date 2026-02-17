@@ -40,9 +40,17 @@ def _assert_test_isolation() -> None:
 
 def _bootstrap_test_runtime() -> None:
     _assert_test_isolation()
-    from server.database import init_db
+    from server.database import init_db, set_permission_policy
 
     asyncio.run(init_db())
+    asyncio.run(
+        set_permission_policy(
+            "main",
+            mode="trusted",
+            scopes=["read", "search", "run", "write", "task"],
+            command_allowlist_profile="safe",
+        )
+    )
 
 
 _bootstrap_test_runtime()

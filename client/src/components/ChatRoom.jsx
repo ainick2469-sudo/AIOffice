@@ -14,6 +14,7 @@ export default function ChatRoom({ channel }) {
   const [collabMode, setCollabMode] = useState({ mode: 'chat', active: false });
   const [activeProject, setActiveProject] = useState({ project: 'ai-office', path: '', branch: 'main' });
   const [autonomyMode, setAutonomyMode] = useState('SAFE');
+  const [permissionPolicy, setPermissionPolicy] = useState({ mode: 'ask', expires_at: null });
   const [workStatus, setWorkStatus] = useState({ running: false, processed: 0, errors: 0 });
   const [reactionsByMessage, setReactionsByMessage] = useState({});
   const [channelName, setChannelName] = useState(null);
@@ -24,6 +25,10 @@ export default function ChatRoom({ channel }) {
   const [uploadError, setUploadError] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const [clockMs, setClockMs] = useState(Date.now());
+  const [approvalQueue, setApprovalQueue] = useState([]);
+  const [activeApproval, setActiveApproval] = useState(null);
+  const [trustMinutes, setTrustMinutes] = useState(30);
+  const [approvalBusy, setApprovalBusy] = useState(false);
   const bottomRef = useRef(null);
   const statusInterval = useRef(null);
   const fileInputRef = useRef(null);
@@ -115,6 +120,10 @@ export default function ChatRoom({ channel }) {
         .then(r => r.json())
         .then(setWorkStatus)
         .catch(() => {});
+      fetch(`/api/permissions?channel=${encodeURIComponent(channel)}`)
+        .then(r => (r.ok ? r.json() : { mode: 'ask', expires_at: null }))
+        .then(setPermissionPolicy)
+        .catch(() => setPermissionPolicy({ mode: 'ask', expires_at: null }));
     };
     poll();
     statusInterval.current = setInterval(poll, 2000);
@@ -182,7 +191,26 @@ export default function ChatRoom({ channel }) {
     if (lastEvent.type === 'kill_switch') {
       setAutonomyMode(lastEvent.autonomy_mode || 'SAFE');
     }
+    if (lastEvent.type === 'approval_request' && lastEvent.request?.id) {
+      setApprovalQueue(prev => {
+        if (prev.some(item => item.id === lastEvent.request.id)) return prev;
+        return [...prev, lastEvent.request];
+      });
+    }
+    if (lastEvent.type === 'approval_resolved' && lastEvent.request_id) {
+      setApprovalQueue(prev => prev.filter(item => item.id !== lastEvent.request_id));
+      setActiveApproval(prev => (prev?.id === lastEvent.request_id ? null : prev));
+    }
   }, [lastEvent]);
+
+  useEffect(() => {
+    if (activeApproval?.id && approvalQueue.some(item => item.id === activeApproval.id)) return;
+    if (approvalQueue.length === 0) {
+      setActiveApproval(null);
+      return;
+    }
+    setActiveApproval(approvalQueue[0]);
+  }, [approvalQueue, activeApproval]);
 
   const messageMap = useMemo(() => {
     const map = new Map();
@@ -504,6 +532,38 @@ export default function ChatRoom({ channel }) {
       .catch(() => {});
   };
 
+  const resolveApproval = async (approved, approveAllForTask = false) => {
+    if (!activeApproval?.id || approvalBusy) return;
+    setApprovalBusy(true);
+    try {
+      if (approved && approveAllForTask) {
+        const trustResp = await fetch('/api/permissions/trust_session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channel, minutes: trustMinutes }),
+        });
+        const trustPayload = await trustResp.json().catch(() => ({}));
+        if (trustResp.ok && trustPayload?.mode) {
+          setPermissionPolicy(trustPayload);
+        }
+      }
+
+      await fetch('/api/permissions/approval-response', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          request_id: activeApproval.id,
+          approved,
+          decided_by: 'user',
+        }),
+      });
+    } finally {
+      setApprovalBusy(false);
+      setApprovalQueue(prev => prev.filter(item => item.id !== activeApproval.id));
+      setActiveApproval(null);
+    }
+  };
+
   const toggleReaction = (messageId, emoji) => {
     fetch(`/api/messages/${messageId}/reactions`, {
       method: 'POST',
@@ -548,6 +608,8 @@ export default function ChatRoom({ channel }) {
     ? Math.max(0, Number(collabMode?.ends_at || 0) - Math.floor(clockMs / 1000))
     : 0;
   const sprintLabel = `SPRINT - ${formatElapsed(sprintRemaining)} remaining - Goal: ${sprintGoal}`;
+  const approvalMode = (permissionPolicy?.mode || 'ask').toUpperCase();
+  const approvalExpiry = permissionPolicy?.expires_at ? ` until ${new Date(permissionPolicy.expires_at).toLocaleTimeString()}` : '';
 
   return (
     <div className="chat-room">
@@ -568,6 +630,9 @@ export default function ChatRoom({ channel }) {
           </span>
           <span className={`convo-status ${autonomyMode === 'SAFE' ? '' : 'active'}`}>
             Autonomy: {autonomyMode}
+          </span>
+          <span className={`convo-status ${approvalMode === 'TRUSTED' ? 'active' : ''}`}>
+            Approval: {approvalMode}{approvalExpiry}
           </span>
         </div>
         <div className="chat-header-right">
@@ -812,6 +877,47 @@ export default function ChatRoom({ channel }) {
         />
         <button type="submit" disabled={!connected || isUploading}>Send</button>
       </form>
+
+      {activeApproval && (
+        <div className="approval-modal-backdrop">
+          <div className="approval-modal">
+            <h3>Tool Approval Required</h3>
+            <p><strong>Tool:</strong> {activeApproval.tool_type}</p>
+            <p><strong>Agent:</strong> {activeApproval.agent_id}</p>
+            <p><strong>Command:</strong> <code>{activeApproval.command}</code></p>
+            {activeApproval.preview ? (
+              <pre className="approval-preview">{activeApproval.preview}</pre>
+            ) : (
+              <pre className="approval-preview">{JSON.stringify(activeApproval.args || {}, null, 2)}</pre>
+            )}
+            <div className="approval-controls">
+              <label htmlFor="trust-minutes">Trust window</label>
+              <select
+                id="trust-minutes"
+                value={trustMinutes}
+                onChange={(e) => setTrustMinutes(Number(e.target.value))}
+                disabled={approvalBusy}
+              >
+                <option value={15}>15 min</option>
+                <option value={30}>30 min</option>
+                <option value={60}>60 min</option>
+                <option value={120}>120 min</option>
+              </select>
+            </div>
+            <div className="approval-actions">
+              <button className="msg-action-btn" onClick={() => resolveApproval(true, false)} disabled={approvalBusy}>
+                Approve Once
+              </button>
+              <button className="msg-action-btn" onClick={() => resolveApproval(true, true)} disabled={approvalBusy}>
+                Approve All For This Task
+              </button>
+              <button className="stop-btn" onClick={() => resolveApproval(false, false)} disabled={approvalBusy}>
+                Deny
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

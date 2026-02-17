@@ -130,6 +130,8 @@ async def evaluate_tool_policy(
     project_root = Path(active["path"]).resolve()
     branch_name = (active.get("branch") or "main").strip() or "main"
     mode = normalize_mode(await db.get_project_autonomy_mode(project_name))
+    permission = await db.get_permission_policy(channel)
+    permission_mode = (permission.get("mode") or "ask").strip().lower()
 
     caller_auto_approved = agent_id in {"user", "system"}
     is_approved = bool(approved or caller_auto_approved)
@@ -144,7 +146,28 @@ async def evaluate_tool_policy(
         "reason": "allowed",
         "timeout_seconds": 45,
         "output_limit": 12000,
+        "permission_mode": permission_mode,
+        "permission_expires_at": permission.get("expires_at"),
+        "permission_scopes": permission.get("scopes", []),
     }
+
+    if tool_type in MUTATING_TOOLS:
+        if permission_mode == "locked":
+            decision.update({
+                "allowed": False,
+                "requires_approval": False,
+                "reason": "Channel permission policy is locked for mutating tools.",
+            })
+            return decision
+        if permission_mode == "trusted":
+            is_approved = True
+        elif permission_mode == "ask" and not is_approved:
+            decision.update({
+                "allowed": False,
+                "requires_approval": True,
+                "reason": "Channel permission policy requires explicit approval.",
+            })
+            return decision
 
     if target_path:
         path_ok, path_reason = validate_path_in_project(target_path, project_root)

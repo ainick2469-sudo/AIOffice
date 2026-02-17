@@ -11,6 +11,13 @@ const TOOL_OPTIONS = [
   { value: 'task', label: 'Task' },
 ];
 
+const RISK_OPTIONS = [
+  { value: '', label: 'All risk levels' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+];
+
 const clearTargets = {
   logs: {
     endpoint: '/api/audit/logs',
@@ -43,6 +50,9 @@ export default function AuditLog({ onAuditChanged }) {
   const [filters, setFilters] = useState({
     agentId: '',
     toolType: '',
+    channel: '',
+    taskId: '',
+    riskLevel: '',
     query: '',
     dateFrom: '',
     dateTo: '',
@@ -54,6 +64,9 @@ export default function AuditLog({ onAuditChanged }) {
     const params = new URLSearchParams({ limit: String(LIMIT) });
     if (filters.agentId) params.set('agent_id', filters.agentId);
     if (filters.toolType) params.set('tool_type', filters.toolType);
+    if (filters.channel.trim()) params.set('channel', filters.channel.trim());
+    if (filters.taskId.trim()) params.set('task_id', filters.taskId.trim());
+    if (filters.riskLevel) params.set('risk_level', filters.riskLevel);
     if (filters.query.trim()) params.set('q', filters.query.trim());
     if (filters.dateFrom) params.set('date_from', filters.dateFrom);
     if (filters.dateTo) params.set('date_to', filters.dateTo);
@@ -63,7 +76,7 @@ export default function AuditLog({ onAuditChanged }) {
       throw new Error(`Failed to load audit log (${response.status})`);
     }
     return response.json();
-  }, [filters.agentId, filters.toolType, filters.query, filters.dateFrom, filters.dateTo]);
+  }, [filters.agentId, filters.toolType, filters.channel, filters.taskId, filters.riskLevel, filters.query, filters.dateFrom, filters.dateTo]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -155,6 +168,28 @@ export default function AuditLog({ onAuditChanged }) {
     }
   };
 
+  const exportAudit = async () => {
+    const params = new URLSearchParams();
+    if (filters.channel.trim()) params.set('channel', filters.channel.trim());
+    if (filters.taskId.trim()) params.set('task_id', filters.taskId.trim());
+    if (filters.toolType) params.set('tool_type', filters.toolType);
+    if (filters.riskLevel) params.set('risk_level', filters.riskLevel);
+    const response = await fetch(`/api/audit/export?${params.toString()}`);
+    if (!response.ok) {
+      throw new Error(`Export failed (${response.status})`);
+    }
+    const payload = await response.json();
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `audit-export-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="panel audit-panel">
       <div className="panel-header">
@@ -162,6 +197,9 @@ export default function AuditLog({ onAuditChanged }) {
         <div className="audit-header-actions">
           <button className="refresh-btn" onClick={refresh} disabled={loading || clearing}>
             Refresh
+          </button>
+          <button className="refresh-btn" onClick={() => exportAudit().catch((err) => setError(err?.message || 'Export failed.'))} disabled={loading || clearing}>
+            Export
           </button>
           <button className="refresh-btn warn" onClick={() => clearAudit('logs')} disabled={loading || clearing}>
             Clear Logs
@@ -200,6 +238,28 @@ export default function AuditLog({ onAuditChanged }) {
           >
             {TOOL_OPTIONS.map((item) => (
               <option key={item.value || 'all-tools'} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+          <input
+            type="text"
+            placeholder="Channel (e.g. main)"
+            value={filters.channel}
+            onChange={(event) => setFilters(prev => ({ ...prev, channel: event.target.value }))}
+          />
+          <input
+            type="text"
+            placeholder="Task ID"
+            value={filters.taskId}
+            onChange={(event) => setFilters(prev => ({ ...prev, taskId: event.target.value }))}
+          />
+          <select
+            value={filters.riskLevel}
+            onChange={(event) => setFilters(prev => ({ ...prev, riskLevel: event.target.value }))}
+          >
+            {RISK_OPTIONS.map((item) => (
+              <option key={item.value || 'all-risk'} value={item.value}>
                 {item.label}
               </option>
             ))}

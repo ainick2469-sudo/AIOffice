@@ -17,6 +17,17 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
   - test isolation helper `tests/helpers/temp_db.py`
   - `pytest.ini` with deterministic defaults
   - `server/database.py` now respects `AI_OFFICE_TESTING=1` for forced temp DB routing
+- EPIC 1 permission/autonomy governance added:
+  - channel permission policy API (`locked|ask|trusted`) with trusted-session expiry
+  - approval request persistence + websocket handshake (`approval_request` / `approval_resolved`)
+  - tool executor now pauses on approval-required calls and resumes on response
+  - audit logs now include approval metadata (`channel`, `task_id`, `approval_request_id`, `policy_mode`, `reason`)
+  - audit export/filter extension (`/api/audit/export`, channel/task/risk filters)
+  - ChatRoom approval modal and trust-window selector
+  - new tests:
+    - `tests/test_permission_policy_api.py`
+    - `tests/test_tool_approval_handshake.py`
+    - `tests/test_trusted_mode_expiry.py`
 - Portability, env overrides, and test isolation are active:
   - centralized runtime path module (`server/runtime_paths.py`)
   - env override contract (`AI_OFFICE_HOME`, `AI_OFFICE_DB_PATH`, `AI_OFFICE_MEMORY_DIR`, `AI_OFFICE_PROJECTS_DIR`)

@@ -161,10 +161,40 @@ class ExecuteCodeIn(BaseModel):
 
 
 AutonomyMode = Literal["SAFE", "TRUSTED", "ELEVATED"]
+PermissionMode = Literal["locked", "ask", "trusted"]
 
 
 class AutonomyModeIn(BaseModel):
     mode: AutonomyMode
+
+
+class PermissionPolicyIn(BaseModel):
+    channel: str = "main"
+    mode: PermissionMode = "ask"
+    expires_at: Optional[str] = None
+    scopes: list[str] = Field(default_factory=list)
+    command_allowlist_profile: str = "safe"
+
+
+class PermissionPolicyOut(BaseModel):
+    channel: str
+    mode: PermissionMode
+    expires_at: Optional[str] = None
+    scopes: list[str] = Field(default_factory=list)
+    command_allowlist_profile: str = "safe"
+
+
+class TrustSessionIn(BaseModel):
+    channel: str = "main"
+    minutes: int = Field(default=30, ge=1, le=1440)
+    scopes: list[str] = Field(default_factory=list)
+    command_allowlist_profile: str = "safe"
+
+
+class ApprovalResponseIn(BaseModel):
+    request_id: str = Field(..., min_length=6, max_length=64)
+    approved: bool
+    decided_by: str = "user"
 
 
 class ProcessStartIn(BaseModel):

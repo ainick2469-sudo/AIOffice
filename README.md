@@ -97,6 +97,10 @@ Registry source of truth: `agents/registry.json`
 - `POST /api/projects/{name}/merge-apply`
 - `GET /api/projects/{name}/autonomy-mode`
 - `PUT /api/projects/{name}/autonomy-mode`
+- `GET /api/permissions`
+- `PUT /api/permissions`
+- `POST /api/permissions/trust_session`
+- `POST /api/permissions/approval-response`
 - `DELETE /api/projects/{name}`
 - `GET /api/projects/{name}/build-config`
 - `PUT /api/projects/{name}/build-config`
@@ -118,6 +122,7 @@ Registry source of truth: `agents/registry.json`
 - `POST /api/process/kill-switch`
 - `GET /api/console/events/{channel}`
 - `GET /api/audit`
+- `GET /api/audit/export`
 - `GET /api/audit/count`
 - `DELETE /api/audit/logs`
 - `DELETE /api/audit/decisions`

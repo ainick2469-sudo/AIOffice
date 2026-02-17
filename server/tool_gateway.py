@@ -4,15 +4,18 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from . import database as db_api
 from .database import get_db
 from .observability import emit_console_event
 from .policy import evaluate_tool_policy
 from .project_manager import APP_ROOT, get_sandbox_root
 from .runtime_config import build_runtime_env
+from .websocket import manager
 
 logger = logging.getLogger("ai-office.tools")
 
@@ -81,6 +84,8 @@ READABLE_EXTENSIONS = {
     ".md", ".txt", ".css", ".html", ".toml", ".yaml", ".yml",
     ".cfg", ".ini", ".sql", ".sh", ".bat", ".ps1", ".csv",
 }
+
+_approval_waiters: dict[str, asyncio.Future] = {}
 
 
 def _is_safe_path(filepath: str, sandbox: Path) -> bool:
@@ -169,21 +174,113 @@ def _command_timeout_seconds(command: str) -> int:
 
 async def _audit_log(agent_id: str, tool_type: str, command: str,
                      args: Optional[str] = None, output: Optional[str] = None,
-                     exit_code: Optional[int] = None, approved_by: str = "system"):
+                     exit_code: Optional[int] = None, approved_by: str = "system",
+                     channel: Optional[str] = None, task_id: Optional[str] = None,
+                     approval_request_id: Optional[str] = None, policy_mode: Optional[str] = None,
+                     reason: Optional[str] = None):
     """Write to audit log in DB."""
     db = await get_db()
     try:
         await db.execute(
-            """INSERT INTO tool_logs (agent_id, tool_type, command, args, output, exit_code, approved_by)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO tool_logs (
+                   agent_id, tool_type, command, args, output, exit_code, approved_by,
+                   channel, task_id, approval_request_id, policy_mode, reason
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (agent_id, tool_type, command,
              json.dumps(args) if args else None,
              output[:2000] if output else None,
-             exit_code, approved_by),
+             exit_code, approved_by, channel, task_id, approval_request_id, policy_mode, reason),
         )
         await db.commit()
     finally:
         await db.close()
+
+
+def _risk_level(tool_type: str) -> str:
+    if tool_type == "run":
+        return "high"
+    if tool_type == "write":
+        return "medium"
+    return "low"
+
+
+async def _create_approval_request(
+    *,
+    channel: str,
+    agent_id: str,
+    tool_type: str,
+    command: str,
+    args: Optional[dict] = None,
+    policy: Optional[dict] = None,
+    preview: Optional[str] = None,
+    task_id: Optional[str] = None,
+) -> dict:
+    request_id = uuid.uuid4().hex[:16]
+    payload = {
+        "id": request_id,
+        "channel": channel,
+        "agent_id": agent_id,
+        "tool_type": tool_type,
+        "command": command,
+        "args": args or {},
+        "preview": preview or "",
+        "risk_level": _risk_level(tool_type),
+        "policy_mode": (policy or {}).get("permission_mode", "ask"),
+        "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "task_id": task_id,
+    }
+    await db_api.create_approval_request(
+        request_id=request_id,
+        channel=channel,
+        task_id=task_id,
+        agent_id=agent_id,
+        tool_type=tool_type,
+        payload=payload,
+        risk_level=payload["risk_level"],
+    )
+    loop = asyncio.get_running_loop()
+    _approval_waiters[request_id] = loop.create_future()
+    await manager.broadcast(channel, {"type": "approval_request", "request": payload})
+    await emit_console_event(
+        channel=channel,
+        event_type="approval_request",
+        source="tool_gateway",
+        message=f"{tool_type} request awaiting approval: {command[:120]}",
+        severity="warning",
+        data={"request_id": request_id, "agent_id": agent_id, "tool_type": tool_type},
+    )
+    return payload
+
+
+async def wait_for_approval_response(request_id: str, timeout_seconds: int = 120) -> Optional[bool]:
+    existing = await db_api.get_approval_request(request_id)
+    if existing and existing.get("status") == "approved":
+        return True
+    if existing and existing.get("status") == "denied":
+        return False
+
+    fut = _approval_waiters.get(request_id)
+    if fut is None:
+        return None
+    try:
+        approved = await asyncio.wait_for(fut, timeout=timeout_seconds)
+        return bool(approved)
+    except asyncio.TimeoutError:
+        return None
+    finally:
+        _approval_waiters.pop(request_id, None)
+
+
+async def resolve_approval_response(request_id: str, approved: bool, decided_by: str = "user") -> Optional[dict]:
+    resolved = await db_api.resolve_approval_request(
+        request_id,
+        approved=approved,
+        decided_by=decided_by,
+    )
+    fut = _approval_waiters.pop(request_id, None)
+    if fut and not fut.done():
+        fut.set_result(bool(approved))
+    return resolved
 
 
 # ── Tool Functions ─────────────────────────────────────────
@@ -312,9 +409,40 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
         approved=approved,
     )
     if not policy.get("allowed"):
+        if policy.get("requires_approval"):
+            request = await _create_approval_request(
+                channel=channel,
+                agent_id=agent_id,
+                tool_type="run",
+                command=normalized_command,
+                args={"cwd": str(target_dir)},
+                policy=policy,
+            )
+            await _audit_log(
+                agent_id,
+                "run",
+                command,
+                output="Awaiting approval response.",
+                exit_code=0,
+                approved_by="pending",
+                channel=channel,
+                approval_request_id=request["id"],
+                policy_mode=policy.get("permission_mode"),
+                reason=policy.get("reason"),
+            )
+            return {
+                "ok": False,
+                "status": "needs_approval",
+                "request": request,
+                "policy": policy,
+                "channel": channel,
+                "project": policy.get("project"),
+                "branch": policy.get("branch", "main"),
+            }
         result = {"ok": False, "error": policy.get("reason", "Policy denied command."), "policy": policy}
         await _audit_log(agent_id, "run", command,
-                         output=result["error"], exit_code=-1)
+                         output=result["error"], exit_code=-1, channel=channel,
+                         policy_mode=policy.get("permission_mode"), reason=policy.get("reason"))
         await emit_console_event(
             channel=channel,
             event_type="policy_block",
@@ -353,7 +481,10 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
             output += f"\nSTDERR:\n{stderr_str}"
 
         await _audit_log(agent_id, "run", f"{normalized_command} @ {target_dir}",
-                         output=output, exit_code=exit_code)
+                         output=output, exit_code=exit_code,
+                         approved_by=("trusted_session" if policy.get("permission_mode") == "trusted" else "user"),
+                         channel=channel, policy_mode=policy.get("permission_mode"),
+                         reason=policy.get("reason"))
 
         return {
             "ok": exit_code == 0,
@@ -368,7 +499,9 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
         }
     except asyncio.TimeoutError:
         await _audit_log(agent_id, "run", f"{normalized_command} @ {target_dir}",
-                         output=f"TIMEOUT after {timeout_seconds}s", exit_code=-1)
+                         output=f"TIMEOUT after {timeout_seconds}s", exit_code=-1,
+                         channel=channel, policy_mode=policy.get("permission_mode"),
+                         reason=policy.get("reason"))
         return {
             "ok": False,
             "error": f"Command timed out ({timeout_seconds}s)",
@@ -380,7 +513,8 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
         }
     except Exception as e:
         await _audit_log(agent_id, "run", f"{normalized_command} @ {target_dir}",
-                         output=str(e), exit_code=-1)
+                         output=str(e), exit_code=-1, channel=channel,
+                         policy_mode=policy.get("permission_mode"), reason=policy.get("reason"))
         return {
             "ok": False,
             "error": str(e),
@@ -408,6 +542,50 @@ async def tool_write_file(
         approved=approved,
     )
     if not policy.get("allowed"):
+        if policy.get("requires_approval"):
+            # Build a preview so the approval modal can show a concrete diff.
+            sandbox = await get_sandbox_root(channel)
+            resolved = _resolve_path(filepath, sandbox)
+            old_content = ""
+            if resolved.exists():
+                try:
+                    old_content = resolved.read_text(encoding="utf-8")
+                except Exception:
+                    old_content = ""
+            diff = _generate_diff(old_content, content, str(resolved))
+            request = await _create_approval_request(
+                channel=channel,
+                agent_id=agent_id,
+                tool_type="write",
+                command=f"write {filepath}",
+                args={"path": filepath, "size": len(content)},
+                policy=policy,
+                preview=diff[:6000],
+            )
+            await _audit_log(
+                agent_id,
+                "write",
+                f"write_file: {filepath}",
+                output="Awaiting approval response.",
+                exit_code=0,
+                approved_by="pending",
+                channel=channel,
+                approval_request_id=request["id"],
+                policy_mode=policy.get("permission_mode"),
+                reason=policy.get("reason"),
+            )
+            return {
+                "ok": False,
+                "status": "needs_approval",
+                "request": request,
+                "diff": diff,
+                "path": str(resolved),
+                "size": len(content),
+                "policy": policy,
+                "channel": channel,
+                "project": policy.get("project"),
+                "branch": policy.get("branch", "main"),
+            }
         return {"ok": False, "error": policy.get("reason", "Policy denied write."), "policy": policy}
 
     sandbox = await get_sandbox_root(channel)
@@ -429,20 +607,40 @@ async def tool_write_file(
 
     diff = _generate_diff(old_content, content, str(resolved))
 
-    if not approved:
-        await _audit_log(agent_id, "write", f"write_file (PREVIEW): {filepath}",
-                         output=f"Diff preview generated, {len(content)} chars", exit_code=0)
+    should_write_now = bool(approved or policy.get("permission_mode") == "trusted" or agent_id in {"user", "system"})
+    if not should_write_now:
+        request = await _create_approval_request(
+            channel=channel,
+            agent_id=agent_id,
+            tool_type="write",
+            command=f"write {filepath}",
+            args={"path": filepath, "size": len(content)},
+            policy=policy,
+            preview=diff[:6000],
+        )
+        await _audit_log(
+            agent_id,
+            "write",
+            f"write_file: {filepath}",
+            output="Awaiting approval response.",
+            exit_code=0,
+            approved_by="pending",
+            channel=channel,
+            approval_request_id=request["id"],
+            policy_mode=policy.get("permission_mode"),
+            reason=policy.get("reason"),
+        )
         return {
-            "ok": True,
-            "action": "preview",
+            "ok": False,
+            "status": "needs_approval",
+            "request": request,
             "diff": diff,
             "path": str(resolved),
             "size": len(content),
-            "requires_approval": True,
+            "policy": policy,
             "channel": channel,
             "project": policy.get("project"),
             "branch": policy.get("branch", "main"),
-            "policy": policy,
         }
 
     # Actually write
@@ -451,7 +649,9 @@ async def tool_write_file(
         resolved.write_text(content, encoding="utf-8")
         await _audit_log(agent_id, "write", f"write_file: {filepath}",
                          output=f"Written {len(content)} chars", exit_code=0,
-                         approved_by="user")
+                         approved_by=("trusted_session" if policy.get("permission_mode") == "trusted" else "user"),
+                         channel=channel, policy_mode=policy.get("permission_mode"),
+                         reason=policy.get("reason"))
         return {
             "ok": True,
             "action": "written",
@@ -464,7 +664,8 @@ async def tool_write_file(
         }
     except Exception as e:
         await _audit_log(agent_id, "write", f"write_file: {filepath}",
-                         output=str(e), exit_code=-1)
+                         output=str(e), exit_code=-1, channel=channel,
+                         policy_mode=policy.get("permission_mode"), reason=policy.get("reason"))
         return {"ok": False, "error": str(e)}
 
 

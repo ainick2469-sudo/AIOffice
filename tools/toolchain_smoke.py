@@ -26,6 +26,12 @@ async def main() -> int:
     await db.init_db()
     failures: list[str] = []
     await db.set_project_autonomy_mode("ai-office", "TRUSTED")
+    await db.set_permission_policy(
+        "main",
+        mode="trusted",
+        scopes=["read", "search", "run", "write", "task"],
+        command_allowlist_profile="safe",
+    )
 
     sample = (
         "[TOOL:read] README.md\n"
@@ -68,6 +74,7 @@ async def main() -> int:
         GENERATED_TOOL.unlink()
 
     await db.set_project_autonomy_mode("ai-office", "SAFE")
+    await db.set_permission_policy("main", mode="ask", scopes=["read", "search"])
 
     if failures:
         print("TOOLCHAIN_SMOKE_FAIL")
