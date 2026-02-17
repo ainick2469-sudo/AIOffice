@@ -37,9 +37,26 @@ TOOL_PATTERNS = [
     (r'\[TOOL:web\]\s*(.+)', 'web'),
     (r'\[TOOL:fetch\]\s*(.+)', 'fetch'),
     (r'\[TOOL:create-skill\]\s*(.+)', 'create_skill'),
+    (r'\[TOOL:start_process\]\s*(.+)', 'start_process'),
+    (r'\[TOOL:stop_process\]\s*(.+)', 'stop_process'),
+    (r'\[TOOL:tail_process_logs\]\s*(.+)', 'tail_process_logs'),
+    (r'\[TOOL:list_processes\]\s*(.*)', 'list_processes'),
 ]
 GENERIC_TOOL_PATTERN = re.compile(r"\[TOOL:([a-zA-Z0-9_-]+)\]\s*(.*)")
-KNOWN_TOOL_TYPES = {"read", "run", "search", "write", "task", "web", "fetch", "create-skill"}
+KNOWN_TOOL_TYPES = {
+    "read",
+    "run",
+    "search",
+    "write",
+    "task",
+    "web",
+    "fetch",
+    "create-skill",
+    "start_process",
+    "stop_process",
+    "tail_process_logs",
+    "list_processes",
+}
 
 TASK_TAG_PATTERN = re.compile(
     r"\[TASK:(start|done|blocked)\]\s*#(\d+)(?:\s*[—\-]\s*(.+))?",
@@ -124,8 +141,20 @@ def validate_tool_call_format(call: dict) -> tuple[bool, str]:
         return True, ""
     if tool_type == "write_noblock":
         return False, "Write tool missing fenced content block."
-    if tool_type in {"read", "run", "search", "task", "web", "fetch", "create_skill"}:
-        if not (call.get("arg") or "").strip():
+    if tool_type in {
+        "read",
+        "run",
+        "search",
+        "task",
+        "web",
+        "fetch",
+        "create_skill",
+        "start_process",
+        "stop_process",
+        "tail_process_logs",
+        "list_processes",
+    }:
+        if tool_type != "list_processes" and not (call.get("arg") or "").strip():
             return False, f"{tool_type} tool requires an argument."
         return True, ""
     if tool_type == "plugin":
@@ -330,6 +359,115 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                     msg = f"🔍 **Found {len(result['matches'])} files matching** `{call['arg']}`\n```\n{file_list}\n```"
                 else:
                     msg = f"❌ **Search failed:** {result['error']}"
+
+            elif tool_type == "start_process":
+                from . import process_manager
+
+                arg = (call.get("arg") or "").strip()
+                payload = None
+                if arg.startswith("{") and arg.endswith("}"):
+                    try:
+                        payload = json.loads(arg)
+                    except Exception:
+                        payload = None
+
+                command = arg
+                name = None
+                project = None
+                task_id = None
+                if isinstance(payload, dict):
+                    if isinstance(payload.get("cmd"), list):
+                        import subprocess
+                        command = subprocess.list2cmdline([str(item) for item in payload.get("cmd") or []]).strip()
+                    command = (payload.get("command") or command or "").strip()
+                    name = payload.get("name")
+                    project = payload.get("project")
+                    task_id = payload.get("task_id")
+
+                try:
+                    process = await process_manager.start_process(
+                        channel=(channel or "main").strip() or "main",
+                        command=command,
+                        name=(str(name).strip() if name else None),
+                        project=(str(project).strip() if project else None),
+                        agent_id=agent_id,
+                        approved=False,
+                        task_id=(str(task_id).strip() if task_id else None),
+                    )
+                    result = {"ok": True, "process": process}
+                    msg = f"Started process `{process.get('name', 'process')}` (id: `{process.get('id')}`)"
+                except Exception as exc:
+                    result = {"ok": False, "error": str(exc)}
+                    msg = f"Start process failed: {exc}"
+
+            elif tool_type == "stop_process":
+                from . import process_manager
+
+                arg = (call.get("arg") or "").strip()
+                process_id = arg
+                if arg.startswith("{") and arg.endswith("}"):
+                    try:
+                        payload = json.loads(arg)
+                        if isinstance(payload, dict):
+                            process_id = str(payload.get("process_id") or "").strip() or arg
+                    except Exception:
+                        process_id = arg
+                try:
+                    process = await process_manager.stop_process((channel or "main").strip() or "main", process_id)
+                    result = {"ok": True, "process": process}
+                    msg = f"Stopped process `{process_id}`"
+                except Exception as exc:
+                    result = {"ok": False, "error": str(exc)}
+                    msg = f"Stop process failed: {exc}"
+
+            elif tool_type == "tail_process_logs":
+                from . import process_manager
+
+                arg = (call.get("arg") or "").strip()
+                process_id = arg
+                lines = 80
+                if arg.startswith("{") and arg.endswith("}"):
+                    try:
+                        payload = json.loads(arg)
+                        if isinstance(payload, dict):
+                            process_id = str(payload.get("process_id") or "").strip() or arg
+                            lines = int(payload.get("lines") or lines)
+                    except Exception:
+                        process_id = arg
+                else:
+                    parts = arg.split()
+                    if parts:
+                        process_id = parts[0]
+                    if len(parts) > 1:
+                        try:
+                            lines = int(parts[1])
+                        except Exception:
+                            lines = lines
+                lines = max(1, min(400, int(lines or 80)))
+
+                processes = await process_manager.list_processes((channel or "main").strip() or "main", include_logs=True)
+                match = next((p for p in processes if p.get("id") == process_id), None)
+                if not match:
+                    result = {"ok": False, "error": "Process not found"}
+                    msg = f"Process not found: `{process_id}`"
+                else:
+                    logs = list(match.get("logs") or [])
+                    tail = logs[-lines:]
+                    result = {"ok": True, "process_id": process_id, "lines": len(tail)}
+                    msg = f"Logs for `{process_id}` (last {len(tail)} line(s)):\n```text\n" + "\n".join(tail) + "\n```"
+
+            elif tool_type == "list_processes":
+                from . import process_manager
+
+                processes = await process_manager.list_processes((channel or "main").strip() or "main", include_logs=False)
+                result = {"ok": True, "count": len(processes), "processes": processes}
+                if not processes:
+                    msg = "No managed processes running."
+                else:
+                    lines = []
+                    for item in processes[:12]:
+                        lines.append(f"- {item.get('id')} [{item.get('status')}] {item.get('name')}: {item.get('command')}")
+                    msg = "Managed processes:\n```text\n" + "\n".join(lines) + "\n```"
 
             elif tool_type == "write":
                 preview = await tool_write_file(
