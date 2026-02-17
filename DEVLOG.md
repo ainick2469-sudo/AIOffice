@@ -1567,3 +1567,36 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `tools/desktop_smoke.py` ✅
 - `tools/toolchain_smoke.py` ✅
 - `tools/personality_smoke.py` ✅
+
+## 2026-02-17 — EPIC 3.1 Executor State Machine
+
+### Core engine
+- Replaced the autonomous worker internals with an explicit phase machine in `server/autonomous_worker.py`:
+  - `PLAN -> GATE -> EXECUTE -> VERIFY -> DELIVER`
+  - persisted phase events (`work_phase`) include task id/title, attempt, processed/error counters
+  - per-step retry budget (`MAX_STEP_RETRIES`) and per-task verify retry budget (`MAX_TASK_RETRIES`)
+  - deterministic task selection scoped by active `channel + project`
+  - task context fields now surfaced in work status (`current_task_id`, `current_task_title`, `current_task_attempt`, `verify_summary`)
+- Added gate approval APIs at worker layer:
+  - `approve_current_gate(channel, auto_proceed=False)`
+  - trusted + auto-proceed sessions bypass gate; ask-mode requires explicit approve per task
+
+### Command handling
+- Updated `/work` command flow in `server/agent_engine.py`:
+  - new `/work approve` command to release the current gate
+  - `/work status` now reports phase + awaiting_approval details
+
+### Tests
+- Added `tests/test_executor_state_machine.py` covering:
+  - gate wait -> approve -> complete flow
+  - verify retries -> blocked outcome flow
+
+### Verification
+- `C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe -m pytest -q tests` ✅ (`49 passed`)
+- `C:\AI_WORKSPACE\ai-office\client\dev-lint.cmd` ✅
+- `C:\AI_WORKSPACE\ai-office\client\dev-build.cmd` ✅
+- `tools/runtime_smoke.py` ✅
+- `tools/startup_smoke.py` ✅
+- `tools/desktop_smoke.py` ✅
+- `tools/toolchain_smoke.py` ✅
+- `tools/personality_smoke.py` ✅

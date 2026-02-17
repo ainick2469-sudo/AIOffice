@@ -1409,11 +1409,12 @@ async def _handle_work_command(channel: str, user_message: str) -> bool:
     if not raw.startswith("/work"):
         return False
 
-    from .autonomous_worker import get_work_status, start_work, stop_work
+    from .autonomous_worker import approve_current_gate, get_work_status, start_work, stop_work
 
     tokens = raw.split()
     action = tokens[1].strip().lower() if len(tokens) > 1 else "status"
     approved = any(token in {"--approve", "--go"} for token in tokens[2:])
+    auto_proceed = any(token in {"--always", "--auto"} for token in tokens[2:])
     if action == "start":
         status = start_work(channel, approved=approved)
         if status.get("awaiting_approval"):
@@ -1430,11 +1431,32 @@ async def _handle_work_command(channel: str, user_message: str) -> bool:
         await _send_system_message(channel, f"Autonomous work stopped for `{channel}`.")
         await manager.broadcast(channel, {"type": "work_status", "status": status})
         return True
+    if action == "approve":
+        status = approve_current_gate(channel, auto_proceed=auto_proceed)
+        if status.get("phase") == "approval" and status.get("running"):
+            await _send_system_message(
+                channel,
+                "Autonomous worker approved and started.",
+            )
+        elif status.get("reason") == "no_gate_pending":
+            await _send_system_message(
+                channel,
+                "No task gate is currently waiting for approval.",
+            )
+        else:
+            suffix = " Auto-proceed enabled for this session." if auto_proceed else ""
+            await _send_system_message(channel, f"Gate approved for current task.{suffix}")
+        await manager.broadcast(channel, {"type": "work_status", "status": status})
+        return True
 
     status = get_work_status(channel)
     await _send_system_message(
         channel,
-        f"Work status: running={status.get('running')} processed={status.get('processed')} errors={status.get('errors')}",
+        (
+            f"Work status: running={status.get('running')} phase={status.get('phase')} "
+            f"awaiting_approval={status.get('awaiting_approval')} "
+            f"processed={status.get('processed')} errors={status.get('errors')}"
+        ),
     )
     return True
 

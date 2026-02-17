@@ -95,7 +95,16 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
   - lifecycle + kill switch permission reset
   - collision guard
   - locked-mode policy block
-- Current backend test count: `47 passed`
+- EPIC 3.1 executor state machine completed:
+  - `server/autonomous_worker.py` now runs explicit `PLAN -> GATE -> EXECUTE -> VERIFY -> DELIVER`
+  - phase transitions persist as console `work_phase` events with task/attempt metadata
+  - per-step retries + per-task verify retry budget implemented
+  - task execution now scoped by active `channel + project` in worker selection
+  - `/work approve` command support added in `server/agent_engine.py`
+  - trusted + auto-proceed sessions skip gate; ask mode requires explicit gate approval
+- Added state-machine tests:
+  - `tests/test_executor_state_machine.py`
+- Current backend test count: `49 passed`
 
 ---
 

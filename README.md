@@ -53,6 +53,8 @@ Registry source of truth: `agents/registry.json`
 - Build/test/run command config (`.ai-office/config.json`) + auto-detect presets
 - Post-write build/test/fix loop with deterministic Nova escalation
 - `/work` autonomous background execution mode
+- `/work` executor state machine with explicit `PLAN -> GATE -> EXECUTE -> VERIFY -> DELIVER` phases
+- Ask-to-proceed task gating with `/work approve` and trusted-session auto-proceed support
 - Project autonomy modes (`SAFE`, `TRUSTED`, `ELEVATED`) with kill switch reset
 - Channel process manager (start/stop/list) for project services
 - Policy-aware process starts (permission mode + autonomy checks) with explicit denial reasons
