@@ -1114,6 +1114,34 @@ async def process_kill_switch(body: dict):
     return result
 
 
+@router.get("/process/orphans")
+async def process_orphans(channel: Optional[str] = None, project: Optional[str] = None):
+    from . import process_manager
+
+    orphans = await process_manager.list_orphan_processes(channel=channel, project_name=project)
+    return {"orphans": orphans, "count": len(orphans)}
+
+
+@router.post("/process/orphans/cleanup")
+async def process_orphans_cleanup(body: dict):
+    from . import process_manager
+
+    channel = str(body.get("channel") or "").strip() or None
+    project = str(body.get("project_name") or body.get("project") or "").strip() or None
+    raw_ids = body.get("process_ids") or body.get("process_id") or []
+    if isinstance(raw_ids, (str, int)):
+        raw_ids = [raw_ids]
+    if not isinstance(raw_ids, list):
+        raw_ids = []
+    process_ids = [str(item).strip() for item in raw_ids if str(item).strip()]
+
+    return await process_manager.cleanup_orphan_processes(
+        channel=channel,
+        project_name=project,
+        process_ids=process_ids or None,
+    )
+
+
 @router.get("/conversation/{channel}")
 async def conversation_status(channel: str):
     from .agent_engine import get_conversation_status

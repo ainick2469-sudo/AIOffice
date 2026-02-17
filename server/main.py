@@ -33,6 +33,14 @@ async def lifespan(app: FastAPI):
     ensure_runtime_dirs()
     await init_db()
     logger.info("✅ Database initialized")
+    try:
+        from . import process_manager
+
+        orphans = await process_manager.list_orphan_processes()
+        if orphans:
+            logger.warning("⚠️  Found %s orphan process(es) from a previous session. Use /api/process/orphans to inspect and /api/process/orphans/cleanup to terminate.", len(orphans))
+    except Exception:
+        pass
     skills_info = skills_loader.load_skills()
     logger.info("✅ Skills loaded (%s tools)", len(skills_info.get("loaded_tools", [])))
     skills_loader.ensure_dev_watcher(

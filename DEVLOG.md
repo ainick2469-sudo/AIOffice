@@ -1686,3 +1686,40 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `tools/desktop_smoke.py` ✅
 - `tools/toolchain_smoke.py` ✅
 - `tools/personality_smoke.py` ✅
+
+## 2026-02-17 - EPIC 2.3E Process Registry Persistence + Orphan Cleanup
+
+### Backend changes
+- `server/process_manager.py`
+  - Added a per-session `session_id` and persisted process records to DB on start/stop/exit.
+  - Added Windows process-tree termination via `taskkill /T /F` to prevent "ghost" child processes.
+  - Added orphan discovery + cleanup helpers: `list_orphan_processes()` and `cleanup_orphan_processes()`.
+  - `kill_switch()` now also terminates persisted orphans for the channel.
+  - `shutdown_all_processes()` now also terminates any DB-marked running processes (covers crash/restart).
+- `server/routes_api.py`
+  - Added: `GET /api/process/orphans`
+  - Added: `POST /api/process/orphans/cleanup`
+- `server/main.py`
+  - Startup now checks for orphan processes and logs a warning with the cleanup endpoints.
+
+### Database changes
+- `server/database.py`
+  - Added `managed_processes` helpers:
+    - `upsert_managed_process(...)`
+    - `mark_managed_process_ended(...)`
+    - `list_managed_processes(...)`
+
+### Tests
+- Added `tests/test_process_registry_recovery.py` to cover:
+  - process start -> DB record exists
+  - orphan record detection + cleanup terminates a detached running PID
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `with-runtime.cmd client/dev-lint.cmd` PASS
+- `with-runtime.cmd client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS

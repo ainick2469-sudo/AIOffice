@@ -1758,6 +1758,118 @@ async def get_console_events(
         await db.close()
 
 
+async def upsert_managed_process(
+    *,
+    process_id: str,
+    session_id: Optional[str],
+    channel: str,
+    project_name: Optional[str],
+    pid: Optional[int],
+    command: str,
+    cwd: Optional[str],
+    status: str = "running",
+    started_at: Optional[int] = None,
+    metadata: Optional[dict] = None,
+) -> dict:
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO managed_processes (
+                   process_id, session_id, channel, project_name, pid, command, cwd, status,
+                   started_at, metadata_json
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(process_id) DO UPDATE SET
+                   session_id = excluded.session_id,
+                   channel = excluded.channel,
+                   project_name = excluded.project_name,
+                   pid = excluded.pid,
+                   command = excluded.command,
+                   cwd = excluded.cwd,
+                   status = excluded.status,
+                   started_at = COALESCE(excluded.started_at, managed_processes.started_at),
+                   metadata_json = excluded.metadata_json""",
+            (
+                (process_id or "").strip(),
+                (session_id or "").strip() or None,
+                (channel or "main").strip() or "main",
+                (project_name or "").strip() or None,
+                int(pid) if pid is not None else None,
+                (command or "").strip(),
+                (cwd or "").strip() or None,
+                (status or "running").strip().lower(),
+                int(started_at) if started_at is not None else None,
+                _json_dumps(metadata or {}, {}),
+            ),
+        )
+        await db.commit()
+        row = await db.execute("SELECT * FROM managed_processes WHERE process_id = ?", ((process_id or "").strip(),))
+        result = await row.fetchone()
+        item = dict(result) if result else {}
+        if item:
+            item["metadata"] = _json_loads(item.get("metadata_json"), {})
+        return item
+    finally:
+        await db.close()
+
+
+async def mark_managed_process_ended(
+    *,
+    process_id: str,
+    status: str,
+    ended_at: Optional[int] = None,
+    exit_code: Optional[int] = None,
+) -> None:
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE managed_processes
+               SET status = ?, ended_at = ?, exit_code = ?
+               WHERE process_id = ?""",
+            (
+                (status or "exited").strip().lower(),
+                int(ended_at) if ended_at is not None else None,
+                int(exit_code) if exit_code is not None else None,
+                (process_id or "").strip(),
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def list_managed_processes(
+    *,
+    channel: Optional[str] = None,
+    project_name: Optional[str] = None,
+    status: Optional[str] = None,
+) -> list[dict]:
+    db = await get_db()
+    try:
+        where: list[str] = []
+        params: list = []
+        if channel:
+            where.append("channel = ?")
+            params.append((channel or "main").strip() or "main")
+        if project_name:
+            where.append("COALESCE(project_name, '') = ?")
+            params.append((project_name or "").strip())
+        if status:
+            where.append("status = ?")
+            params.append((status or "").strip().lower())
+
+        sql = "SELECT * FROM managed_processes"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC"
+        rows = await db.execute(sql, tuple(params))
+        results = [dict(r) for r in await rows.fetchall()]
+        for item in results:
+            item["metadata"] = _json_loads(item.get("metadata_json"), {})
+        return results
+    finally:
+        await db.close()
+
+
 async def get_api_usage_summary(
     channel: Optional[str] = None,
     project_name: Optional[str] = None,

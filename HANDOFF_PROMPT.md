@@ -280,3 +280,15 @@ All agents have deep, distinct personalities with anti-sycophancy rules. They di
 - Controls tab now includes model readiness + pull missing models action. 
 - Added CLI helper: tools/pull_staff_models.py. 
 - Routing/engine now include ops/scribe/critic in selection and anti-groupthink logic.
+
+## SESSION 39 UPDATE (2026-02-17)
+
+- Process lifecycle reliability (no "python ghosts"):
+  - Persist process records in DB (`managed_processes`) on start/stop/exit.
+  - Windows termination now uses `taskkill /T /F` as needed to kill process trees.
+  - New APIs:
+    - `GET /api/process/orphans`
+    - `POST /api/process/orphans/cleanup`
+  - Startup logs when orphan processes are detected (so the user can clean up).
+- Tests: added `tests/test_process_registry_recovery.py`.
+- Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass (run via `with-runtime.cmd` to avoid PATH fragility).

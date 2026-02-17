@@ -7,6 +7,7 @@ import atexit
 import os
 import re
 import socket
+import subprocess
 import time
 import uuid
 from collections import deque
@@ -22,6 +23,7 @@ from .websocket import manager
 MAX_LOG_LINES = 400
 
 _processes: dict[str, dict[str, dict[str, Any]]] = {}
+_SESSION_ID = uuid.uuid4().hex[:12]
 _PORT_PATTERNS = (
     re.compile(r"(?:^|\s)--port(?:=|\s+)(\d{2,5})(?:\s|$)", re.IGNORECASE),
     re.compile(r"(?:^|\s)-p\s+(\d{2,5})(?:\s|$)", re.IGNORECASE),
@@ -35,6 +37,97 @@ def _channel_map(channel: str) -> dict[str, dict[str, Any]]:
 
 async def _broadcast_event(channel: str, payload: dict[str, Any]) -> None:
     await manager.broadcast(channel, payload)
+
+
+def get_session_id() -> str:
+    return _SESSION_ID
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _pid_is_running(pid: int | None) -> bool:
+    if pid is None:
+        return False
+    try:
+        pid_int = int(pid)
+    except Exception:
+        return False
+    if pid_int <= 0:
+        return False
+
+    if _is_windows():
+        try:
+            import ctypes
+
+            STILL_ACTIVE = 259
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            PROCESS_SYNCHRONIZE = 0x00100000
+            access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE
+            handle = ctypes.windll.kernel32.OpenProcess(access, 0, pid_int)
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                if not ok:
+                    return False
+                return int(exit_code.value) == STILL_ACTIVE
+            finally:
+                try:
+                    ctypes.windll.kernel32.CloseHandle(handle)
+                except Exception:
+                    pass
+        except Exception:
+            return False
+
+    try:
+        os.kill(pid_int, 0)
+    except Exception:
+        return False
+    return True
+
+
+def _taskkill(pid: int, *, force: bool = True, tree: bool = True) -> None:
+    if not _is_windows():
+        return
+    try:
+        pid_int = int(pid)
+    except Exception:
+        return
+    if pid_int <= 0:
+        return
+    sysroot = os.environ.get("SystemRoot", "").strip() or r"C:\Windows"
+    exe = str(Path(sysroot) / "System32" / "taskkill.exe")
+    args = [exe, "/PID", str(pid_int)]
+    if tree:
+        args.append("/T")
+    if force:
+        args.append("/F")
+    try:
+        subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    except Exception:
+        try:
+            subprocess.run(["taskkill", *args[1:]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        except Exception:
+            return
+
+
+def _is_tracked_in_memory(channel: str, process_id: str, pid: int | None) -> bool:
+    ch = (channel or "main").strip() or "main"
+    entry = _channel_map(ch).get(process_id)
+    if entry:
+        return True
+    if pid is None:
+        return False
+    for item in _channel_map(ch).values():
+        try:
+            if int(item.get("pid") or 0) == int(pid):
+                return True
+        except Exception:
+            continue
+    return False
 
 
 async def _capture_logs(channel: str, process_id: str) -> None:
@@ -71,6 +164,15 @@ async def _capture_logs(channel: str, process_id: str) -> None:
     proc_entry["status"] = "exited"
     proc_entry["exit_code"] = exit_code
     proc_entry["ended_at"] = int(time.time())
+    try:
+        await db.mark_managed_process_ended(
+            process_id=process_id,
+            status="exited",
+            ended_at=proc_entry.get("ended_at"),
+            exit_code=exit_code,
+        )
+    except Exception:
+        pass
     await _broadcast_event(channel, {
         "type": "process_exit",
         "process_id": process_id,
@@ -151,11 +253,14 @@ def _terminate_all_sync() -> None:
             proc = entry.get("process")
             if not proc:
                 continue
+            pid = entry.get("pid")
             try:
                 if proc.returncode is None:
                     proc.terminate()
             except Exception:
                 pass
+            if _is_windows() and pid:
+                _taskkill(int(pid), force=True, tree=True)
             try:
                 if proc.returncode is None:
                     proc.kill()
@@ -293,6 +398,30 @@ async def start_process(
     _channel_map(channel)[proc_id] = entry
     entry["capture_task"] = asyncio.create_task(_capture_logs(channel, proc_id))
 
+    try:
+        await db.upsert_managed_process(
+            process_id=proc_id,
+            session_id=_SESSION_ID,
+            channel=channel,
+            project_name=project_name,
+            pid=proc.pid,
+            command=cmd,
+            cwd=str(cwd),
+            status="running",
+            started_at=entry.get("started_at"),
+            metadata={
+                "name": entry.get("name"),
+                "port": requested_port,
+                "policy_mode": policy.get("mode"),
+                "permission_mode": policy.get("permission_mode"),
+                "branch": policy.get("branch", "main"),
+                "agent_id": agent_id,
+                "task_id": task_id,
+            },
+        )
+    except Exception:
+        pass
+
     payload = _serialize(proc_id, entry)
     await _broadcast_event(channel, {"type": "process_started", "process": payload})
     await db.log_console_event(
@@ -324,12 +453,25 @@ async def stop_process(channel: str, process_id: str) -> dict[str, Any]:
     proc = entry["process"]
     was_running = bool(entry.get("status") == "running" and proc.returncode is None)
     if entry.get("status") == "running" and proc.returncode is None:
-        proc.terminate()
+        pid = entry.get("pid")
+        # On Windows, terminating the parent shell does not reliably terminate child processes.
+        # Use taskkill /T so we don't leave "ghost" servers running on ports.
+        if _is_windows() and pid:
+            _taskkill(int(pid), force=True, tree=True)
+        try:
+            proc.terminate()
+        except Exception:
+            pass
         try:
             await asyncio.wait_for(proc.wait(), timeout=6)
         except asyncio.TimeoutError:
-            proc.kill()
+            try:
+                proc.kill()
+            except Exception:
+                pass
             await proc.wait()
+        if _is_windows() and pid and _pid_is_running(int(pid)):
+            _taskkill(int(pid), force=True, tree=True)
 
     if was_running:
         entry["status"] = "stopped"
@@ -337,6 +479,16 @@ async def stop_process(channel: str, process_id: str) -> dict[str, Any]:
         entry["status"] = "stopped"
     entry["exit_code"] = proc.returncode
     entry["ended_at"] = int(time.time())
+
+    try:
+        await db.mark_managed_process_ended(
+            process_id=process_id,
+            status=entry.get("status") or "stopped",
+            ended_at=entry.get("ended_at"),
+            exit_code=proc.returncode,
+        )
+    except Exception:
+        pass
 
     payload = _serialize(process_id, entry)
     await _broadcast_event(channel, {"type": "process_stopped", "process": payload})
@@ -363,6 +515,101 @@ async def list_processes(channel: str, include_logs: bool = False) -> list[dict[
     return items
 
 
+async def list_orphan_processes(
+    *,
+    channel: str | None = None,
+    project_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """Processes persisted in DB as running but not tracked in memory (e.g., after crash/restart)."""
+    safe_channel = (channel or "").strip() or None
+    safe_project = (project_name or "").strip() or None
+    running = await db.list_managed_processes(channel=safe_channel, project_name=safe_project, status="running")
+    now = int(time.time())
+
+    orphans: list[dict[str, Any]] = []
+    for item in running:
+        process_id = str(item.get("process_id") or "").strip()
+        ch = str(item.get("channel") or "main").strip() or "main"
+        pid = item.get("pid")
+
+        alive = _pid_is_running(pid)
+        if not alive:
+            try:
+                await db.mark_managed_process_ended(
+                    process_id=process_id,
+                    status="exited",
+                    ended_at=now,
+                    exit_code=item.get("exit_code"),
+                )
+            except Exception:
+                pass
+            continue
+
+        if _is_tracked_in_memory(ch, process_id, pid):
+            continue
+
+        reason = "untracked"
+        if str(item.get("session_id") or "").strip() and str(item.get("session_id") or "").strip() != _SESSION_ID:
+            reason = "previous_session"
+
+        orphans.append({
+            **item,
+            "alive": True,
+            "orphan_reason": reason,
+        })
+    return orphans
+
+
+async def cleanup_orphan_processes(
+    *,
+    channel: str | None = None,
+    project_name: str | None = None,
+    process_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    targets = await list_orphan_processes(channel=channel, project_name=project_name)
+    if process_ids:
+        wanted = {str(pid or "").strip() for pid in process_ids if str(pid or "").strip()}
+        targets = [item for item in targets if str(item.get("process_id") or "").strip() in wanted]
+
+    killed: list[str] = []
+    failed: list[dict[str, Any]] = []
+    ended_at = int(time.time())
+
+    for item in targets:
+        process_id = str(item.get("process_id") or "").strip()
+        pid = item.get("pid")
+        try:
+            if pid and _pid_is_running(pid):
+                if _is_windows():
+                    _taskkill(int(pid), force=True, tree=True)
+                else:
+                    try:
+                        os.kill(int(pid), 15)
+                    except Exception:
+                        pass
+                    try:
+                        os.kill(int(pid), 9)
+                    except Exception:
+                        pass
+            await db.mark_managed_process_ended(
+                process_id=process_id,
+                status="terminated",
+                ended_at=ended_at,
+                exit_code=item.get("exit_code"),
+            )
+            killed.append(process_id)
+        except Exception as exc:
+            failed.append({"process_id": process_id, "error": str(exc)})
+
+    return {
+        "ok": True,
+        "killed": killed,
+        "failed": failed,
+        "killed_count": len(killed),
+        "failed_count": len(failed),
+    }
+
+
 async def kill_switch(channel: str) -> dict[str, Any]:
     channel_processes = list(_channel_map(channel).keys())
     stopped = []
@@ -371,6 +618,14 @@ async def kill_switch(channel: str) -> dict[str, Any]:
             stopped.append(await stop_process(channel, process_id))
         except Exception:
             continue
+
+    # Also stop any persisted processes for this channel that aren't tracked in memory.
+    try:
+        cleanup = await cleanup_orphan_processes(channel=channel)
+        for proc_id in cleanup.get("killed", []):
+            stopped.append({"id": proc_id})
+    except Exception:
+        pass
 
     active = await get_active_project(channel)
     project_name = active["project"]
@@ -417,6 +672,41 @@ async def shutdown_all_processes() -> dict[str, int]:
                 stopped_count += 1
             except Exception:
                 continue
+
+    # Best-effort: if any processes are still marked running in the DB (crash/restart),
+    # terminate them so we don't leave orphan processes on shutdown.
+    try:
+        running = await db.list_managed_processes(status="running")
+        ended_at = int(time.time())
+        stopped_ids = set()
+        for ch_map in _processes.values():
+            stopped_ids.update(ch_map.keys())
+        for item in running:
+            proc_id = str(item.get("process_id") or "").strip()
+            if not proc_id or proc_id in stopped_ids:
+                continue
+            pid = item.get("pid")
+            if pid and _pid_is_running(pid):
+                if _is_windows():
+                    _taskkill(int(pid), force=True, tree=True)
+                else:
+                    try:
+                        os.kill(int(pid), 15)
+                    except Exception:
+                        pass
+                    try:
+                        os.kill(int(pid), 9)
+                    except Exception:
+                        pass
+            await db.mark_managed_process_ended(
+                process_id=proc_id,
+                status="terminated",
+                ended_at=ended_at,
+                exit_code=item.get("exit_code"),
+            )
+            stopped_count += 1
+    except Exception:
+        pass
     return {"stopped_count": stopped_count}
 
 
