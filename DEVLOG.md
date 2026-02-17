@@ -4,6 +4,20 @@
 
 ---
 
+## SESSION 36 - Permission Grants API (2026-02-17)
+
+### Permission grants (time-boxed scope enablement)
+- [x] Added endpoints:
+  - `POST /api/permissions/grant`
+  - `POST /api/permissions/revoke`
+- [x] Grants persist in DB (`permission_grants`) and are merged into the effective channel scopes.
+- [x] Added backend coverage: `tests/test_permission_grants_api.py`.
+
+### Verification
+- [x] `with-runtime.cmd python -m pytest -q tests` PASS
+
+---
+
 ## SESSION 35 - Debug Bundle + Copy UX (2026-02-17)
 
 ### Debug bundle export

@@ -76,7 +76,7 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
   - `test_project_switch_branch_persistence.py`
   - `test_agent_branch_prompt_context.py`
 - Latest checks pass:
-  - `python -m pytest -q tests` (`50 passed`)
+  - `python -m pytest -q tests` (`51 passed`)
   - `client/dev-lint.cmd`
   - `client/dev-build.cmd`
   - `tools/runtime_smoke.py`
@@ -110,7 +110,11 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
   - Copy UX: per-message copy, console copy (JSON/Markdown), audit entry copy (JSON)
   - `with-runtime.cmd` now prefers Python 3.12 so `with-runtime.cmd python -m pytest` is reproducible
   - new test: `tests/test_debug_bundle_export.py`
-- Current backend test count: `50 passed`
+- Permission grants API added:
+  - `POST /api/permissions/grant`
+  - `POST /api/permissions/revoke`
+  - new test: `tests/test_permission_grants_api.py`
+- Current backend test count: `51 passed`
 
 ---
 
