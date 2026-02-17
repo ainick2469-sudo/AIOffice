@@ -563,20 +563,34 @@ async def execute_code(body: ExecuteCodeIn):
 @router.post("/tasks")
 async def create_task(task: TaskIn, channel: str = "main"):
     payload = task.model_dump()
+    selected_channel = (payload.get("channel") or channel or "main").strip() or "main"
     if not payload["title"].strip():
         raise HTTPException(400, "Title is required.")
     if "branch" in payload and payload["branch"] is not None:
         payload["branch"] = str(payload["branch"]).strip() or None
-    return await db.create_task_record(payload, channel=channel)
+    return await db.create_task_record(
+        payload,
+        channel=selected_channel,
+        project_name=(payload.get("project_name") or None),
+    )
 
 
 @router.get("/tasks")
-async def list_tasks(status: Optional[str] = None, branch: Optional[str] = None):
+async def list_tasks(
+    status: Optional[str] = None,
+    branch: Optional[str] = None,
+    channel: Optional[str] = None,
+    project_name: Optional[str] = None,
+):
     if status and status not in db.TASK_STATUSES:
         raise HTTPException(400, f"Invalid status: {status}")
     if branch is not None and not str(branch).strip():
         raise HTTPException(400, "branch cannot be empty")
-    return await db.list_tasks(status=status, branch=branch)
+    if channel is not None and not str(channel).strip():
+        raise HTTPException(400, "channel cannot be empty")
+    if project_name is not None and not str(project_name).strip():
+        raise HTTPException(400, "project_name cannot be empty")
+    return await db.list_tasks(status=status, branch=branch, channel=channel, project_name=project_name)
 
 
 @router.get("/tasks/{task_id}")

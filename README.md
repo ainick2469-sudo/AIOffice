@@ -45,7 +45,9 @@ Registry source of truth: `agents/registry.json`
 - Structured collaboration commands: `/meeting`, `/vote`
 - Task board with auto task-tag updates (`[TASK:start|done|blocked]`)
 - Branch-aware task assignment/filtering per channel/project context
+- Task records now include `channel` + `project_name` scope for project isolation
 - Channel-scoped project workspaces with `/project` lifecycle commands
+- Channel workspace layout for non-app projects: `repo`, `artifacts`, `skills`, `venv`, `logs`
 - Channel-scoped tool sandbox root for read/search/run/write
 - File context injection before agent code generation
 - Build/test/run command config (`.ai-office/config.json`) + auto-detect presets

@@ -964,7 +964,7 @@ async def _build_file_context(channel: str, user_message: str, agent: dict) -> s
         for token in _text_tokens_for_files(msg.get("content", "")):
             add_if_valid((sandbox / token.replace("\\", "/")))
 
-    tasks = await get_tasks_for_agent(agent["id"])
+    tasks = await get_tasks_for_agent(agent["id"], channel=channel)
     for task in tasks[:8]:
         blob = " ".join(
             str(task.get(k, "")) for k in ("title", "description")
@@ -1983,14 +1983,20 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
 
     context = await _build_context(channel)
     active_project = await project_manager.get_active_project(channel)
+    project_name = active_project["project"]
     project_root = Path(active_project["path"])
     branch_name = (
         (active_project.get("branch") or "").strip()
-        or git_tools.current_branch(active_project["project"])
+        or git_tools.current_branch(project_name)
         or "main"
     )
     file_context = await _build_file_context(channel, context[-1200:], agent)
-    assigned_tasks = await get_tasks_for_agent(agent["id"], branch=branch_name)
+    assigned_tasks = await get_tasks_for_agent(
+        agent["id"],
+        branch=branch_name,
+        channel=channel,
+        project_name=project_name,
+    )
     memory_entries = get_known_context(
         active_project["project"],
         agent["id"],

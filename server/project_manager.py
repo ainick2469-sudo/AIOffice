@@ -77,6 +77,57 @@ def _ensure_project_layout(project_root: Path):
         )
 
 
+def _channel_workspace_dir(project_name: str, channel: str) -> Path:
+    normalized_channel = (channel or "main").strip() or "main"
+    return get_project_root(project_name) / normalized_channel
+
+
+def _seed_channel_repo(project_root: Path, repo_dir: Path):
+    copy_names = [
+        "src",
+        "tests",
+        "docs",
+        "config",
+        ".ai-office",
+        "README.md",
+        "requirements.txt",
+        "package.json",
+        "pyproject.toml",
+        "Cargo.toml",
+        "go.mod",
+        "CMakeLists.txt",
+        "main.py",
+        "app.py",
+    ]
+    for name in copy_names:
+        src = project_root / name
+        dst = repo_dir / name
+        if not src.exists() or dst.exists():
+            continue
+        if src.is_dir():
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+
+
+def _ensure_channel_workspace(project_name: str, channel: str) -> Path:
+    workspace_dir = _channel_workspace_dir(project_name, channel)
+    repo_dir = workspace_dir / "repo"
+    (workspace_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+    (workspace_dir / "skills").mkdir(parents=True, exist_ok=True)
+    (workspace_dir / "venv").mkdir(parents=True, exist_ok=True)
+    (workspace_dir / "logs").mkdir(parents=True, exist_ok=True)
+    repo_dir.mkdir(parents=True, exist_ok=True)
+
+    if not any(repo_dir.iterdir()):
+        project_root = get_project_root(project_name)
+        _seed_channel_repo(project_root, repo_dir)
+        if not any(repo_dir.iterdir()):
+            _ensure_project_layout(repo_dir)
+    return repo_dir
+
+
 def _run_git_bootstrap(project_root: Path):
     env = _runtime_env()
     try:
@@ -188,6 +239,7 @@ async def create_project(name: str, template: Optional[str] = None) -> dict:
     _ensure_project_layout(root)
     _apply_template(root, template)
     _run_git_bootstrap(root)
+    _ensure_channel_workspace(normalized, "main")
 
     info = _workspace_metadata(root)
     info["template"] = template or ""
@@ -276,6 +328,7 @@ async def switch_project(channel: str, name: str) -> dict:
     if not project_root.exists() or not project_root.is_dir():
         raise ValueError("Project not found.")
 
+    repo_path = _ensure_channel_workspace(normalized, channel)
     await db.set_channel_active_project(channel, normalized)
     branch = await db.get_channel_active_branch(channel, normalized)
     if branch == "main":
@@ -289,7 +342,7 @@ async def switch_project(channel: str, name: str) -> dict:
     return {
         "channel": channel,
         "project": normalized,
-        "path": str(project_root),
+        "path": str(repo_path),
         "is_app_root": False,
         "branch": branch,
     }
@@ -335,10 +388,11 @@ async def get_active_project(channel: str) -> dict:
                 branch = await db.set_channel_active_branch(channel, active, detected)
         except Exception:
             pass
+    repo_path = _ensure_channel_workspace(active, channel)
     return {
         "channel": channel,
         "project": active,
-        "path": str(root),
+        "path": str(repo_path),
         "is_app_root": False,
         "branch": branch,
     }

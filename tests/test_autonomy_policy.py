@@ -20,7 +20,7 @@ def _ensure_project(name: str):
 def test_safe_mode_requires_approval_for_mutating_run():
     name = "autonomy-safe"
     _ensure_project(name)
-    _run(db.set_permission_policy("main", mode="ask"))
+    _run(db.set_permission_policy("main", mode="ask", scopes=["read", "search", "run"]))
     _run(db.set_project_autonomy_mode(name, "SAFE"))
 
     decision = _run(
@@ -42,7 +42,7 @@ def test_safe_mode_requires_approval_for_mutating_run():
 def test_trusted_mode_allows_valid_command_without_per_call_approval():
     name = "autonomy-trusted"
     _ensure_project(name)
-    _run(db.set_permission_policy("main", mode="trusted"))
+    _run(db.set_permission_policy("main", mode="trusted", scopes=["read", "search", "run"]))
     _run(db.set_project_autonomy_mode(name, "TRUSTED"))
 
     decision = _run(
@@ -64,7 +64,7 @@ def test_trusted_mode_allows_valid_command_without_per_call_approval():
 def test_policy_blocks_dangerous_command_and_path_escape():
     name = "autonomy-guardrails"
     _ensure_project(name)
-    _run(db.set_permission_policy("main", mode="trusted"))
+    _run(db.set_permission_policy("main", mode="trusted", scopes=["read", "search", "run", "write"]))
     _run(db.set_project_autonomy_mode(name, "ELEVATED"))
 
     blocked_cmd = _run(

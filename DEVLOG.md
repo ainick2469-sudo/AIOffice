@@ -4,6 +4,54 @@
 
 ---
 
+## SESSION 34 - EPIC 2 Foundations (Workspace/Task Scope + Runtime Manager) (2026-02-17)
+
+### Task/project isolation foundation
+- [x] Extended `tasks` schema in `server/database.py`:
+  - `channel` (default `main`)
+  - `project_name` (default `ai-office`)
+- [x] Added non-destructive migrations for existing DBs and backfilled defaults.
+- [x] Updated task CRUD helpers to persist/filter by:
+  - `channel`
+  - `project_name`
+  - `branch`
+- [x] Updated task routes in `server/routes_api.py`:
+  - `POST /api/tasks` now honors `channel` + `project_name`
+  - `GET /api/tasks` now supports `channel` + `project_name` filtering.
+
+### Workspace runtime foundation
+- [x] Added `server/runtime_manager.py`:
+  - channel workspace introspection
+  - workspace venv creation
+  - command rewrite for workspace-local `python` / `pip`
+- [x] Integrated runtime command rewrite in `server/tool_gateway.py`.
+- [x] Updated `server/project_manager.py` to materialize channel workspace structure for non-app projects:
+  - `{workspace}/{project}/{channel}/repo`
+  - `{workspace}/{project}/{channel}/artifacts`
+  - `{workspace}/{project}/{channel}/skills`
+  - `{workspace}/{project}/{channel}/venv`
+  - `{workspace}/{project}/{channel}/logs`
+- [x] Active non-app project path now resolves to channel workspace `repo`.
+
+### Policy refinement for scoped permissions
+- [x] `server/policy.py` now enforces scope requirements:
+  - `run` scope for run tools
+  - `write` scope for mutating file tools
+  - `pip` scope for package installs
+  - `git` scope for mutating git commands
+
+### Verification
+- [x] `python -m pytest -q tests` PASS
+- [x] `client/dev-lint.cmd` PASS
+- [x] `client/dev-build.cmd` PASS
+- [x] `tools/runtime_smoke.py` PASS
+- [x] `tools/startup_smoke.py` PASS
+- [x] `tools/desktop_smoke.py` PASS
+- [x] `tools/toolchain_smoke.py` PASS
+- [x] `tools/personality_smoke.py` PASS
+
+---
+
 ## SESSION 33 - EPIC 1 Permissioned Autonomy + Approval Governance (2026-02-17)
 
 ### Policy persistence model

@@ -55,6 +55,8 @@ class TaskIn(BaseModel):
     title: str
     description: Optional[str] = None
     assigned_to: Optional[str] = None
+    channel: Optional[str] = None
+    project_name: Optional[str] = None
     branch: Optional[str] = None
     priority: int = Field(default=2, ge=1, le=3)
     subtasks: list[dict] = Field(default_factory=list)
@@ -68,6 +70,8 @@ class TaskUpdateIn(BaseModel):
     description: Optional[str] = None
     status: Optional[Literal["backlog", "in_progress", "review", "blocked", "done"]] = None
     assigned_to: Optional[str] = None
+    channel: Optional[str] = None
+    project_name: Optional[str] = None
     branch: Optional[str] = None
     priority: Optional[int] = Field(default=None, ge=1, le=3)
     subtasks: Optional[list[dict]] = None
@@ -81,6 +85,8 @@ class TaskOut(BaseModel):
     description: Optional[str]
     status: str
     assigned_to: Optional[str]
+    channel: str = "main"
+    project_name: str = "ai-office"
     branch: str = "main"
     created_by: Optional[str]
     priority: int

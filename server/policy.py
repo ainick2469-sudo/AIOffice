@@ -132,6 +132,7 @@ async def evaluate_tool_policy(
     mode = normalize_mode(await db.get_project_autonomy_mode(project_name))
     permission = await db.get_permission_policy(channel)
     permission_mode = (permission.get("mode") or "ask").strip().lower()
+    permission_scopes = {str(item).strip().lower() for item in (permission.get("scopes") or []) if str(item).strip()}
 
     caller_auto_approved = agent_id in {"user", "system"}
     is_approved = bool(approved or caller_auto_approved)
@@ -148,10 +149,18 @@ async def evaluate_tool_policy(
         "output_limit": 12000,
         "permission_mode": permission_mode,
         "permission_expires_at": permission.get("expires_at"),
-        "permission_scopes": permission.get("scopes", []),
+        "permission_scopes": sorted(permission_scopes),
     }
 
     if tool_type in MUTATING_TOOLS:
+        required_scope = "run" if tool_type == "run" else "write"
+        if required_scope not in permission_scopes:
+            decision.update({
+                "allowed": False,
+                "requires_approval": False,
+                "reason": f"Channel permission scope `{required_scope}` is required.",
+            })
+            return decision
         if permission_mode == "locked":
             decision.update({
                 "allowed": False,
@@ -209,6 +218,20 @@ async def evaluate_tool_policy(
         return decision
 
     normalized = command_text.lower()
+    if normalized.startswith(("pip install", "python -m pip install")) and "pip" not in permission_scopes:
+        decision.update({
+            "allowed": False,
+            "requires_approval": False,
+            "reason": "Channel permission scope `pip` is required for package installs.",
+        })
+        return decision
+    if normalized.startswith(("git add", "git commit", "git branch", "git checkout", "git merge")) and "git" not in permission_scopes:
+        decision.update({
+            "allowed": False,
+            "requires_approval": False,
+            "reason": "Channel permission scope `git` is required for git mutation commands.",
+        })
+        return decision
     if normalized.startswith(("npm install", "npm ci", "pip install")):
         decision["timeout_seconds"] = 300 if mode in {"TRUSTED", "ELEVATED"} else 120
     elif normalized.startswith(("npm run build", "python -m pytest")):

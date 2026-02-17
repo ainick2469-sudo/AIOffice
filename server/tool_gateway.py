@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import database as db_api
+from . import runtime_manager
 from .database import get_db
 from .observability import emit_console_event
 from .policy import evaluate_tool_policy
@@ -461,10 +462,11 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
     timeout_seconds = int(policy.get("timeout_seconds") or _command_timeout_seconds(normalized_command))
 
     try:
+        runtime_command = await runtime_manager.rewrite_command_for_workspace(channel, normalized_command)
         env = build_runtime_env()
 
         proc = await asyncio.create_subprocess_shell(
-            normalized_command,
+            runtime_command,
             cwd=str(target_dir),
             env=env,
             stdout=asyncio.subprocess.PIPE,
@@ -480,7 +482,7 @@ async def tool_run_command(agent_id: str, command: str, channel: str = "main", a
         if stderr_str:
             output += f"\nSTDERR:\n{stderr_str}"
 
-        await _audit_log(agent_id, "run", f"{normalized_command} @ {target_dir}",
+        await _audit_log(agent_id, "run", f"{runtime_command} @ {target_dir}",
                          output=output, exit_code=exit_code,
                          approved_by=("trusted_session" if policy.get("permission_mode") == "trusted" else "user"),
                          channel=channel, policy_mode=policy.get("permission_mode"),

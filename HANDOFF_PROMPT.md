@@ -28,6 +28,13 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
     - `tests/test_permission_policy_api.py`
     - `tests/test_tool_approval_handshake.py`
     - `tests/test_trusted_mode_expiry.py`
+- EPIC 2 foundation pass added:
+  - task schema now includes `channel` + `project_name` scoping
+  - task create/list APIs now accept channel/project filters
+  - new `server/runtime_manager.py` for channel workspace venv/runtime rewriting
+  - non-app project paths now resolve to channel workspace `repo` directories
+  - channel workspace structure now materialized with `repo/artifacts/skills/venv/logs`
+  - policy scopes now enforced for `run`/`write` plus `pip`/`git` mutations
 - Portability, env overrides, and test isolation are active:
   - centralized runtime path module (`server/runtime_paths.py`)
   - env override contract (`AI_OFFICE_HOME`, `AI_OFFICE_DB_PATH`, `AI_OFFICE_MEMORY_DIR`, `AI_OFFICE_PROJECTS_DIR`)
