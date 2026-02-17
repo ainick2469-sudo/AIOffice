@@ -231,6 +231,7 @@ async def _create_approval_request(
         "preview": preview or "",
         "risk_level": _risk_level(tool_type),
         "policy_mode": (policy or {}).get("permission_mode", "ask"),
+        "missing_scope": (policy or {}).get("missing_scope"),
         "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "task_id": task_id,
     }

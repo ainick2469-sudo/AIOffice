@@ -292,3 +292,15 @@ All agents have deep, distinct personalities with anti-sycophancy rules. They di
   - Startup logs when orphan processes are detected (so the user can clean up).
 - Tests: added `tests/test_process_registry_recovery.py`.
 - Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass (run via `with-runtime.cmd` to avoid PATH fragility).
+
+## SESSION 40 UPDATE (2026-02-17)
+
+- Permission grants UX (targeted approvals instead of broad trust sessions):
+  - Policy now surfaces `missing_scope` for pip/git actions even before approval in ASK mode.
+  - Tool approval requests now include `missing_scope`.
+  - Chat approval modal now supports:
+    - Grant scope for 10 minutes + approve
+    - Grant scope for project + approve
+  - Approval badge uses `ASK|AUTO|LOCKED` (via `ui_mode`) when available.
+- Tests: added `tests/test_policy_scope_prompts.py`.
+- Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.

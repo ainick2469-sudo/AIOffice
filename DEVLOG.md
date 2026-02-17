@@ -1723,3 +1723,33 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-17 - EPIC 1.2 Permission Grants UX (Missing-Scope Prompts)
+
+### Backend changes
+- `server/policy.py`
+  - When ASK-mode approvals are required, policy now surfaces `missing_scope` for scoped commands (pip/git) so the UI can offer targeted grants.
+  - ASK-mode can approve a single pip/git action even if the scope is not permanently granted.
+- `server/tool_gateway.py`
+  - Approval request payload now includes `missing_scope` (if any).
+
+### Frontend changes
+- `client/src/components/ChatRoom.jsx`
+  - Approval badge now uses `ui_mode` labels (`ASK|AUTO|LOCKED`) when available.
+  - Approval modal now supports scoped grants:
+    - `Grant <scope> 10 min + Approve` (creates a scoped grant via `/api/permissions/grant`)
+    - `Grant <scope> for Project + Approve`
+  - Kept the existing "AUTO window" trusted-session flow for non-scope approvals.
+
+### Tests
+- Added `tests/test_policy_scope_prompts.py` to assert pip scope prompts include `missing_scope=pip`.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `with-runtime.cmd client/dev-lint.cmd` PASS
+- `with-runtime.cmd client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS

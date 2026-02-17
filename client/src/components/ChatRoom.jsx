@@ -606,11 +606,27 @@ export default function ChatRoom({ channel }) {
       .finally(() => setProcessActionBusy(false));
   };
 
-  const resolveApproval = async (approved, approveAllForTask = false) => {
+  const resolveApproval = async (approved, opts = {}) => {
     if (!activeApproval?.id || approvalBusy) return;
+    const { trustSession = false, grant = null } = opts || {};
     setApprovalBusy(true);
     try {
-      if (approved && approveAllForTask) {
+      if (approved && grant?.scope) {
+        const grantBody = {
+          channel,
+          project_name: activeProject?.project || 'ai-office',
+          scope: grant.scope,
+          grant_level: grant.grant_level || 'chat',
+          minutes: Number.isFinite(Number(grant.minutes)) ? Number(grant.minutes) : 10,
+          request_id: activeApproval.id,
+          created_by: 'user',
+        };
+        await fetch('/api/permissions/grant', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(grantBody),
+        }).catch(() => null);
+      } else if (approved && trustSession) {
         const trustResp = await fetch('/api/permissions/trust_session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -682,7 +698,7 @@ export default function ChatRoom({ channel }) {
     ? Math.max(0, Number(collabMode?.ends_at || 0) - Math.floor(clockMs / 1000))
     : 0;
   const sprintLabel = `SPRINT - ${formatElapsed(sprintRemaining)} remaining - Goal: ${sprintGoal}`;
-  const approvalMode = (permissionPolicy?.mode || 'ask').toUpperCase();
+  const approvalMode = (permissionPolicy?.ui_mode || (permissionPolicy?.mode || 'ask').toUpperCase()).toUpperCase();
   const approvalExpiry = permissionPolicy?.expires_at ? ` until ${new Date(permissionPolicy.expires_at).toLocaleTimeString()}` : '';
   const runningProcesses = processState.items.filter((item) => item.status === 'running');
   const processSummaryTitle = runningProcesses.length
@@ -711,7 +727,7 @@ export default function ChatRoom({ channel }) {
           <span className={`convo-status ${autonomyMode === 'SAFE' ? '' : 'active'}`}>
             Autonomy: {autonomyMode}
           </span>
-          <span className={`convo-status ${approvalMode === 'TRUSTED' ? 'active' : ''}`}>
+          <span className={`convo-status ${approvalMode === 'AUTO' ? 'active' : ''}`}>
             Approval: {approvalMode}{approvalExpiry}
           </span>
           <span className={`convo-status ${processState.running > 0 ? 'active' : ''}`} title={processSummaryTitle}>
@@ -985,33 +1001,61 @@ export default function ChatRoom({ channel }) {
             <p><strong>Tool:</strong> {activeApproval.tool_type}</p>
             <p><strong>Agent:</strong> {activeApproval.agent_id}</p>
             <p><strong>Command:</strong> <code>{activeApproval.command}</code></p>
+            {activeApproval.missing_scope ? (
+              <p><strong>Scope needed:</strong> <code>{activeApproval.missing_scope}</code></p>
+            ) : null}
             {activeApproval.preview ? (
               <pre className="approval-preview">{activeApproval.preview}</pre>
             ) : (
               <pre className="approval-preview">{JSON.stringify(activeApproval.args || {}, null, 2)}</pre>
             )}
-            <div className="approval-controls">
-              <label htmlFor="trust-minutes">Trust window</label>
-              <select
-                id="trust-minutes"
-                value={trustMinutes}
-                onChange={(e) => setTrustMinutes(Number(e.target.value))}
-                disabled={approvalBusy}
-              >
-                <option value={15}>15 min</option>
-                <option value={30}>30 min</option>
-                <option value={60}>60 min</option>
-                <option value={120}>120 min</option>
-              </select>
-            </div>
             <div className="approval-actions">
-              <button className="msg-action-btn" onClick={() => resolveApproval(true, false)} disabled={approvalBusy}>
+              <button className="msg-action-btn" onClick={() => resolveApproval(true)} disabled={approvalBusy}>
                 Approve Once
               </button>
-              <button className="msg-action-btn" onClick={() => resolveApproval(true, true)} disabled={approvalBusy}>
-                Approve All For This Task
-              </button>
-              <button className="stop-btn" onClick={() => resolveApproval(false, false)} disabled={approvalBusy}>
+              {activeApproval.missing_scope ? (
+                <>
+                  <button
+                    className="msg-action-btn"
+                    onClick={() => resolveApproval(true, { grant: { scope: activeApproval.missing_scope, grant_level: 'chat', minutes: 10 } })}
+                    disabled={approvalBusy}
+                  >
+                    Grant {activeApproval.missing_scope} 10 min + Approve
+                  </button>
+                  <button
+                    className="msg-action-btn"
+                    onClick={() => resolveApproval(true, { grant: { scope: activeApproval.missing_scope, grant_level: 'project' } })}
+                    disabled={approvalBusy}
+                  >
+                    Grant {activeApproval.missing_scope} for Project + Approve
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="approval-controls">
+                    <label htmlFor="trust-minutes">AUTO window</label>
+                    <select
+                      id="trust-minutes"
+                      value={trustMinutes}
+                      onChange={(e) => setTrustMinutes(Number(e.target.value))}
+                      disabled={approvalBusy}
+                    >
+                      <option value={15}>15 min</option>
+                      <option value={30}>30 min</option>
+                      <option value={60}>60 min</option>
+                      <option value={120}>120 min</option>
+                    </select>
+                  </div>
+                  <button
+                    className="msg-action-btn"
+                    onClick={() => resolveApproval(true, { trustSession: true })}
+                    disabled={approvalBusy}
+                  >
+                    Enable AUTO + Approve
+                  </button>
+                </>
+              )}
+              <button className="stop-btn" onClick={() => resolveApproval(false)} disabled={approvalBusy}>
                 Deny
               </button>
             </div>

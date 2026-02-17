@@ -163,6 +163,7 @@ async def evaluate_tool_policy(
                     "allowed": False,
                     "requires_approval": False,
                     "reason": f"Channel is locked. `{required_scope}` is not permitted.",
+                    "missing_scope": required_scope,
                 })
                 return decision
             else:
@@ -171,6 +172,7 @@ async def evaluate_tool_policy(
                     "allowed": False,
                     "requires_approval": True,
                     "reason": f"Agent wants to `{required_scope}`. Approve this action?",
+                    "missing_scope": required_scope,
                 })
                 return decision
         if permission_mode == "locked":
@@ -183,10 +185,21 @@ async def evaluate_tool_policy(
         if permission_mode == "trusted":
             is_approved = True
         elif permission_mode == "ask" and not is_approved:
+            # Surface missing scoped capabilities (pip/git) even before approval so the UI
+            # can offer a targeted temporary grant instead of a generic "Approve?" prompt.
+            reason = "Channel permission policy requires explicit approval."
+            if tool_type == "run":
+                normalized = (command or "").strip().lower()
+                if normalized.startswith(("pip install", "python -m pip install")) and "pip" not in permission_scopes:
+                    decision["missing_scope"] = "pip"
+                    reason = "Package installs require scope `pip`. Approve or grant it temporarily."
+                elif normalized.startswith(("git add", "git commit", "git branch", "git checkout", "git merge")) and "git" not in permission_scopes:
+                    decision["missing_scope"] = "git"
+                    reason = "Git mutation requires scope `git`. Approve or grant it temporarily."
             decision.update({
                 "allowed": False,
                 "requires_approval": True,
-                "reason": "Channel permission policy requires explicit approval.",
+                "reason": reason,
             })
             return decision
 
@@ -231,19 +244,51 @@ async def evaluate_tool_policy(
 
     normalized = command_text.lower()
     if normalized.startswith(("pip install", "python -m pip install")) and "pip" not in permission_scopes:
-        decision.update({
-            "allowed": False,
-            "requires_approval": False,
-            "reason": "Channel permission scope `pip` is required for package installs.",
-        })
-        return decision
+        decision["missing_scope"] = "pip"
+        if permission_mode == "locked":
+            decision.update({
+                "allowed": False,
+                "requires_approval": False,
+                "reason": "Channel is locked. `pip` is not permitted.",
+            })
+            return decision
+        if permission_mode == "trusted":
+            decision.update({
+                "allowed": False,
+                "requires_approval": False,
+                "reason": "Channel permission scope `pip` is required for package installs.",
+            })
+            return decision
+        if not is_approved:
+            decision.update({
+                "allowed": False,
+                "requires_approval": True,
+                "reason": "Package installs require scope `pip`. Approve or grant it temporarily.",
+            })
+            return decision
     if normalized.startswith(("git add", "git commit", "git branch", "git checkout", "git merge")) and "git" not in permission_scopes:
-        decision.update({
-            "allowed": False,
-            "requires_approval": False,
-            "reason": "Channel permission scope `git` is required for git mutation commands.",
-        })
-        return decision
+        decision["missing_scope"] = "git"
+        if permission_mode == "locked":
+            decision.update({
+                "allowed": False,
+                "requires_approval": False,
+                "reason": "Channel is locked. `git` is not permitted.",
+            })
+            return decision
+        if permission_mode == "trusted":
+            decision.update({
+                "allowed": False,
+                "requires_approval": False,
+                "reason": "Channel permission scope `git` is required for git mutation commands.",
+            })
+            return decision
+        if not is_approved:
+            decision.update({
+                "allowed": False,
+                "requires_approval": True,
+                "reason": "Git mutation requires scope `git`. Approve or grant it temporarily.",
+            })
+            return decision
     if normalized.startswith(("npm install", "npm ci", "pip install")):
         decision["timeout_seconds"] = 300 if mode in {"TRUSTED", "ELEVATED"} else 120
     elif normalized.startswith(("npm run build", "python -m pytest")):
