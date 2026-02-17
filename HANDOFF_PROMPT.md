@@ -76,7 +76,7 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
   - `test_project_switch_branch_persistence.py`
   - `test_agent_branch_prompt_context.py`
 - Latest checks pass:
-  - `python -m pytest -q tests` (`51 passed`)
+  - `python -m pytest -q tests` (`52 passed`)
   - `client/dev-lint.cmd`
   - `client/dev-build.cmd`
   - `tools/runtime_smoke.py`
@@ -114,7 +114,12 @@ You are picking up an ongoing project called **AI Office** — a local multi-age
   - `POST /api/permissions/grant`
   - `POST /api/permissions/revoke`
   - new test: `tests/test_permission_grants_api.py`
-- Current backend test count: `51 passed`
+- Tool run execution modernized:
+  - `server/tool_gateway.py` now runs commands via `create_subprocess_exec(*argv)` (no shell by default)
+  - `POST /api/tools/run` supports structured `{cmd:[...], cwd, env, timeout}` payloads
+  - `npm`/`npx` executed via `node` + `npm-cli.js`/`npx-cli.js` for reliability
+  - new test: `tests/test_tool_run_argv_exec.py`
+- Current backend test count: `52 passed`
 
 ---
 

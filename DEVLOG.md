@@ -4,6 +4,29 @@
 
 ---
 
+## SESSION 37 - Argv-Based Tool Run Execution (2026-02-17)
+
+### Tool execution modernization
+- [x] `server/tool_gateway.py` run tool now uses `asyncio.create_subprocess_exec(*argv)` (no shell by default).
+- [x] Structured run support:
+  - `POST /api/tools/run` accepts JSON with `cmd: [...]`, `cwd`, `env`, `timeout`.
+  - Tool executor supports `[TOOL:run] {\"cmd\":[...],...}` payloads.
+- [x] Policy now distinguishes legacy string vs argv:
+  - shell meta token blocking remains for legacy string path
+  - argv path does not treat `;` as chaining (fixes false positives for `python -c`).
+- [x] Node tool reliability: `npm`/`npx` commands are executed via `node` + `npm-cli.js`/`npx-cli.js` to avoid `.cmd` quoting edge cases.
+- [x] Added backend coverage: `tests/test_tool_run_argv_exec.py`.
+
+### Verification
+- [x] `with-runtime.cmd python -m pytest -q tests` PASS
+- [x] `tools/toolchain_smoke.py` PASS
+- [x] `tools/runtime_smoke.py` PASS
+- [x] `tools/startup_smoke.py` PASS
+- [x] `tools/desktop_smoke.py` PASS
+- [x] `tools/personality_smoke.py` PASS
+
+---
+
 ## SESSION 36 - Permission Grants API (2026-02-17)
 
 ### Permission grants (time-boxed scope enablement)
