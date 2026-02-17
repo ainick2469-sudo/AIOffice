@@ -28,6 +28,8 @@ from .models import (
     OllamaPullIn,
     PermissionPolicyIn,
     PermissionPolicyOut,
+    PermissionGrantIn,
+    PermissionRevokeIn,
     ProjectCreateIn,
     ProjectSwitchIn,
     ReactionToggleIn,
@@ -335,6 +337,37 @@ async def trust_session_permissions(body: TrustSessionIn):
             scopes=body.scopes,
             command_allowlist_profile=body.command_allowlist_profile,
         )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.post("/permissions/grant", response_model=PermissionPolicyOut)
+async def grant_channel_permission(body: PermissionGrantIn):
+    try:
+        await db.grant_permission_scope(
+            channel=body.channel,
+            scope=body.scope,
+            grant_level=body.grant_level,
+            minutes=body.minutes,
+            project_name=body.project_name,
+            source_request_id=body.request_id,
+            created_by=body.created_by,
+        )
+        return await db.get_permission_policy(body.channel)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.post("/permissions/revoke", response_model=PermissionPolicyOut)
+async def revoke_channel_permission(body: PermissionRevokeIn):
+    try:
+        await db.revoke_permission_grant(
+            channel=body.channel,
+            grant_id=body.grant_id,
+            scope=body.scope,
+            project_name=body.project_name,
+        )
+        return await db.get_permission_policy(body.channel)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
