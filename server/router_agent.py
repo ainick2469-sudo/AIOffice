@@ -57,9 +57,14 @@ Respond ONLY with JSON: {"agents": ["id1", "id2", "id3"]}"""
 KEYWORD_MAP = {
     "idea": ["spark", "producer", "architect"],
     "brainstorm": ["spark", "producer", "lore", "director"],
-    "build": ["spark", "builder", "architect"],
-    "make": ["spark", "builder", "architect"],
-    "create": ["spark", "builder", "uiux"],
+    "build": ["builder", "architect", "spark"],
+    "make": ["builder", "architect", "spark"],
+    "make it": ["builder", "codex", "architect"],
+    "build it": ["builder", "codex", "architect"],
+    "do it": ["builder", "codex", "producer"],
+    "go": ["builder", "codex", "producer"],
+    "start": ["builder", "codex", "producer"],
+    "create": ["builder", "uiux", "spark"],
     "app": ["spark", "architect", "builder", "uiux"],
     "full app": ["director", "architect", "builder", "codex"],
     "complete app": ["director", "architect", "builder", "codex"],
@@ -151,6 +156,14 @@ RISKY_KEYWORDS = (
     "ignore security", "turn off security", "temporary prod", "push straight to prod",
 )
 
+# When user says these, they want ACTION not discussion — force builder in
+ACTION_KEYWORDS = (
+    "make it", "build it", "do it", "create it", "start building", "go build",
+    "let's go", "let's do it", "just do it", "get started", "start coding",
+    "write the code", "code it", "implement it", "ship it", "make this",
+    "build this", "go ahead", "start now", "begin", "execute",
+)
+
 DECISION_KEYWORDS = (
     "decide", "decision", "approve", "sign off", "final call",
     "go with", "ship", "launch", "commit to", "pick one",
@@ -190,6 +203,21 @@ def _ensure_diverse_panel(message: str, agent_ids: list[str]) -> list[str]:
         if "codex" not in selected:
             insert_at = 1 if selected and selected[0] in SKEPTIC_IDS else 0
             selected.insert(insert_at, "codex")
+
+    # When user wants ACTION, force builder to the front
+    if _message_has_keyword(msg_lower, ACTION_KEYWORDS):
+        if "builder" not in selected:
+            selected.insert(0, "builder")
+        elif selected.index("builder") > 1:
+            selected.remove("builder")
+            selected.insert(0, "builder")
+        # Also ensure codex for implementation support
+        if "codex" not in selected:
+            selected.append("codex")
+        # Remove non-action agents if panel is too big
+        non_action = {"lore", "art", "scribe", "critic"}
+        if len(selected) > 4:
+            selected = [a for a in selected if a not in non_action][:4]
 
     if _message_has_keyword(msg_lower, DECISION_KEYWORDS):
         if not any(a in selected for a in SKEPTIC_IDS):
