@@ -325,3 +325,13 @@ All agents have deep, distinct personalities with anti-sycophancy rules. They di
 - UI: Chat header shows `Pending: N` chip and a pending approvals panel; modal shows expiry countdown.
 - Tests: added `tests/test_approvals_pending_api.py` and `tests/test_approval_timeout_expires.py`.
 - Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.
+
+## SESSION 43 UPDATE (2026-02-18)
+
+- Blocked command guidance improvements (reduce `&` / shell chaining failures):
+  - Legacy string `[TOOL:run]` blocks now explain the correct alternatives:
+    - Use `[TOOL:start_process]` for long-running servers/processes.
+    - Use structured argv `[TOOL:run] {"cmd":[...],...}` for tricky quoting/semicolons (ex: `python -c ...`).
+- Agent prompt guidance:
+  - Updated `builder` and `codex` prompts with an "IMPORTANT TOOL RULES" block reinforcing `start_process` + structured argv usage.
+- Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.

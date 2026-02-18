@@ -86,7 +86,11 @@ def _is_command_shape_safe(command: str, *, structured: bool = False) -> tuple[b
     # Only treat shell tokens as dangerous when we're executing a legacy shell-string command.
     # For argv-based exec calls, these tokens are passed as literal arguments.
     if not structured and any(token in normalized for token in SHELL_META_TOKENS):
-        return False, "Shell chaining/redirection is blocked."
+        return (
+            False,
+            "Shell chaining/redirection is blocked. Use `[TOOL:start_process]` for long-running servers, "
+            "or `[TOOL:run] {\"cmd\":[...],\"cwd\":\"...\"}` for structured argv execution.",
+        )
     for pattern in BLOCKED_PATTERNS:
         if re.search(pattern, normalized):
             return False, "Command matches a blocked security pattern."

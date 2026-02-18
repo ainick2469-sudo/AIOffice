@@ -1817,3 +1817,23 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P0-C Better Blocked Command Guidance
+
+### Backend changes
+- `server/policy.py`
+  - When legacy string `[TOOL:run]` commands are blocked for shell chaining/redirection, the error now clearly points agents to use `[TOOL:start_process]` for long-running servers or structured argv `[TOOL:run] {"cmd":[...],...}`.
+
+### Agent prompt guidance
+- `agents/registry.json`
+  - Added an "IMPORTANT TOOL RULES" block to `builder` and `codex` to reduce `&`/shell chaining confusion and steer toward `start_process` + structured argv run payloads.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS
