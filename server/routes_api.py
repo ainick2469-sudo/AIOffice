@@ -19,6 +19,8 @@ from .models import (
     AppBuilderStartIn,
     BranchSwitchIn,
     BuildConfigIn,
+    CheckpointCreateIn,
+    CheckpointRestoreIn,
     CreateSkillIn,
     MergeApplyIn,
     MergePreviewIn,
@@ -682,6 +684,30 @@ async def git_branch(name: str, body: dict):
 async def git_merge(name: str, body: dict):
     from . import git_tools
     return git_tools.merge(name, str(body.get("name", "")).strip())
+
+
+@router.get("/projects/{name}/checkpoints")
+async def list_checkpoints_route(name: str):
+    from . import checkpoints
+    return checkpoints.list_checkpoints(name)
+
+
+@router.post("/projects/{name}/checkpoints")
+async def create_checkpoint_route(name: str, body: CheckpointCreateIn):
+    from . import checkpoints
+    return checkpoints.create_checkpoint(name, body.name, body.note or "")
+
+
+@router.post("/projects/{name}/checkpoints/restore")
+async def restore_checkpoint_route(name: str, body: CheckpointRestoreIn):
+    from . import checkpoints
+    return checkpoints.restore_checkpoint(name, body.checkpoint_id, body.confirm)
+
+
+@router.delete("/projects/{name}/checkpoints/{checkpoint_id:path}")
+async def delete_checkpoint_route(name: str, checkpoint_id: str):
+    from . import checkpoints
+    return checkpoints.delete_checkpoint(name, checkpoint_id)
 
 
 @router.post("/execute")

@@ -164,6 +164,25 @@ class MergeApplyIn(BaseModel):
     allow_dirty_override: bool = False
 
 
+class CheckpointCreateIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    note: Optional[str] = Field(default=None, max_length=4000)
+
+
+class CheckpointRestoreIn(BaseModel):
+    checkpoint_id: str = Field(..., min_length=1, max_length=200)
+    confirm: str = Field(..., min_length=1, max_length=50)
+
+
+class CheckpointOut(BaseModel):
+    id: str
+    name: str
+    note: str = ""
+    created_at: str
+    kind: Literal["git", "zip"]
+    ref: str
+
+
 class ProjectActiveOut(BaseModel):
     channel: str
     project: str

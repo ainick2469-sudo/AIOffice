@@ -7,6 +7,9 @@ export default function GitPanel({ channel = 'main' }) {
   const [mergeSource, setMergeSource] = useState('');
   const [mergeTarget, setMergeTarget] = useState('main');
   const [mergeResult, setMergeResult] = useState(null);
+  const [checkpoints, setCheckpoints] = useState([]);
+  const [checkpointName, setCheckpointName] = useState('');
+  const [checkpointNote, setCheckpointNote] = useState('');
   const [statusText, setStatusText] = useState('');
   const [logText, setLogText] = useState('');
   const [diffText, setDiffText] = useState('');
@@ -36,9 +39,10 @@ export default function GitPanel({ channel = 'main' }) {
           run(`/api/projects/${name}/git/log`),
           run(`/api/projects/${name}/git/diff`),
           run(`/api/projects/${name}/branches?channel=${encodeURIComponent(channel)}`),
+          run(`/api/projects/${name}/checkpoints`),
         ]);
       })
-      .then(([status, log, diff, branches]) => {
+      .then(([status, log, diff, branches, checkpointsRes]) => {
         setStatusText(status.stdout || status.stderr || status.error || '');
         setLogText(log.stdout || log.stderr || log.error || '');
         setDiffText(diff.stdout || diff.stderr || diff.error || '');
@@ -49,6 +53,9 @@ export default function GitPanel({ channel = 'main' }) {
         setMergeTarget(active);
         const fallback = list.find((item) => item !== active) || '';
         setMergeSource((prev) => prev || fallback);
+
+        const cps = Array.isArray(checkpointsRes?.checkpoints) ? checkpointsRes.checkpoints : [];
+        setCheckpoints(cps);
       })
       .catch((err) => {
         setNotice(err?.message || 'Failed to load git data.');
@@ -130,6 +137,64 @@ export default function GitPanel({ channel = 'main' }) {
       .catch((err) => setNotice(err?.message || 'Merge apply failed.'));
   };
 
+  const createCheckpoint = () => {
+    const name = checkpointName.trim();
+    const note = checkpointNote.trim();
+    if (!name) return;
+    run(`/api/projects/${project}/checkpoints`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, note: note || null }),
+    })
+      .then((res) => {
+        if (res.ok) {
+          setNotice('Checkpoint created.');
+          setCheckpointName('');
+          setCheckpointNote('');
+          refresh();
+        } else {
+          setNotice(res.error || res.stderr || 'Checkpoint create failed.');
+        }
+      })
+      .catch((err) => setNotice(err?.message || 'Checkpoint create failed.'));
+  };
+
+  const restoreCheckpoint = (checkpointId) => {
+    const confirm = window.prompt('Type RESTORE to confirm restoring this checkpoint. This will discard uncommitted changes.', '');
+    if (!confirm) return;
+    run(`/api/projects/${project}/checkpoints/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ checkpoint_id: checkpointId, confirm }),
+    })
+      .then((res) => {
+        if (res.ok) {
+          setNotice('Checkpoint restored.');
+          refresh();
+        } else {
+          setNotice(res.error || res.stderr || 'Checkpoint restore failed.');
+        }
+      })
+      .catch((err) => setNotice(err?.message || 'Checkpoint restore failed.'));
+  };
+
+  const deleteCheckpoint = (checkpointId) => {
+    const confirmed = window.confirm('Delete this checkpoint? (This does not delete your code, only the checkpoint reference.)');
+    if (!confirmed) return;
+    run(`/api/projects/${project}/checkpoints/${encodeURIComponent(checkpointId)}`, {
+      method: 'DELETE',
+    })
+      .then((res) => {
+        if (res.ok) {
+          setNotice('Checkpoint deleted.');
+          refresh();
+        } else {
+          setNotice(res.error || res.stderr || 'Checkpoint delete failed.');
+        }
+      })
+      .catch((err) => setNotice(err?.message || 'Checkpoint delete failed.'));
+  };
+
   return (
     <div className="panel">
       <div className="panel-header">
@@ -186,6 +251,46 @@ export default function GitPanel({ channel = 'main' }) {
           </div>
           {mergeResult?.conflicts?.length > 0 && (
             <pre className="project-result">{`Conflicts:\n${mergeResult.conflicts.join('\n')}`}</pre>
+          )}
+        </div>
+
+        <div className="project-build-config">
+          <h4>Checkpoints</h4>
+          <div className="project-create-row">
+            <input
+              value={checkpointName}
+              onChange={(e) => setCheckpointName(e.target.value)}
+              placeholder="Checkpoint name"
+            />
+            <button onClick={createCheckpoint} disabled={!checkpointName.trim()}>Create</button>
+          </div>
+          <div className="project-create-row">
+            <input
+              value={checkpointNote}
+              onChange={(e) => setCheckpointNote(e.target.value)}
+              placeholder="Note (optional)"
+            />
+          </div>
+          {checkpoints.length === 0 ? (
+            <div className="project-path">(no checkpoints yet)</div>
+          ) : (
+            <div className="process-list">
+              {checkpoints.map((cp) => (
+                <div key={cp.id} className="process-item">
+                  <div className="process-main">
+                    <strong>{cp.name || cp.id}</strong>
+                    <div className="process-meta">
+                      {cp.created_at ? `Created: ${cp.created_at}` : ''}{cp.kind ? ` · ${cp.kind}` : ''}
+                    </div>
+                    {cp.note && <div className="process-meta">{cp.note}</div>}
+                  </div>
+                  <div className="process-actions">
+                    <button onClick={() => restoreCheckpoint(cp.id)}>Restore</button>
+                    <button onClick={() => deleteCheckpoint(cp.id)}>Delete</button>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
 

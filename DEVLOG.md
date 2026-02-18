@@ -2134,3 +2134,36 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P1.1 Checkpoints (Create/List/Restore/Delete)
+
+### Backend changes
+- `server/checkpoints.py` (new)
+  - Adds checkpoint helpers for git-backed checkpoints (commit + `checkpoint/...` tag) with zip fallback if no `.git`.
+  - Restore is destructive and requires explicit confirm text: `RESTORE`.
+- `server/routes_api.py`
+  - Added new endpoints:
+    - `GET /api/projects/{name}/checkpoints`
+    - `POST /api/projects/{name}/checkpoints`
+    - `POST /api/projects/{name}/checkpoints/restore`
+    - `DELETE /api/projects/{name}/checkpoints/{checkpoint_id}`
+- `server/models.py`
+  - Added `CheckpointCreateIn`, `CheckpointRestoreIn`, `CheckpointOut`.
+
+### Frontend changes
+- `client/src/components/GitPanel.jsx`
+  - Added a Checkpoints section to create/list/restore/delete checkpoints from the Git tab.
+
+### Tests
+- `tests/test_checkpoints_api.py`
+  - Covers create/list/restore/delete via API on a temp project.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS
