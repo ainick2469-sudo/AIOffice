@@ -2167,3 +2167,45 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P1.2 Oracle Tab (Project Search + Send Snippet)
+
+### Backend changes
+- `server/project_search.py` (new)
+  - Adds a dependency-free, grep-like text search with safety caps and ignore rules.
+- `server/routes_api.py`
+  - Added Oracle search endpoints:
+    - `GET /api/oracle/search?channel=...&q=...`
+    - `GET /api/projects/{name}/search?q=...` (best-effort project search)
+  - Updated file viewer endpoints to be channel/project scoped:
+    - `GET /api/files/tree` now accepts `channel` and uses the active project sandbox root.
+    - `GET /api/files/read` now accepts `channel` and reads from the active project sandbox root.
+
+### Frontend changes
+- `client/src/components/OraclePanel.jsx` (new)
+  - UI for searching within the active project.
+  - Actions per result: Open (jump to Files) and Send to Chat (prefills chat input with a snippet reference).
+- `client/src/App.jsx`
+  - Added `Oracle` tab.
+  - Added minimal cross-panel wiring:
+    - Oracle -> Files open request
+    - Oracle -> Chat prefill
+- `client/src/components/ChatRoom.jsx`
+  - Accepts `prefillText` + `onPrefillConsumed` to support cross-panel snippet injection.
+- `client/src/components/FileViewer.jsx`
+  - Accepts `channel` and scopes browsing/reads to the active project.
+  - Supports `openRequest` to open a file at/around a specific line (snippet view).
+
+### Tests
+- `tests/test_oracle_search_api.py`
+  - Confirms Oracle search returns hits within the active project scope.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS

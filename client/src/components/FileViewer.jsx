@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import MessageContent from './MessageContent';
 
 const EXT_LANG = {
@@ -7,7 +7,11 @@ const EXT_LANG = {
   yaml: 'yaml', yml: 'yaml', toml: 'toml', sh: 'bash', bat: 'batch',
 };
 
-export default function FileViewer() {
+export default function FileViewer({
+  channel = 'main',
+  openRequest = null,
+  onOpenConsumed = null,
+}) {
   const [tree, setTree] = useState([]);
   const [currentPath, setCurrentPath] = useState('.');
   const [pathStack, setPathStack] = useState(['.']);
@@ -15,16 +19,26 @@ export default function FileViewer() {
   const [fileName, setFileName] = useState('');
   const [loading, setLoading] = useState(true);
 
-  const fetchDirectory = (path) => fetch(`/api/files/tree?path=${encodeURIComponent(path)}`).then(r => r.json());
+  const fetchDirectory = useCallback((path) =>
+    fetch(`/api/files/tree?channel=${encodeURIComponent(channel)}&path=${encodeURIComponent(path)}`)
+      .then(r => r.json()), [channel]);
 
-  const loadDir = (path) => {
+  const loadDir = useCallback((path) => {
     setLoading(true);
     fetchDirectory(path)
       .then((data) => {
         setTree(Array.isArray(data) ? data : []);
       })
       .finally(() => setLoading(false));
-  };
+  }, [fetchDirectory]);
+
+  useEffect(() => {
+    // Reset navigation when switching channels so we don't mix project roots.
+    setCurrentPath('.');
+    setPathStack(['.']);
+    setFileContent(null);
+    setFileName('');
+  }, [channel]);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,7 +54,7 @@ export default function FileViewer() {
     return () => {
       cancelled = true;
     };
-  }, [currentPath]);
+  }, [currentPath, fetchDirectory]);
 
   const openDir = (path) => {
     setFileContent(null);
@@ -60,16 +74,30 @@ export default function FileViewer() {
     setFileContent(null);
   };
 
-  const openFile = (item) => {
+  const openFilePath = (path, line = null) => {
     setLoading(true);
-    setFileName(item.name);
-    fetch(`/api/files/read?path=${encodeURIComponent(item.path)}`)
+    setFileName(line ? `${path}:${line}` : path);
+    fetch(`/api/files/read?channel=${encodeURIComponent(channel)}&path=${encodeURIComponent(path)}`)
       .then(r => r.json())
       .then(data => {
         if (data.ok) {
-          const ext = item.name.split('.').pop();
+          const ext = path.split('.').pop();
           const lang = EXT_LANG[ext] || 'text';
-          setFileContent({ content: data.content, lang });
+          const content = data.content || '';
+          if (line && Number.isFinite(line) && line > 0) {
+            const lines = content.split('\n');
+            const center = Math.max(1, Math.min(lines.length, line));
+            const start = Math.max(1, center - 20);
+            const end = Math.min(lines.length, center + 20);
+            const snippet = lines.slice(start - 1, end).map((txt, idx) => {
+              const ln = start + idx;
+              const marker = ln === center ? '>>' : '  ';
+              return `${marker} ${String(ln).padStart(4, '0')}: ${txt}`;
+            }).join('\n');
+            setFileContent({ content: snippet, lang: 'text' });
+          } else {
+            setFileContent({ content, lang });
+          }
         } else {
           setFileContent({ content: `Error: ${data.error}`, lang: 'text' });
         }
@@ -77,6 +105,27 @@ export default function FileViewer() {
       })
       .catch(() => setLoading(false));
   };
+
+  const openFile = (item) => {
+    openFilePath(item.path, null);
+  };
+
+  useEffect(() => {
+    const req = openRequest;
+    if (!req || !req.path) return;
+
+    const path = String(req.path);
+    const line = req.line ? Number(req.line) : null;
+    const dir = path.includes('/') ? path.split('/').slice(0, -1).join('/') : '.';
+    if (dir && dir !== currentPath) {
+      setCurrentPath(dir || '.');
+      setPathStack(dir && dir !== '.' ? ['.', dir] : ['.']);
+    }
+
+    openFilePath(path, line);
+    onOpenConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRequest]);
 
   const formatSize = (bytes) => {
     if (!bytes) return '';

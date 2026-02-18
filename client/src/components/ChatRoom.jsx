@@ -29,7 +29,11 @@ async function copyToClipboard(text) {
   }
 }
 
-export default function ChatRoom({ channel }) {
+export default function ChatRoom({
+  channel = 'main',
+  prefillText = '',
+  onPrefillConsumed = null,
+}) {
   const { connected, messages, setMessages, send, typingAgents, lastEvent } = useWebSocket(channel);
   const [input, setInput] = useState('');
   const [agents, setAgents] = useState({});
@@ -68,6 +72,13 @@ export default function ChatRoom({ channel }) {
   });
   const bottomRef = useRef(null);
   const statusInterval = useRef(null);
+
+  useEffect(() => {
+    const text = String(prefillText || '');
+    if (!text.trim()) return;
+    setInput(text);
+    onPrefillConsumed?.();
+  }, [prefillText, onPrefillConsumed]);
 
   useEffect(() => {
     try {

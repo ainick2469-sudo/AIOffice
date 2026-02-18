@@ -710,6 +710,52 @@ async def delete_checkpoint_route(name: str, checkpoint_id: str):
     return checkpoints.delete_checkpoint(name, checkpoint_id)
 
 
+@router.get("/projects/{name}/search")
+async def search_project_route(
+    name: str,
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = 50,
+    channel: str = "main",
+):
+    """Grep-like text search within a project's workspace (Oracle UI)."""
+    from . import project_manager as pm
+    from . import project_search
+
+    root = pm.APP_ROOT if name == "ai-office" else pm.get_project_root(name)
+    candidate = (root / channel / "repo").resolve()
+    search_root = candidate if candidate.exists() else root.resolve()
+    results = project_search.search_text(search_root, q, limit=limit)
+    return {
+        "ok": True,
+        "project": name,
+        "root": str(search_root),
+        "results": results,
+    }
+
+
+@router.get("/oracle/search")
+async def oracle_search_route(
+    channel: str = "main",
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = 50,
+):
+    """Search within the active project's sandbox root for a channel."""
+    from . import project_manager as pm
+    from . import project_search
+
+    active = await pm.get_active_project(channel)
+    root = await pm.get_sandbox_root(channel)
+    results = project_search.search_text(root, q, limit=limit)
+    return {
+        "ok": True,
+        "channel": channel,
+        "project": active.get("project", "ai-office"),
+        "branch": active.get("branch", "main"),
+        "root": str(root),
+        "results": results,
+    }
+
+
 @router.post("/execute")
 async def execute_code(body: ExecuteCodeIn):
     import subprocess
@@ -1425,9 +1471,11 @@ async def update_task_status(task_id: int, body: dict):
 
 
 @router.get("/files/tree")
-async def file_tree(path: str = "."):
-    """Get directory tree for file viewer."""
-    root = PROJECT_ROOT.resolve()
+async def file_tree(path: str = ".", channel: str = "main"):
+    """Get directory tree for file viewer (scoped to active project)."""
+    from . import project_manager as pm
+
+    root = (await pm.get_sandbox_root(channel)).resolve()
     base = (root / path).resolve()
     try:
         base.relative_to(root)
@@ -1437,7 +1485,7 @@ async def file_tree(path: str = "."):
     items = []
     try:
         for entry in sorted(base.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
-            if entry.name.startswith('.') or entry.name in ('node_modules', '__pycache__', '.git', 'data'):
+            if entry.name.startswith('.') or entry.name in ('node_modules', '__pycache__', '.git', 'data', 'venv', '.venv'):
                 continue
             items.append({
                 "name": entry.name,
@@ -1451,10 +1499,10 @@ async def file_tree(path: str = "."):
 
 
 @router.get("/files/read")
-async def file_read(path: str):
-    """Read file contents for file viewer."""
+async def file_read(path: str, channel: str = "main"):
+    """Read file contents for file viewer (scoped to active project)."""
     from .tool_gateway import tool_read_file
-    return await tool_read_file("viewer", path)
+    return await tool_read_file("viewer", path, channel=channel)
 
 
 @router.post("/files/upload")

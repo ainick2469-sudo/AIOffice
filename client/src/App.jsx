@@ -7,6 +7,7 @@ import Controls from './components/Controls';
 import TaskBoard from './components/TaskBoard';
 import FileViewer from './components/FileViewer';
 import SearchPanel from './components/SearchPanel';
+import OraclePanel from './components/OraclePanel';
 import DecisionLog from './components/DecisionLog';
 import SpecPanel from './components/SpecPanel';
 import AgentProfile from './components/AgentProfile';
@@ -25,6 +26,8 @@ export default function App() {
   const [agents, setAgents] = useState({});
   const [theme, setTheme] = useState(() => localStorage.getItem('ai-office-theme') || 'dark');
   const [auditCount, setAuditCount] = useState(0);
+  const [chatPrefill, setChatPrefill] = useState('');
+  const [fileOpenRequest, setFileOpenRequest] = useState(null);
 
   const refreshAuditCount = () => {
     fetch('/api/audit/count')
@@ -86,6 +89,9 @@ export default function App() {
           <button className={panel === 'search' ? 'active' : ''} onClick={() => setPanel('search')}>
             Search
           </button>
+          <button className={panel === 'oracle' ? 'active' : ''} onClick={() => setPanel('oracle')}>
+            Oracle
+          </button>
           <button className={panel === 'decisions' ? 'active' : ''} onClick={() => setPanel('decisions')}>
             Decisions
           </button>
@@ -128,14 +134,39 @@ export default function App() {
             onOpenDecisions={() => setPanel('decisions')}
           />
         )}
-        {panel === 'chat' && <ChatRoom channel={channel} />}
+        {panel === 'chat' && (
+          <ChatRoom
+            channel={channel}
+            prefillText={chatPrefill}
+            onPrefillConsumed={() => setChatPrefill('')}
+          />
+        )}
         {panel === 'tasks' && <TaskBoard channel={channel} />}
-        {panel === 'files' && <FileViewer />}
+        {panel === 'files' && (
+          <FileViewer
+            channel={channel}
+            openRequest={fileOpenRequest}
+            onOpenConsumed={() => setFileOpenRequest(null)}
+          />
+        )}
         {panel === 'search' && (
           <SearchPanel
             agents={agents}
             onJumpToChannel={(ch) => {
               setChannel(ch);
+              setPanel('chat');
+            }}
+          />
+        )}
+        {panel === 'oracle' && (
+          <OraclePanel
+            channel={channel}
+            onOpenFile={(req) => {
+              setFileOpenRequest(req);
+              setPanel('files');
+            }}
+            onSendToChat={(text) => {
+              setChatPrefill(text);
               setPanel('chat');
             }}
           />
