@@ -237,6 +237,36 @@ For command execution in subdirectories, agents can use:
 [TOOL:run] @client npm run build
 ```
 
+## How To Use (Tools, Approvals, Spec Gate, Memory Erase)
+
+### Tool call formats (canonical + legacy)
+
+- Canonical headers:
+  - `[TOOL:write] <path>` then a fenced code block with file content
+  - `[TOOL:run] {"cmd":[...],"cwd":"...","timeout":45}` (structured argv is preferred)
+- Legacy headers also work (missing colon), e.g. `[TOOLwrite]`.
+- Paths are canonicalized so a leading `@` never creates a literal `@apps/` folder:
+  - `@apps/foo.txt` becomes `apps/foo.txt`
+
+### Approvals (don’t miss them)
+
+- In `ASK` mode, mutating tools (`write`, `run`, `start_process`, etc.) pause until approved.
+- The Chat header shows `Pending: N` and clicking it opens the approval queue.
+- Pending approvals reload automatically on reconnect/channel load (in case a websocket event was missed).
+- Default approval TTL is 10 minutes (`AI_OFFICE_APPROVAL_TTL_SECONDS=600`).
+
+### Spec-first workflow (hard gate)
+
+- When a Spec is `DRAFT`, mutating tools are blocked until you approve the Spec.
+- Approve via the Chat header `Approve Spec` button or the Spec tab (confirm text: `APPROVE SPEC`).
+- This Spec gate overrides autonomy/approval modes: no file/process mutations while `DRAFT`.
+
+### Erase Memory Banks (wipe poisoned context safely)
+
+- Controls tab → **Memory Banks** shows per-project stats and lets you wipe selected scopes.
+- Confirmation requires typing `ERASE`.
+- Optional toggles can also clear channel messages, scoped tasks, and scoped approvals.
+
 ## Key Management Helpers
 
 - Set/replace OpenAI key:

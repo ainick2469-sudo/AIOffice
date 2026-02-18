@@ -1941,3 +1941,12 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - Docs: Tool/Approval/Spec/Memory How-To
+
+- `README.md`
+  - Added a short "How To Use" section documenting:
+    - canonical + legacy tool headers (including `[TOOLwrite]`)
+    - approvals + pending queue + TTL
+    - spec-first hard gate + approval flow
+    - memory banks erase controls

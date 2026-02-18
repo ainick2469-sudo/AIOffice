@@ -374,3 +374,11 @@ All agents have deep, distinct personalities with anti-sycophancy rules. They di
     - recent console events
   - Chat header now has a `Show/Hide Status` toggle (visibility persisted via `localStorage`).
 - Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.
+
+## SESSION 47 UPDATE (2026-02-18)
+
+- Docs: added a short README "How To Use" section for:
+  - tool syntax (canonical + legacy `[TOOLwrite]`)
+  - pending approvals + TTL
+  - spec-first hard gate + approval flow
+  - memory banks erase controls
