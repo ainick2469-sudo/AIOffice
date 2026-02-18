@@ -142,6 +142,12 @@ class ProjectCreateIn(BaseModel):
     template: Optional[Literal["react", "python", "rust"]] = None
 
 
+class ProjectCreateFromPromptIn(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=20000)
+    template: Optional[Literal["react", "python", "rust"]] = None
+    project_name: Optional[str] = Field(default=None, min_length=1, max_length=50)
+
+
 class ProjectSwitchIn(BaseModel):
     channel: str = "main"
     name: str

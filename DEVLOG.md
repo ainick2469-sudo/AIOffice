@@ -1724,6 +1724,42 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
 
+## 2026-02-18 - Project Create From Prompt + Import API
+
+### Backend changes
+- `server/models.py`
+  - Added `ProjectCreateFromPromptIn`.
+- `server/routes_api.py`
+  - Added `POST /api/projects/create_from_prompt`:
+    - creates a new project
+    - creates/switches a deterministic project chat channel (`proj-<project_name>`)
+    - seeds a DRAFT spec + idea bank (spec gate enforced)
+    - seeds initial scoped tasks (channel + project)
+  - Added `POST /api/projects/import`:
+    - accepts `zip_file` upload (zip-first) and optional folder-style `files` upload
+    - extracts into the active channel workspace repo (`.../<project>/<channel>/repo`)
+    - runs stack detection against the imported repo root
+    - seeds a DRAFT spec + ingestion tasks
+    - writes a deterministic `docs/PROJECT_BRIEF.md`
+  - Enriched `GET /api/projects` to include:
+    - `channel_id` (`proj-<name>`)
+    - best-effort `detected_kind(s)` from build config
+
+### Tests
+- Added:
+  - `tests/test_project_create_from_prompt_api.py`
+  - `tests/test_project_import_api.py`
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS
+
 ## 2026-02-17 - EPIC 1.2 Permission Grants UX (Missing-Scope Prompts)
 
 ### Backend changes

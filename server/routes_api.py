@@ -27,6 +27,7 @@ from .models import (
     ProcessStartIn,
     ProcessStopIn,
     ProjectActiveOut,
+    ProjectCreateFromPromptIn,
     DebugBundleIn,
     MemoryEraseIn,
     ExecuteCodeIn,
@@ -39,6 +40,7 @@ from .models import (
     PermissionRevokeIn,
     RunCommandIn,
     ProjectCreateIn,
+    ProjectImportOut,
     ProjectSwitchIn,
     ReactionToggleIn,
     TaskIn,
@@ -57,6 +59,7 @@ router = APIRouter(prefix="/api", tags=["api"])
 PROJECT_ROOT = APP_ROOT
 UPLOADS_DIR = AI_OFFICE_HOME / "uploads"
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_IMPORT_BYTES = int(os.environ.get("AI_OFFICE_MAX_IMPORT_BYTES", str(200 * 1024 * 1024)))
 
 
 def _resolve_executable(name: str, candidates: list[str]) -> str:
@@ -77,6 +80,50 @@ def _normalize_timestamp(value: Optional[str]) -> Optional[str]:
         return None
     text = value.strip().replace("T", " ").replace("Z", "")
     return text or None
+
+
+def _slugify_project_name(text: str) -> str:
+    raw = (text or "").strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+    slug = re.sub(r"^[^a-z0-9]+", "", slug).strip("-")
+    slug = slug[:50].strip("-")
+    return slug
+
+
+def _seed_spec_from_prompt(prompt: str, *, project_name: str, template: Optional[str] = None) -> tuple[str, str]:
+    tpl = (template or "").strip() or "auto"
+    goal = (prompt or "").strip()
+    spec = (
+        f"# Build Spec: {project_name}\n\n"
+        "## Goal\n"
+        f"{goal}\n\n"
+        "## UX\n"
+        "- Primary user flow:\n"
+        "- Screens:\n\n"
+        "## Stack\n"
+        f"- Template hint: `{tpl}`\n"
+        "- Frontend:\n"
+        "- Backend:\n\n"
+        "## Data Model\n"
+        "- Entities:\n\n"
+        "## API\n"
+        "- Endpoints:\n\n"
+        "## Milestones\n"
+        "1. Scaffold\n"
+        "2. Core features\n"
+        "3. Preview loop\n"
+        "4. Verification (tests/build)\n"
+    )
+    ideas = (
+        f"# Idea Bank: {project_name}\n\n"
+        "## Seed\n"
+        f"- Prompt: {goal}\n\n"
+        "## UI Ideas\n"
+        "- \n\n"
+        "## Feature Ideas\n"
+        "- \n"
+    )
+    return spec, ideas
 
 
 def _registry_agents() -> list[dict]:
@@ -324,7 +371,320 @@ async def list_projects_route():
     from . import project_manager as pm
 
     projects = await pm.list_projects()
-    return {"projects": projects, "projects_root": str(pm.WORKSPACE_ROOT)}
+    # Enrich with best-effort stack detection from build config.
+    from . import build_runner
+
+    enriched = []
+    for project in projects:
+        name = (project.get("name") or "").strip()
+        config = build_runner.get_build_config(name) if name else {}
+        detected = config.get("detected") if isinstance(config, dict) else {}
+        if not isinstance(detected, dict):
+            detected = {}
+        kinds = sorted([k for k in detected.keys() if isinstance(k, str) and k.strip()])
+        enriched.append(
+            {
+                **project,
+                "channel_id": f"proj-{name}" if name else None,
+                "detected_kinds": kinds,
+                "detected_kind": kinds[0] if kinds else None,
+            }
+        )
+    return {"projects": enriched, "projects_root": str(pm.WORKSPACE_ROOT)}
+
+
+@router.post("/projects/create_from_prompt")
+async def create_project_from_prompt(body: ProjectCreateFromPromptIn):
+    from . import project_manager as pm
+    from . import spec_bank
+    from . import build_runner
+
+    prompt = (body.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(400, "prompt is required")
+
+    requested = (body.project_name or "").strip().lower()
+    if requested and not pm.validate_project_name(requested):
+        raise HTTPException(400, "Invalid project_name. Use lowercase letters, numbers, and hyphens (max 50 chars).")
+
+    template = body.template
+    base = requested or _slugify_project_name(prompt)
+    if not base:
+        base = f"project-{int(__import__('time').time())}"
+
+    created = None
+    name = base
+    if requested:
+        created = await pm.create_project(name, template=template)
+    else:
+        # Auto-suffix to avoid collisions when name derived from prompt.
+        last_error = ""
+        for i in range(0, 50):
+            candidate = base if i == 0 else f"{base[: max(0, 47 - len(str(i)))]}-{i}"
+            candidate = candidate.strip("-")
+            if not pm.validate_project_name(candidate):
+                continue
+            try:
+                created = await pm.create_project(candidate, template=template)
+                name = candidate
+                break
+            except ValueError as exc:
+                last_error = str(exc)
+                if "already exists" in last_error.lower():
+                    continue
+                raise HTTPException(400, last_error)
+        if not created:
+            raise HTTPException(400, last_error or "Unable to allocate a unique project name.")
+
+    channel_id = f"proj-{name}"
+    try:
+        await db.create_channel(channel_id, name, "group")
+    except Exception:
+        # Channel is an implementation detail; messages do not require a channels-row to exist.
+        pass
+
+    active = await pm.switch_project(channel_id, name)
+    detected = await build_runner.detect_and_store_config(name, root_override=active.get("path"))
+
+    spec_md, idea_bank_md = _seed_spec_from_prompt(prompt, project_name=name, template=template)
+    saved = spec_bank.save_current(name, spec_md=spec_md, idea_bank_md=idea_bank_md)
+    state = await db.set_spec_state(channel_id, name, status="draft", spec_version=saved.get("version"))
+
+    tasks = []
+    for title, desc in [
+        ("Define scope", "Confirm the user-facing goal, constraints, and definition of done."),
+        ("Choose stack", "Confirm frontend/backend/runtime stack and project structure."),
+        ("Scaffold repo", "Create the initial file structure and base implementation."),
+        ("Run preview", "Configure preview_cmd/port and validate the preview loop end-to-end."),
+    ]:
+        tasks.append(
+            await db.create_task_record(
+                {"title": title, "description": desc, "status": "backlog", "created_by": "system"},
+                channel=channel_id,
+                project_name=name,
+            )
+        )
+
+    return {
+        "ok": True,
+        "project": created,
+        "channel": channel_id,
+        "active": active,
+        "spec_status": state.get("status") or "draft",
+        "spec_version": state.get("spec_version"),
+        "created_tasks": tasks,
+        "detected_config": detected,
+    }
+
+
+@router.post("/projects/import", response_model=ProjectImportOut)
+async def import_project(
+    zip_file: Optional[UploadFile] = File(default=None),
+    files: Optional[list[UploadFile]] = File(default=None),
+    project_name: Optional[str] = Query(default=None),
+):
+    import zipfile
+    import time
+    import shutil
+
+    from . import project_manager as pm
+    from . import build_runner
+    from . import spec_bank
+
+    requested = (project_name or "").strip().lower()
+    if requested and not pm.validate_project_name(requested):
+        raise HTTPException(400, "Invalid project_name. Use lowercase letters, numbers, and hyphens (max 50 chars).")
+
+    if not zip_file and not files:
+        raise HTTPException(400, "zip_file or files is required")
+
+    # Decide name from provided value, zip base name, or timestamp.
+    base = requested
+    if not base and zip_file and (zip_file.filename or "").strip():
+        stem = Path(zip_file.filename).stem
+        base = _slugify_project_name(stem)
+    if not base:
+        base = f"import-{int(time.time())}"
+
+    created = None
+    name = base
+    if requested:
+        created = await pm.create_project(name, template=None)
+    else:
+        last_error = ""
+        for i in range(0, 50):
+            candidate = base if i == 0 else f"{base[: max(0, 47 - len(str(i)))]}-{i}"
+            candidate = candidate.strip("-")
+            if not pm.validate_project_name(candidate):
+                continue
+            try:
+                created = await pm.create_project(candidate, template=None)
+                name = candidate
+                break
+            except ValueError as exc:
+                last_error = str(exc)
+                if "already exists" in last_error.lower():
+                    continue
+                raise HTTPException(400, last_error)
+        if not created:
+            raise HTTPException(400, last_error or "Unable to allocate a unique project name.")
+
+    channel_id = f"proj-{name}"
+    try:
+        await db.create_channel(channel_id, name, "group")
+    except Exception:
+        pass
+
+    active = await pm.switch_project(channel_id, name)
+    repo_root = Path(active.get("path") or "").resolve()
+    if not repo_root.exists():
+        raise HTTPException(500, "Workspace repo path is missing.")
+
+    # Reset repo contents before import.
+    for child in list(repo_root.iterdir()):
+        try:
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=False)
+            else:
+                child.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    extracted_files = 0
+
+    def _normalize_rel(raw: str) -> str:
+        rel = (raw or "").replace("\\", "/")
+        while rel.startswith("/"):
+            rel = rel[1:]
+        while rel.startswith("./"):
+            rel = rel[2:]
+        return rel
+
+    if zip_file:
+        data = await zip_file.read()
+        if len(data) > MAX_IMPORT_BYTES:
+            raise HTTPException(413, f"Zip too large. Max size is {MAX_IMPORT_BYTES // (1024 * 1024)}MB.")
+
+        UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S-%f")
+        tmp_zip = UPLOADS_DIR / f"import-{stamp}-{_safe_filename(zip_file.filename or 'project.zip')}"
+        tmp_zip.write_bytes(data)
+
+        with zipfile.ZipFile(str(tmp_zip), "r") as zf:
+            members = []
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                name_in_zip = _normalize_rel(info.filename)
+                if not name_in_zip or name_in_zip.startswith("__MACOSX/"):
+                    continue
+                if name_in_zip.startswith("../") or "/../" in f"/{name_in_zip}/":
+                    continue
+                members.append(name_in_zip)
+
+            strip_prefix = None
+            top_levels = {m.split("/")[0] for m in members if m}
+            if len(top_levels) == 1 and any("/" in m for m in members):
+                strip_prefix = next(iter(top_levels))
+
+            for rel in members:
+                if strip_prefix and rel.startswith(strip_prefix + "/"):
+                    rel = rel[len(strip_prefix) + 1 :]
+                if not rel:
+                    continue
+                target = (repo_root / rel).resolve()
+                try:
+                    target.relative_to(repo_root)
+                except Exception:
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(rel if not strip_prefix else f"{strip_prefix}/{rel}", "r") as src:
+                    target.write_bytes(src.read())
+                extracted_files += 1
+    else:
+        # Folder upload via `webkitdirectory`: client sends relative paths as the per-file "filename".
+        file_items = list(files or [])
+        names = [_normalize_rel(getattr(f, "filename", "") or "") for f in file_items]
+        strip_prefix = None
+        top_levels = {n.split("/")[0] for n in names if n}
+        if len(top_levels) == 1 and any("/" in n for n in names):
+            strip_prefix = next(iter(top_levels))
+
+        total_bytes = 0
+        for upload, rel in zip(file_items, names):
+            if not rel:
+                continue
+            if strip_prefix and rel.startswith(strip_prefix + "/"):
+                rel = rel[len(strip_prefix) + 1 :]
+            if not rel:
+                continue
+            if rel.startswith("../") or "/../" in f"/{rel}/":
+                continue
+            payload = await upload.read()
+            total_bytes += len(payload)
+            if total_bytes > MAX_IMPORT_BYTES:
+                raise HTTPException(413, f"Import too large. Max size is {MAX_IMPORT_BYTES // (1024 * 1024)}MB.")
+            target = (repo_root / rel).resolve()
+            try:
+                target.relative_to(repo_root)
+            except Exception:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+            extracted_files += 1
+
+    detected = await build_runner.detect_and_store_config(name, root_override=repo_root)
+
+    # Seed a spec draft to force spec gate before mutating tools.
+    spec_md, idea_bank_md = _seed_spec_from_prompt(
+        f"Imported project `{name}`. Next: summarize what this repo is and how to run it.",
+        project_name=name,
+        template=None,
+    )
+    saved = spec_bank.save_current(name, spec_md=spec_md, idea_bank_md=idea_bank_md)
+    await db.set_spec_state(channel_id, name, status="draft", spec_version=saved.get("version"))
+
+    tasks_created = 0
+    for title, desc in [
+        ("Index file tree", "Scan the workspace tree and identify key entrypoints and configs."),
+        ("Summarize architecture", "Write a short architecture summary grounded in actual files."),
+        ("Generate Spec + Blueprint", "Update the spec and regenerate the blueprint based on findings."),
+    ]:
+        await db.create_task_record(
+            {"title": title, "description": desc, "status": "backlog", "created_by": "system"},
+            channel=channel_id,
+            project_name=name,
+        )
+        tasks_created += 1
+
+    # Brief artifact (deterministic V1).
+    docs_dir = repo_root / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    brief_path = docs_dir / "PROJECT_BRIEF.md"
+    if not brief_path.exists():
+        brief_path.write_text(
+            (
+                f"# Project Brief: {name}\n\n"
+                "## Imported\n"
+                f"- Extracted files: {extracted_files}\n\n"
+                "## Detected\n"
+                f"- Kinds: {', '.join(sorted((detected or {}).get('detected', {}).keys())) or '(none)'}\n\n"
+                "## Next\n"
+                "- Open Spec tab, refine the spec, then click Approve Spec.\n"
+                "- Configure Preview and Run.\n"
+            ),
+            encoding="utf-8",
+        )
+
+    return ProjectImportOut(
+        ok=True,
+        project=name,
+        channel=channel_id,
+        path=str(repo_root),
+        extracted_files=extracted_files,
+        brief_path=str(brief_path),
+        tasks_created=tasks_created,
+    )
 
 
 @router.post("/projects/switch")
