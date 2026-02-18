@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 
 const STATUSES = ['backlog', 'in_progress', 'review', 'blocked', 'done'];
 const STATUS_LABELS = {
@@ -59,7 +59,9 @@ function normalizeTask(task) {
 export default function TaskBoard({ channel = 'main' }) {
   const [tasks, setTasks] = useState([]);
   const [agents, setAgents] = useState({});
+  const [activeProject, setActiveProject] = useState('ai-office');
   const [activeBranch, setActiveBranch] = useState('main');
+  const [showAllProjects, setShowAllProjects] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [newTask, setNewTask] = useState(blankTask);
   const [filters, setFilters] = useState({
@@ -73,8 +75,13 @@ export default function TaskBoard({ channel = 'main' }) {
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [newLinkedFile, setNewLinkedFile] = useState('');
 
-  const load = () => {
-    fetch('/api/tasks')
+  const load = useCallback(() => {
+    const scopedProject = (activeProject || 'ai-office').trim() || 'ai-office';
+    const tasksUrl = showAllProjects
+      ? `/api/tasks?channel=${encodeURIComponent(channel)}`
+      : `/api/tasks?channel=${encodeURIComponent(channel)}&project_name=${encodeURIComponent(scopedProject)}`;
+
+    fetch(tasksUrl)
       .then((r) => r.json())
       .then((list) => setTasks(Array.isArray(list) ? list.map(normalizeTask) : []))
       .catch(() => {});
@@ -89,23 +96,26 @@ export default function TaskBoard({ channel = 'main' }) {
         setAgents(next);
       })
       .catch(() => {});
-  };
+  }, [channel, activeProject, showAllProjects]);
 
   useEffect(() => {
     load();
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
-  }, [channel]);
+  }, [load]);
 
   useEffect(() => {
     fetch(`/api/projects/active/${channel}`)
       .then((r) => r.json())
       .then((data) => {
+        const project = String(data?.project || 'ai-office').trim() || 'ai-office';
         const branch = String(data?.branch || 'main').trim() || 'main';
+        setActiveProject(project);
         setActiveBranch(branch);
         setNewTask((prev) => ({ ...prev, branch }));
       })
       .catch(() => {
+        setActiveProject('ai-office');
         setActiveBranch('main');
       });
   }, [channel]);
@@ -153,13 +163,15 @@ export default function TaskBoard({ channel = 'main' }) {
     event.preventDefault();
     if (!newTask.title.trim()) return;
 
-    fetch(`/api/tasks?channel=${encodeURIComponent(channel)}`, {
+    fetch('/api/tasks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...newTask,
         title: newTask.title.trim(),
         description: (newTask.description || '').trim(),
+        channel,
+        project_name: (activeProject || 'ai-office').trim() || 'ai-office',
         branch: (newTask.branch || activeBranch || 'main').trim() || 'main',
       }),
     })
@@ -351,6 +363,14 @@ export default function TaskBoard({ channel = 'main' }) {
       )}
 
       <div className="task-filters">
+        <select
+          value={showAllProjects ? 'all' : 'project'}
+          onChange={(event) => setShowAllProjects(event.target.value === 'all')}
+          title="Task scope"
+        >
+          <option value="project">This Project</option>
+          <option value="all">All Projects</option>
+        </select>
         <input
           type="text"
           placeholder="Filter by text"

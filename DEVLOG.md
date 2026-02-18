@@ -2058,3 +2058,25 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P0.4 Task Board Scoped By Default (Project + Channel)
+
+### Frontend changes
+- `client/src/components/TaskBoard.jsx`
+  - Default task fetch is now scoped to the active `project_name` + `channel`.
+  - Added a scope selector: "This Project" (default) vs "All Projects".
+  - Task creation now includes `channel` + `project_name` in the POST body (explicit scoping).
+
+### Tests
+- `tests/test_tasks_list_filters.py`
+  - Confirms `/api/tasks` filter behavior for `channel` and `project_name`.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS
