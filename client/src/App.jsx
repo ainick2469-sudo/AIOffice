@@ -8,6 +8,7 @@ import TaskBoard from './components/TaskBoard';
 import FileViewer from './components/FileViewer';
 import SearchPanel from './components/SearchPanel';
 import OraclePanel from './components/OraclePanel';
+import BlueprintPanel from './components/BlueprintPanel';
 import DecisionLog from './components/DecisionLog';
 import SpecPanel from './components/SpecPanel';
 import AgentProfile from './components/AgentProfile';
@@ -28,6 +29,7 @@ export default function App() {
   const [auditCount, setAuditCount] = useState(0);
   const [chatPrefill, setChatPrefill] = useState('');
   const [fileOpenRequest, setFileOpenRequest] = useState(null);
+  const [oraclePrefill, setOraclePrefill] = useState('');
 
   const refreshAuditCount = () => {
     fetch('/api/audit/count')
@@ -98,6 +100,9 @@ export default function App() {
           <button className={panel === 'spec' ? 'active' : ''} onClick={() => setPanel('spec')}>
             Spec
           </button>
+          <button className={panel === 'blueprint' ? 'active' : ''} onClick={() => setPanel('blueprint')}>
+            Blueprint
+          </button>
           <button className={panel === 'audit' ? 'active' : ''} onClick={() => setPanel('audit')}>
             Audit ({auditCount})
           </button>
@@ -161,6 +166,8 @@ export default function App() {
         {panel === 'oracle' && (
           <OraclePanel
             channel={channel}
+            prefillQuery={oraclePrefill}
+            onPrefillConsumed={() => setOraclePrefill('')}
             onOpenFile={(req) => {
               setFileOpenRequest(req);
               setPanel('files');
@@ -168,6 +175,15 @@ export default function App() {
             onSendToChat={(text) => {
               setChatPrefill(text);
               setPanel('chat');
+            }}
+          />
+        )}
+        {panel === 'blueprint' && (
+          <BlueprintPanel
+            channel={channel}
+            onOpenOracle={(q) => {
+              setOraclePrefill(q);
+              setPanel('oracle');
             }}
           />
         )}

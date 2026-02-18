@@ -420,6 +420,57 @@ async def spec_history(project: str = Query(default="ai-office"), limit: int = 5
     return {"ok": True, "project": project, "items": spec_bank.list_history(project, limit=limit)}
 
 
+@router.get("/blueprint/current")
+async def get_current_blueprint(channel: str = Query(default="main")):
+    from . import project_manager as pm
+    from . import blueprint_bank
+
+    channel_id = (channel or "main").strip() or "main"
+    active = await pm.get_active_project(channel_id)
+    project = (active.get("project") or "ai-office").strip() or "ai-office"
+    snap = blueprint_bank.get_current(project)
+    return {
+        "ok": True,
+        "channel": channel_id,
+        "project": project,
+        "blueprint": snap.blueprint,
+        "blueprint_path": snap.blueprint_path,
+    }
+
+
+@router.post("/blueprint/regenerate")
+async def regenerate_blueprint(channel: str = Query(default="main")):
+    from . import project_manager as pm
+    from . import spec_bank
+    from . import blueprint_bank
+
+    channel_id = (channel or "main").strip() or "main"
+    active = await pm.get_active_project(channel_id)
+    project = (active.get("project") or "ai-office").strip() or "ai-office"
+    spec = spec_bank.get_current(project).spec_md
+
+    generated = blueprint_bank.generate_from_spec(spec)
+    saved = blueprint_bank.save_current(project, {"project": project, **generated})
+    snap = blueprint_bank.get_current(project)
+    await db.log_console_event(
+        channel=channel_id,
+        project_name=project,
+        event_type="blueprint_regenerated",
+        source="blueprint",
+        message="Blueprint regenerated",
+        data={"version": saved.get("version"), "nodes": len(generated.get("nodes", [])), "edges": len(generated.get("edges", []))},
+    )
+    return {
+        "ok": True,
+        "channel": channel_id,
+        "project": project,
+        "version": saved.get("version"),
+        "blueprint": snap.blueprint,
+        "blueprint_path": snap.blueprint_path,
+        "history_path": saved.get("history_path"),
+    }
+
+
 @router.get("/projects/status/{channel}")
 async def get_project_status_route(channel: str):
     from . import project_manager as pm

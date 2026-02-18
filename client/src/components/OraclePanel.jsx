@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 
 export default function OraclePanel({
   channel = 'main',
+  prefillQuery = '',
+  onPrefillConsumed = null,
   onOpenFile = null,
   onSendToChat = null,
 }) {
@@ -20,10 +22,7 @@ export default function OraclePanel({
       .catch(() => {});
   }, [channel]);
 
-  const search = (e) => {
-    e?.preventDefault();
-    const q = query.trim();
-    if (!q) return;
+  const runSearch = (q) => {
     setNotice('');
     setSearching(true);
     fetch(`/api/oracle/search?channel=${encodeURIComponent(channel)}&q=${encodeURIComponent(q)}&limit=80`)
@@ -42,6 +41,22 @@ export default function OraclePanel({
       })
       .finally(() => setSearching(false));
   };
+
+  const search = (e) => {
+    e?.preventDefault();
+    const q = query.trim();
+    if (!q) return;
+    runSearch(q);
+  };
+
+  useEffect(() => {
+    const q = String(prefillQuery || '').trim();
+    if (!q) return;
+    setQuery(q);
+    runSearch(q);
+    onPrefillConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillQuery]);
 
   const sendSnippet = (item) => {
     const header = `[ORACLE] ${item.path}:${item.line}`;
@@ -94,4 +109,3 @@ export default function OraclePanel({
     </div>
   );
 }
-

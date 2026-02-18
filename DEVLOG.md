@@ -2209,3 +2209,38 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P1.3 Blueprint Tab (Spec -> Architecture Map)
+
+### Backend changes
+- `server/blueprint_bank.py` (new)
+  - Stores `blueprint-current.json` alongside spec artifacts and keeps history snapshots.
+  - Generates a lightweight `{nodes, edges}` graph from the current spec markdown.
+- `server/routes_api.py`
+  - Added endpoints:
+    - `GET /api/blueprint/current?channel=...`
+    - `POST /api/blueprint/regenerate?channel=...`
+  - Regeneration emits `blueprint_regenerated` console events for traceability.
+
+### Frontend changes
+- `client/src/components/BlueprintPanel.jsx` (new)
+  - Renders a simple SVG graph of the blueprint.
+  - Clicking a node jumps to Oracle search using the node's `search_terms`.
+- `client/src/App.jsx`
+  - Added `Blueprint` tab and Oracle prefill wiring.
+- `client/src/components/OraclePanel.jsx`
+  - Added `prefillQuery` support so other panels can open Oracle with a prepared query.
+
+### Tests
+- `tests/test_blueprint_api.py`
+  - Saves a spec, regenerates blueprint, and validates shape via API.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS
