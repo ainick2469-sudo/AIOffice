@@ -620,21 +620,45 @@ async def put_project_build_config(name: str, body: BuildConfigIn):
 
 
 @router.post("/projects/{name}/build")
-async def run_project_build(name: str):
+async def run_project_build(name: str, channel: Optional[str] = None):
     from . import build_runner
-    return build_runner.run_build(name)
+    from . import project_manager as pm
+
+    cwd_override = None
+    if channel:
+        active = await pm.get_active_project(channel)
+        if (active.get("project") or "").strip() != name:
+            raise HTTPException(400, "Channel active project does not match build target.")
+        cwd_override = active.get("path")
+    return build_runner.run_build(name, cwd_override=cwd_override)
 
 
 @router.post("/projects/{name}/test")
-async def run_project_test(name: str):
+async def run_project_test(name: str, channel: Optional[str] = None):
     from . import build_runner
-    return build_runner.run_test(name)
+    from . import project_manager as pm
+
+    cwd_override = None
+    if channel:
+        active = await pm.get_active_project(channel)
+        if (active.get("project") or "").strip() != name:
+            raise HTTPException(400, "Channel active project does not match test target.")
+        cwd_override = active.get("path")
+    return build_runner.run_test(name, cwd_override=cwd_override)
 
 
 @router.post("/projects/{name}/run")
-async def run_project_start(name: str):
+async def run_project_start(name: str, channel: Optional[str] = None):
     from . import build_runner
-    return build_runner.run_start(name)
+    from . import project_manager as pm
+
+    cwd_override = None
+    if channel:
+        active = await pm.get_active_project(channel)
+        if (active.get("project") or "").strip() != name:
+            raise HTTPException(400, "Channel active project does not match run target.")
+        cwd_override = active.get("path")
+    return build_runner.run_start(name, cwd_override=cwd_override)
 
 
 @router.get("/projects/{name}/branches")

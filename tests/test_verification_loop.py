@@ -29,7 +29,7 @@ def test_verification_loop_retries_then_passes(monkeypatch):
         "get_build_config",
         lambda _project: {"build_cmd": "python -m py_compile src/main.py", "test_cmd": ""},
     )
-    monkeypatch.setattr(verification_loop.build_runner, "run_build", lambda _project: next(build_results))
+    monkeypatch.setattr(verification_loop.build_runner, "run_build", lambda _project, **_kwargs: next(build_results))
 
     async def noop_db(**_kwargs):
         return None
@@ -102,7 +102,12 @@ def test_verification_loop_escalates_after_repeated_failure(monkeypatch):
     monkeypatch.setattr(
         verification_loop.build_runner,
         "run_build",
-        lambda _project: {"ok": False, "exit_code": 1, "stderr": "still broken", "command": "python -m py_compile src/main.py"},
+        lambda _project, **_kwargs: {
+            "ok": False,
+            "exit_code": 1,
+            "stderr": "still broken",
+            "command": "python -m py_compile src/main.py",
+        },
     )
 
     async def noop_db(**_kwargs):

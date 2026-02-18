@@ -686,10 +686,10 @@ async def _build_sprint_report(channel: str, mode: dict, reason: str) -> tuple[s
     test_status = "Not configured"
     cfg = build_runner.get_build_config(project_name)
     if (cfg.get("build_cmd") or "").strip():
-        build_result = build_runner.run_build(project_name)
+        build_result = build_runner.run_build(project_name, cwd_override=root)
         build_status = "✅ Passing" if build_result.get("ok") else f"❌ Failing ({build_result.get('exit_code')})"
     if (cfg.get("test_cmd") or "").strip():
-        test_result = build_runner.run_test(project_name)
+        test_result = build_runner.run_test(project_name, cwd_override=root)
         test_status = "✅ Passing" if test_result.get("ok") else f"❌ Failing ({test_result.get('exit_code')})"
 
     git_status = git_tools.status(project_name)
@@ -1454,17 +1454,17 @@ async def _handle_build_command(channel: str, user_message: str) -> bool:
             return True
 
     if raw == "/build run":
-        result = build_runner.run_build(project_name)
+        result = build_runner.run_build(project_name, cwd_override=active.get("path"))
         await _send_system_message(channel, _format_runner_result("build", result), msg_type="tool_result")
         await manager.broadcast(channel, {"type": "build_result", "stage": "build", "result": result})
         return True
     if raw == "/test run":
-        result = build_runner.run_test(project_name)
+        result = build_runner.run_test(project_name, cwd_override=active.get("path"))
         await _send_system_message(channel, _format_runner_result("test", result), msg_type="tool_result")
         await manager.broadcast(channel, {"type": "build_result", "stage": "test", "result": result})
         return True
     if raw == "/run start":
-        result = build_runner.run_start(project_name)
+        result = build_runner.run_start(project_name, cwd_override=active.get("path"))
         await _send_system_message(channel, _format_runner_result("run", result), msg_type="tool_result")
         await manager.broadcast(channel, {"type": "build_result", "stage": "run", "result": result})
         return True

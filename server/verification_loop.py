@@ -78,7 +78,7 @@ async def run_post_write_verification(
 
     build_passed = False
     for attempt in range(1, max_attempts + 1):
-        build_result = build_runner.run_build(project_name)
+        build_result = build_runner.run_build(project_name, cwd_override=active.get("path"))
         await _record_stage(
             agent_id=agent["id"],
             channel=channel,
@@ -129,7 +129,7 @@ async def run_post_write_verification(
         return {"ok": True, "stage": "build"}
 
     for attempt in range(1, max_attempts + 1):
-        test_result = build_runner.run_test(project_name)
+        test_result = build_runner.run_test(project_name, cwd_override=active.get("path"))
         await _record_stage(
             agent_id=agent["id"],
             channel=channel,

@@ -27,6 +27,19 @@ def _project_root(project_name: str) -> Path:
     return get_project_root(project_name)
 
 
+def _detection_root(project_name: str, root_override: Optional[str | Path] = None) -> Path:
+    """Root used for stack detection (may differ from where config is stored).
+
+    Channel workspaces store the real repo under `<project>/<channel>/repo`, so detection
+    should look there when available.
+    """
+    if root_override:
+        candidate = Path(root_override).resolve()
+        if candidate.exists():
+            return candidate
+    return _project_root(project_name)
+
+
 def _config_path(project_name: str) -> Path:
     return _project_root(project_name) / CONFIG_FILE
 
@@ -159,8 +172,8 @@ def _detect_cmake(root: Path) -> Optional[dict]:
     }
 
 
-def detect_project_commands(project_name: str) -> dict:
-    root = _project_root(project_name)
+def detect_project_commands(project_name: str, root_override: Optional[str | Path] = None) -> dict:
+    root = _detection_root(project_name, root_override=root_override)
     if not root.exists():
         raise ValueError("Project does not exist.")
 
@@ -184,8 +197,8 @@ def detect_project_commands(project_name: str) -> dict:
     return {"detected": detected, **merged}
 
 
-async def detect_and_store_config(project_name: str) -> dict:
-    detected = detect_project_commands(project_name)
+async def detect_and_store_config(project_name: str, root_override: Optional[str | Path] = None) -> dict:
+    detected = detect_project_commands(project_name, root_override=root_override)
     current = get_build_config(project_name)
 
     manual = set(current.get("manual_overrides", []))
@@ -203,8 +216,20 @@ async def detect_and_store_config(project_name: str) -> dict:
     return merged
 
 
-def _run_command(project_name: str, command: str, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> dict:
+def _run_command(
+    project_name: str,
+    command: str,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    cwd_override: Optional[str | Path] = None,
+) -> dict:
     root = _project_root(project_name)
+    cwd = None
+    if cwd_override:
+        candidate = Path(cwd_override).resolve()
+        if candidate.exists():
+            cwd = candidate
+    if cwd is None:
+        cwd = root
     if not root.exists():
         return {"ok": False, "error": "Project not found.", "exit_code": -1}
     if not command.strip():
@@ -214,7 +239,7 @@ def _run_command(project_name: str, command: str, timeout_seconds: int = DEFAULT
     try:
         proc = subprocess.run(
             ["cmd", "/c", command],
-            cwd=str(root),
+            cwd=str(cwd),
             env=_runtime_env(),
             capture_output=True,
             text=True,
@@ -225,7 +250,7 @@ def _run_command(project_name: str, command: str, timeout_seconds: int = DEFAULT
             "ok": proc.returncode == 0,
             "command": command,
             "project": project_name,
-            "cwd": str(root),
+            "cwd": str(cwd),
             "stdout": (proc.stdout or "")[:12000],
             "stderr": (proc.stderr or "")[:6000],
             "exit_code": proc.returncode,
@@ -240,7 +265,7 @@ def _run_command(project_name: str, command: str, timeout_seconds: int = DEFAULT
             "ok": False,
             "command": command,
             "project": project_name,
-            "cwd": str(root),
+            "cwd": str(cwd),
             "stdout": "",
             "stderr": f"Timed out after {timeout_seconds}s",
             "exit_code": -1,
@@ -255,7 +280,7 @@ def _run_command(project_name: str, command: str, timeout_seconds: int = DEFAULT
             "ok": False,
             "command": command,
             "project": project_name,
-            "cwd": str(root),
+            "cwd": str(cwd),
             "stdout": "",
             "stderr": str(exc),
             "exit_code": -1,
@@ -266,28 +291,28 @@ def _run_command(project_name: str, command: str, timeout_seconds: int = DEFAULT
         return result
 
 
-def run_build(project_name: str) -> dict:
+def run_build(project_name: str, cwd_override: Optional[str | Path] = None) -> dict:
     cfg = get_build_config(project_name)
     cmd = (cfg.get("build_cmd") or "").strip()
     if not cmd:
         return {"ok": False, "error": "Build command not configured.", "project": project_name, "exit_code": -1}
-    return _run_command(project_name, cmd, timeout_seconds=240)
+    return _run_command(project_name, cmd, timeout_seconds=240, cwd_override=cwd_override)
 
 
-def run_test(project_name: str) -> dict:
+def run_test(project_name: str, cwd_override: Optional[str | Path] = None) -> dict:
     cfg = get_build_config(project_name)
     cmd = (cfg.get("test_cmd") or "").strip()
     if not cmd:
         return {"ok": False, "error": "Test command not configured.", "project": project_name, "exit_code": -1}
-    return _run_command(project_name, cmd, timeout_seconds=240)
+    return _run_command(project_name, cmd, timeout_seconds=240, cwd_override=cwd_override)
 
 
-def run_start(project_name: str) -> dict:
+def run_start(project_name: str, cwd_override: Optional[str | Path] = None) -> dict:
     cfg = get_build_config(project_name)
     cmd = (cfg.get("run_cmd") or "").strip()
     if not cmd:
         return {"ok": False, "error": "Run command not configured.", "project": project_name, "exit_code": -1}
-    return _run_command(project_name, cmd, timeout_seconds=240)
+    return _run_command(project_name, cmd, timeout_seconds=240, cwd_override=cwd_override)
 
 
 def get_latest_result(project_name: str) -> dict:

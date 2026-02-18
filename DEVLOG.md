@@ -1,6 +1,6 @@
 # AI OFFICE — Development Log
 # Complete changelog from project inception to current state
-# Last updated: 2026-02-17
+# Last updated: 2026-02-18
 
 ---
 
@@ -2234,6 +2234,42 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 ### Tests
 - `tests/test_blueprint_api.py`
   - Saves a spec, regenerates blueprint, and validates shape via API.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - Channel Workspace Build/Test CWD Fix
+
+### Background
+- Tool writes land in the active channel workspace repo (`.../<project>/<channel>/repo`), but build/test/run previously executed in the project root (`WORKSPACE_ROOT/<project>`).
+- This caused verification loops and manual build commands to validate stale files (or the wrong directory) for non-app projects.
+
+### Backend changes
+- `server/build_runner.py`
+  - Added `root_override` support for config auto-detection.
+  - Added `cwd_override` support for `run_build`, `run_test`, and `run_start`.
+- `server/project_manager.py`
+  - Build config detection now prefers the active channel repo path.
+- `server/routes_api.py`
+  - `/api/projects/{name}/build`, `/test`, `/run` now accept optional `channel` and execute in that channel's sandbox root.
+- `server/verification_loop.py`
+  - Post-write verification now runs build/test in the active channel repo path.
+- `server/agent_engine.py`
+  - Sprint report and `/build run` / `/test run` / `/run start` now execute build/test/run in the active channel repo path.
+- `server/autonomous_worker.py`
+  - Autonomous verification now executes build/test in the active channel repo path.
+
+### Tests
+- Updated:
+  - `tests/test_verification_loop.py`
+  - `tests/test_warroom_mode.py`
 
 ### Verification
 - `with-runtime.cmd python -m pytest -q tests` PASS

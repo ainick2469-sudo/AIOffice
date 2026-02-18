@@ -434,7 +434,7 @@ async def maybe_detect_build_config(channel: str):
         return None
     from .build_runner import detect_and_store_config
 
-    return await detect_and_store_config(active["project"])
+    return await detect_and_store_config(active["project"], root_override=active.get("path"))
 
 
 def project_config_path(project_name: str) -> Path:

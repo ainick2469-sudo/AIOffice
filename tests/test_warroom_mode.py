@@ -41,7 +41,7 @@ def test_auto_warroom_on_repeated_build_failures(monkeypatch):
     def fake_build_config(_project):
         return {"build_cmd": "python -m py_compile main.py", "test_cmd": ""}
 
-    def fake_run_build(project_name):
+    def fake_run_build(project_name, **_kwargs):
         return {
             "ok": False,
             "project": project_name,

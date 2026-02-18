@@ -172,6 +172,7 @@ async def _set_task_status(task_id: int, status: str):
 async def _verify_active_project(channel: str) -> tuple[bool, str]:
     active = await project_manager.get_active_project(channel)
     project_name = active["project"]
+    cwd_override = active.get("path")
     cfg = build_runner.get_build_config(project_name)
     build_cmd = (cfg.get("build_cmd") or "").strip()
     test_cmd = (cfg.get("test_cmd") or "").strip()
@@ -179,12 +180,12 @@ async def _verify_active_project(channel: str) -> tuple[bool, str]:
         return True, "No build/test config set; verification skipped."
 
     if build_cmd:
-        build_result = build_runner.run_build(project_name)
+        build_result = build_runner.run_build(project_name, cwd_override=cwd_override)
         await manager.broadcast(channel, {"type": "build_result", "stage": "build", "result": build_result})
         if not build_result.get("ok"):
             return False, f"Build failed: {(build_result.get('stderr') or build_result.get('error') or '')[:500]}"
     if test_cmd:
-        test_result = build_runner.run_test(project_name)
+        test_result = build_runner.run_test(project_name, cwd_override=cwd_override)
         await manager.broadcast(channel, {"type": "build_result", "stage": "test", "result": test_result})
         if not test_result.get("ok"):
             return False, f"Tests failed: {(test_result.get('stderr') or test_result.get('error') or '')[:500]}"
