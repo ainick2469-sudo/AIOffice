@@ -2309,6 +2309,36 @@ async def _send(
                     )
             return saved
 
+        # Spec gate: if a spec exists in DRAFT for this channel+project, block mutating tools until approved.
+        mutating_tool_types = {"write", "run", "create_skill", "start_process", "plugin"}
+        if any((call.get("type") or "").strip() in mutating_tool_types for call in tool_calls):
+            try:
+                from . import project_manager as _pm
+                from . import database as _db
+
+                active = await _pm.get_active_project(channel)
+                project = (active.get("project") or "ai-office").strip() or "ai-office"
+                state = await _db.get_spec_state(channel, project)
+                if (state.get("status") or "").strip().lower() == "draft":
+                    await emit_console_event(
+                        channel=channel,
+                        project_name=project,
+                        event_type="spec_gate_block",
+                        source="agent_engine",
+                        severity="warning",
+                        message="Spec gate blocked mutating tools (spec is DRAFT)",
+                        data={"agent_id": agent["id"], "tool_types": [c.get("type") for c in tool_calls]},
+                    )
+                    await _send_system_message(
+                        channel,
+                        "Spec gate: mutating tools are blocked until the spec is approved. "
+                        "Open the Spec tab and click Approve Spec (confirm text: `APPROVE SPEC`).",
+                        msg_type="system",
+                    )
+                    return saved
+            except Exception:
+                pass
+
         logger.info(f"  [{agent['display_name']}] executing {len(tool_calls)} tool call(s)")
         results = await execute_tool_calls(agent["id"], tool_calls, channel)
         successful_writes = [

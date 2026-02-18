@@ -157,6 +157,15 @@ CREATE TABLE IF NOT EXISTS channel_branches (
     PRIMARY KEY (channel, project_name)
 );
 
+CREATE TABLE IF NOT EXISTS spec_states (
+    channel TEXT NOT NULL,
+    project_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'none',
+    spec_version TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (channel, project_name)
+);
+
 CREATE TABLE IF NOT EXISTS api_usage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT NOT NULL,
@@ -301,6 +310,16 @@ async def _run_migrations(db: aiosqlite.Connection):
                channel TEXT NOT NULL,
                project_name TEXT NOT NULL,
                branch TEXT NOT NULL DEFAULT 'main',
+               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               PRIMARY KEY (channel, project_name)
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS spec_states (
+               channel TEXT NOT NULL,
+               project_name TEXT NOT NULL,
+               status TEXT NOT NULL DEFAULT 'none',
+               spec_version TEXT,
                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                PRIMARY KEY (channel, project_name)
            )"""
@@ -1084,6 +1103,70 @@ async def list_project_branches_state(project_name: str) -> list[dict]:
         return [dict(r) for r in await rows.fetchall()]
     finally:
         await db.close()
+
+
+SPEC_STATUSES = {"none", "draft", "approved"}
+
+
+def _normalize_spec_status(value: Optional[str]) -> str:
+    text = str(value or "none").strip().lower()
+    if text not in SPEC_STATUSES:
+        return "none"
+    return text
+
+
+async def get_spec_state(channel: str, project_name: str) -> dict:
+    channel_id = (channel or "main").strip() or "main"
+    project = (project_name or "ai-office").strip() or "ai-office"
+    db = await get_db()
+    try:
+        row = await db.execute(
+            "SELECT * FROM spec_states WHERE channel = ? AND project_name = ?",
+            (channel_id, project),
+        )
+        result = await row.fetchone()
+        if not result:
+            return {
+                "channel": channel_id,
+                "project_name": project,
+                "status": "none",
+                "spec_version": None,
+                "updated_at": None,
+            }
+        data = dict(result)
+        data["status"] = _normalize_spec_status(data.get("status"))
+        return data
+    finally:
+        await db.close()
+
+
+async def set_spec_state(
+    channel: str,
+    project_name: str,
+    *,
+    status: str,
+    spec_version: Optional[str] = None,
+) -> dict:
+    channel_id = (channel or "main").strip() or "main"
+    project = (project_name or "ai-office").strip() or "ai-office"
+    normalized = _normalize_spec_status(status)
+    version = (spec_version or "").strip() or None
+
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO spec_states (channel, project_name, status, spec_version, updated_at)
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(channel, project_name) DO UPDATE SET
+                 status = excluded.status,
+                 spec_version = COALESCE(excluded.spec_version, spec_states.spec_version),
+                 updated_at = CURRENT_TIMESTAMP""",
+            (channel_id, project, normalized, version),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return await get_spec_state(channel_id, project)
 
 
 async def get_tasks_for_agent(

@@ -351,6 +351,17 @@ class MemoryEraseIn(BaseModel):
     also_clear_approvals: bool = False
 
 
+class SpecSaveIn(BaseModel):
+    channel: str = "main"
+    spec_md: str = Field(default="", max_length=250000)
+    idea_bank_md: Optional[str] = None
+
+
+class SpecApproveIn(BaseModel):
+    channel: str = "main"
+    confirm_text: str = Field(..., min_length=3, max_length=50)
+
+
 class ChannelResetIn(BaseModel):
     clear_messages: bool = True
     clear_channel_memory: bool = False

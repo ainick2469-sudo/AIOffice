@@ -37,6 +37,7 @@ export default function ChatRoom({ channel }) {
   const [activeProject, setActiveProject] = useState({ project: 'ai-office', path: '', branch: 'main' });
   const [autonomyMode, setAutonomyMode] = useState('SAFE');
   const [permissionPolicy, setPermissionPolicy] = useState({ mode: 'ask', expires_at: null });
+  const [specState, setSpecState] = useState({ project: 'ai-office', status: 'none', spec_version: null });
   const [workStatus, setWorkStatus] = useState({ running: false, processed: 0, errors: 0 });
   const [processState, setProcessState] = useState({ total: 0, running: 0, items: [] });
   const [reactionsByMessage, setReactionsByMessage] = useState({});
@@ -180,6 +181,21 @@ export default function ChatRoom({ channel }) {
       })
       .catch(() => {});
   }, [channel, connected, activeProject?.project]);
+
+  // Load spec status when channel/project changes (avoid polling full spec content every tick).
+  useEffect(() => {
+    fetch(`/api/spec/current?channel=${encodeURIComponent(channel)}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then((payload) => {
+        if (!payload?.ok) return;
+        setSpecState({
+          project: payload.project || activeProject?.project || 'ai-office',
+          status: payload.status || 'none',
+          spec_version: payload.spec_version || null,
+        });
+      })
+      .catch(() => {});
+  }, [channel, activeProject?.project]);
 
   // Auto-scroll
   useEffect(() => {
@@ -572,6 +588,30 @@ export default function ChatRoom({ channel }) {
     }
   };
 
+  const approveSpec = async () => {
+    const typed = window.prompt("Type 'APPROVE SPEC' to approve the spec and unlock mutating tools:");
+    if (!typed) return;
+    try {
+      const res = await fetch('/api/spec/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel, confirm_text: typed }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || payload?.error) {
+        throw new Error(payload?.detail || payload?.error || 'Failed to approve spec');
+      }
+      setSpecState((prev) => ({
+        ...prev,
+        project: payload.project || prev.project,
+        status: payload.status || 'approved',
+        spec_version: payload.spec_version || prev.spec_version,
+      }));
+    } catch (err) {
+      window.alert(err?.message || 'Failed to approve spec.');
+    }
+  };
+
   const stopWork = () => {
     fetch('/api/work/stop', {
       method: 'POST',
@@ -722,6 +762,10 @@ export default function ChatRoom({ channel }) {
   const sprintLabel = `SPRINT - ${formatElapsed(sprintRemaining)} remaining - Goal: ${sprintGoal}`;
   const approvalMode = (permissionPolicy?.ui_mode || (permissionPolicy?.mode || 'ask').toUpperCase()).toUpperCase();
   const approvalExpiry = permissionPolicy?.expires_at ? ` until ${new Date(permissionPolicy.expires_at).toLocaleTimeString()}` : '';
+  const specStatus = String(specState?.status || 'none').toUpperCase();
+  const specChipClass = String(specState?.status || '').toLowerCase() === 'approved'
+    ? 'active'
+    : (String(specState?.status || '').toLowerCase() === 'draft' ? 'warn' : '');
   const approvalCountdownSeconds = activeApproval?.expires_at
     ? Math.max(0, Math.floor((new Date(activeApproval.expires_at).getTime() - clockMs) / 1000))
     : null;
@@ -748,6 +792,9 @@ export default function ChatRoom({ channel }) {
           </span>
           <span className="convo-status">
             Project: {activeProject?.project || 'ai-office'} @ {activeProject?.branch || 'main'}
+          </span>
+          <span className={`convo-status ${specChipClass}`}>
+            Spec: {specStatus}
           </span>
           <span className={`convo-status ${autonomyMode === 'SAFE' ? '' : 'active'}`}>
             Autonomy: {autonomyMode}
@@ -778,6 +825,11 @@ export default function ChatRoom({ channel }) {
           <button className="stop-btn" onClick={clearChat}>
             Clear Chat
           </button>
+          {String(specState?.status || '').toLowerCase() === 'draft' && (
+            <button className="stop-btn" onClick={approveSpec}>
+              Approve Spec
+            </button>
+          )}
           {isActive && (
             <>
               <span className="convo-status active">

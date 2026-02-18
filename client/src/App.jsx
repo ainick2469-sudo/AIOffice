@@ -8,6 +8,7 @@ import TaskBoard from './components/TaskBoard';
 import FileViewer from './components/FileViewer';
 import SearchPanel from './components/SearchPanel';
 import DecisionLog from './components/DecisionLog';
+import SpecPanel from './components/SpecPanel';
 import AgentProfile from './components/AgentProfile';
 import AgentConfig from './components/AgentConfig';
 import ProjectPanel from './components/ProjectPanel';
@@ -87,6 +88,9 @@ export default function App() {
           <button className={panel === 'decisions' ? 'active' : ''} onClick={() => setPanel('decisions')}>
             Decisions
           </button>
+          <button className={panel === 'spec' ? 'active' : ''} onClick={() => setPanel('spec')}>
+            Spec
+          </button>
           <button className={panel === 'audit' ? 'active' : ''} onClick={() => setPanel('audit')}>
             Audit ({auditCount})
           </button>
@@ -133,6 +137,7 @@ export default function App() {
           />
         )}
         {panel === 'decisions' && <DecisionLog />}
+        {panel === 'spec' && <SpecPanel channel={channel} />}
         {panel === 'audit' && <AuditLog onAuditChanged={refreshAuditCount} />}
         {panel === 'controls' && <Controls />}
         {panel === 'projects' && <ProjectPanel channel={channel} />}

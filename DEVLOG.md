@@ -1871,3 +1871,46 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P1-B Spec / Idea Bank + Hard Spec Gate
+
+### Backend changes
+- `server/spec_bank.py`
+  - New persistent, versioned markdown storage under `AI_OFFICE_HOME/specs/<project>/`:
+    - `current_spec.md`, `idea_bank.md`, `history/spec-*.md`, `history/ideas-*.md`
+- `server/database.py`
+  - Added `spec_states` table (per `channel` + `project_name`) with `none|draft|approved` status + `spec_version`.
+  - Added helpers: `get_spec_state(...)`, `set_spec_state(...)`.
+- `server/routes_api.py`
+  - Added:
+    - `GET /api/spec/current?channel=...`
+    - `POST /api/spec/current` (save spec -> DRAFT)
+    - `POST /api/spec/approve` (confirm text: `APPROVE SPEC`)
+    - `GET /api/spec/history?project=...`
+- `server/agent_engine.py`
+  - Enforced spec gate: when spec status is `draft`, mutating tools (`write`, `run`, `start_process`, `create_skill`, plugin tools) are blocked and a system message explains how to approve.
+- `server/app_builder.py`
+  - App Builder now seeds an initial spec skeleton + idea bank and marks spec state `draft` so tools are gated until approval.
+
+### Frontend changes
+- `client/src/components/SpecPanel.jsx`
+  - New Spec / Idea Bank editor with save + approve flow and history list.
+- `client/src/App.jsx`
+  - Added a Spec tab.
+- `client/src/components/ChatRoom.jsx`
+  - Chat header now shows `Spec: NONE/DRAFT/APPROVED` chip and shows an Approve button when in DRAFT.
+- `client/src/App.css`
+  - Added `.convo-status.warn` style for DRAFT spec chip.
+
+### Tests
+- Added `tests/test_spec_bank_and_gate.py`.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS

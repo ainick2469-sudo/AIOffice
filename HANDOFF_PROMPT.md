@@ -346,3 +346,18 @@ All agents have deep, distinct personalities with anti-sycophancy rules. They di
   - Route ordering fixed so `/api/memory/stats` is not shadowed by `/api/memory/{agent_id}`.
 - Tests: added `tests/test_memory_stats_and_erase.py`.
 - Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.
+
+## SESSION 45 UPDATE (2026-02-18)
+
+- Spec / Idea Bank + spec-first tool gating:
+  - New APIs:
+    - `GET /api/spec/current?channel=...`
+    - `POST /api/spec/current` (save -> `draft`)
+    - `POST /api/spec/approve` (requires confirm text: `APPROVE SPEC`)
+    - `GET /api/spec/history?project=...`
+  - New DB table: `spec_states` (scoped by `channel` + `project_name`).
+  - Engine spec gate: when spec is `draft`, mutating tools are blocked until spec approval.
+  - App Builder now seeds an initial spec skeleton + idea bank and marks spec as `draft`.
+  - UI: new Spec tab + chat header Spec chip + Approve button.
+- Tests: added `tests/test_spec_bank_and_gate.py`.
+- Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.

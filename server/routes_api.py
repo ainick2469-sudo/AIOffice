@@ -27,6 +27,8 @@ from .models import (
     MemoryEraseIn,
     ExecuteCodeIn,
     OllamaPullIn,
+    SpecSaveIn,
+    SpecApproveIn,
     PermissionPolicyIn,
     PermissionPolicyOut,
     PermissionGrantIn,
@@ -288,6 +290,80 @@ async def switch_project_route(body: ProjectSwitchIn):
 async def get_active_project_route(channel: str):
     from . import project_manager as pm
     return await pm.get_active_project(channel)
+
+
+@router.get("/spec/current")
+async def get_current_spec(channel: str = Query(default="main")):
+    from . import project_manager as pm
+    from . import spec_bank
+
+    channel_id = (channel or "main").strip() or "main"
+    active = await pm.get_active_project(channel_id)
+    project = (active.get("project") or "ai-office").strip() or "ai-office"
+    state = await db.get_spec_state(channel_id, project)
+    snap = spec_bank.get_current(project)
+    return {
+        "ok": True,
+        "channel": channel_id,
+        "project": project,
+        "status": state.get("status") or "none",
+        "spec_version": state.get("spec_version"),
+        "spec_md": snap.spec_md,
+        "idea_bank_md": snap.idea_bank_md,
+        "spec_path": snap.spec_path,
+        "idea_bank_path": snap.idea_bank_path,
+        "updated_at": state.get("updated_at"),
+    }
+
+
+@router.post("/spec/current")
+async def save_current_spec(body: SpecSaveIn):
+    from . import project_manager as pm
+    from . import spec_bank
+
+    channel_id = (body.channel or "main").strip() or "main"
+    active = await pm.get_active_project(channel_id)
+    project = (active.get("project") or "ai-office").strip() or "ai-office"
+    result = spec_bank.save_current(project, spec_md=body.spec_md or "", idea_bank_md=body.idea_bank_md)
+    state = await db.set_spec_state(channel_id, project, status="draft", spec_version=result.get("version"))
+    snap = spec_bank.get_current(project)
+    return {
+        **result,
+        "channel": channel_id,
+        "status": state.get("status") or "draft",
+        "spec_version": state.get("spec_version"),
+        "spec_md": snap.spec_md,
+        "idea_bank_md": snap.idea_bank_md,
+    }
+
+
+@router.post("/spec/approve")
+async def approve_spec(body: SpecApproveIn):
+    from . import project_manager as pm
+
+    channel_id = (body.channel or "main").strip() or "main"
+    if (body.confirm_text or "").strip().upper() != "APPROVE SPEC":
+        raise HTTPException(400, "confirm_text must be 'APPROVE SPEC'")
+
+    active = await pm.get_active_project(channel_id)
+    project = (active.get("project") or "ai-office").strip() or "ai-office"
+    state = await db.set_spec_state(channel_id, project, status="approved")
+    await db.log_console_event(
+        channel=channel_id,
+        project_name=project,
+        event_type="spec_approved",
+        source="spec",
+        message="Spec approved",
+        data={"status": state.get("status"), "spec_version": state.get("spec_version")},
+    )
+    return {"ok": True, "channel": channel_id, "project": project, **state}
+
+
+@router.get("/spec/history")
+async def spec_history(project: str = Query(default="ai-office"), limit: int = 50):
+    from . import spec_bank
+
+    return {"ok": True, "project": project, "items": spec_bank.list_history(project, limit=limit)}
 
 
 @router.get("/projects/status/{channel}")
