@@ -28,8 +28,12 @@ export default function AgentConfig() {
   const [draft, setDraft] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [credSaving, setCredSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [credMeta, setCredMeta] = useState(null);
+  const [credKey, setCredKey] = useState('');
+  const [credBaseUrl, setCredBaseUrl] = useState('');
   const [backendStatus, setBackendStatus] = useState({
     ollama: false,
     claude: false,
@@ -115,6 +119,92 @@ export default function AgentConfig() {
 
   const updateDraft = (field, value) => {
     setDraft(prev => ({ ...prev, [field]: value }));
+  };
+
+  const credentialsEnabled = draft && (draft.backend === 'openai' || draft.backend === 'claude');
+
+  const loadCredentialMeta = async (agentId, backend) => {
+    if (!agentId || !backend) return;
+    const resp = await fetch(
+      `/api/agents/${encodeURIComponent(agentId)}/credentials?backend=${encodeURIComponent(backend)}`
+    );
+    if (!resp.ok) {
+      setCredMeta(null);
+      return;
+    }
+    const payload = await resp.json();
+    setCredMeta(payload);
+    setCredBaseUrl(payload?.base_url || '');
+  };
+
+  useEffect(() => {
+    if (!selectedId || !credentialsEnabled) {
+      setCredMeta(null);
+      setCredKey('');
+      setCredBaseUrl('');
+      return;
+    }
+    loadCredentialMeta(selectedId, draft.backend).catch(() => {});
+  }, [selectedId, draft?.backend, credentialsEnabled]);
+
+  const handleSaveCredentials = async () => {
+    if (!selectedId || !credentialsEnabled) return;
+    if (!credKey.trim()) {
+      setError('API key is required.');
+      return;
+    }
+    setCredSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      const resp = await fetch(`/api/agents/${encodeURIComponent(selectedId)}/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          backend: draft.backend,
+          api_key: credKey.trim(),
+          base_url: (credBaseUrl || '').trim() || null,
+        }),
+      });
+      const payload = resp.ok ? await resp.json() : null;
+      if (!resp.ok) {
+        throw new Error(payload?.detail || 'Failed to save credentials.');
+      }
+      setCredKey('');
+      setCredMeta(payload);
+      await loadBackendStatus();
+      setNotice('Credentials saved.');
+    } catch (err) {
+      setError(err?.message || 'Failed to save credentials.');
+    } finally {
+      setCredSaving(false);
+    }
+  };
+
+  const handleClearCredentials = async () => {
+    if (!selectedId || !credentialsEnabled) return;
+    setCredSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      const resp = await fetch(
+        `/api/agents/${encodeURIComponent(selectedId)}/credentials?backend=${encodeURIComponent(draft.backend)}`,
+        { method: 'DELETE' }
+      );
+      const payload = resp.ok ? await resp.json() : null;
+      if (!resp.ok) {
+        throw new Error(payload?.detail || 'Failed to clear credentials.');
+      }
+      setCredKey('');
+      setCredMeta(null);
+      setCredBaseUrl('');
+      await loadBackendStatus();
+      setNotice('Credentials cleared.');
+    } catch (err) {
+      setError(err?.message || 'Failed to clear credentials.');
+    } finally {
+      setCredSaving(false);
+    }
   };
 
   const handleBackendChange = (nextBackend) => {
@@ -336,7 +426,52 @@ export default function AgentConfig() {
                   {draft.backend.toUpperCase()} {backendOnline ? 'online' : 'offline'}
                 </span>
                 {selectedAgent && <span className="agent-id-pill">id: {selectedAgent.id}</span>}
+                {credentialsEnabled && (
+                  <span className="agent-id-pill">
+                    key: {credMeta?.has_key ? `present (${credMeta?.last4 || 'last4?'})` : 'missing'}
+                  </span>
+                )}
               </div>
+
+              {credentialsEnabled && (
+                <div className="agent-config-form" style={{ marginTop: 12 }}>
+                  <div className="agent-config-row">
+                    <label>API Key (stored locally; never shown after save)</label>
+                    <input
+                      type="password"
+                      value={credKey}
+                      placeholder={credMeta?.has_key ? '••••••••' : 'enter key'}
+                      onChange={(e) => setCredKey(e.target.value)}
+                    />
+                  </div>
+                  <div className="agent-config-row">
+                    <label>Base URL (optional)</label>
+                    <input
+                      value={credBaseUrl}
+                      placeholder={draft.backend === 'openai' ? 'https://api.openai.com/v1' : 'https://api.anthropic.com/v1/messages'}
+                      onChange={(e) => setCredBaseUrl(e.target.value)}
+                    />
+                  </div>
+                  <div className="agent-config-actions">
+                    <button
+                      className="control-btn gate-btn"
+                      onClick={handleSaveCredentials}
+                      disabled={credSaving || saving}
+                      title="Save per-agent credentials"
+                    >
+                      {credSaving ? 'Saving...' : 'Save Credentials'}
+                    </button>
+                    <button
+                      className="control-btn"
+                      onClick={handleClearCredentials}
+                      disabled={credSaving || saving || !credMeta?.has_key}
+                      title="Remove stored credentials for this backend"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {error && <div className="agent-config-error">{error}</div>}
               {notice && <div className="agent-config-notice">{notice}</div>}

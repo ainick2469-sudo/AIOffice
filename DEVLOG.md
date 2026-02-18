@@ -2115,3 +2115,22 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P0.6 Agent Credentials UI (Per-Agent Keys)
+
+### Frontend changes
+- `client/src/components/AgentConfig.jsx`
+  - Added per-agent Credentials section when backend is `openai` or `claude`:
+    - Save masked API key + optional base_url
+    - Clear credentials
+    - Shows whether a key is present and the masked last4
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS
