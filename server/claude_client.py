@@ -1,46 +1,61 @@
-"""AI Office — Claude API Client. Calls Anthropic's API for premium agents."""
+"""AI Office — Claude API client (Anthropic).
+
+Supports env-based configuration plus per-request key/base_url overrides for per-agent credentials.
+"""
+
+from __future__ import annotations
 
 import os
 import logging
-import httpx
 from typing import Optional
+
+import httpx
 
 logger = logging.getLogger("ai-office.claude")
 
-# Load API key from .env or environment
-API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-MODEL = "claude-sonnet-4-20250514"
-API_URL = "https://api.anthropic.com/v1/messages"
+DEFAULT_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_API_URL = "https://api.anthropic.com/v1/messages"
 MODEL_RATES_PER_1K = {
     "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
     "claude-3-5-sonnet": {"input": 0.003, "output": 0.015},
 }
 
-def _load_key():
-    """Try to load key from .env file if not in environment."""
-    global API_KEY
-    if API_KEY:
-        return
+
+def _read_key_from_env_file() -> str:
+    if (os.environ.get("AI_OFFICE_TESTING") or "").strip() == "1":
+        return ""
     env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
-    if os.path.exists(env_path):
-        with open(env_path) as f:
+    if not os.path.exists(env_path):
+        return ""
+
+    try:
+        with open(env_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line.startswith("ANTHROPIC_API_KEY="):
-                    API_KEY = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    logger.info("Loaded Anthropic API key from .env")
-                    return
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        return ""
+    return ""
 
-_load_key()
+
+def get_api_key() -> str:
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if key:
+        return key
+    return _read_key_from_env_file()
+
+
+def get_api_url() -> str:
+    return os.environ.get("ANTHROPIC_API_URL", DEFAULT_API_URL)
 
 
 def is_available() -> bool:
-    """Check if Claude API is configured."""
-    return bool(API_KEY)
+    return bool(get_api_key())
 
 
 def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
-    rates = MODEL_RATES_PER_1K.get(model or "", MODEL_RATES_PER_1K["claude-sonnet-4-20250514"])
+    rates = MODEL_RATES_PER_1K.get(model or "", MODEL_RATES_PER_1K[DEFAULT_MODEL])
     return (input_tokens / 1000.0) * rates["input"] + (output_tokens / 1000.0) * rates["output"]
 
 
@@ -49,16 +64,20 @@ async def chat(
     system: str = "",
     temperature: float = 0.7,
     max_tokens: int = 1024,
-    model: str = None,
-    channel: str = None,
-    project_name: str = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    channel: Optional[str] = None,
+    project_name: Optional[str] = None,
 ) -> Optional[str]:
     """Call Claude API. Returns response text or None on error."""
-    if not API_KEY:
+    resolved_key = (api_key or "").strip() or get_api_key()
+    if not resolved_key:
         logger.error("No ANTHROPIC_API_KEY configured")
         return None
 
-    use_model = model or MODEL
+    use_model = model or DEFAULT_MODEL
+    api_url = (base_url or "").strip() or get_api_url()
 
     # Convert messages format: Anthropic API expects role: user/assistant
     api_messages = []
@@ -66,10 +85,9 @@ async def chat(
         role = msg.get("role", "user")
         if role == "system":
             continue  # system goes in separate param
-        # Anthropic only accepts "user" and "assistant"
         if role not in ("user", "assistant"):
             role = "user"
-        api_messages.append({"role": role, "content": msg["content"]})
+        api_messages.append({"role": role, "content": msg.get("content", "")})
 
     # Ensure alternating roles (Anthropic requirement)
     cleaned = []
@@ -94,22 +112,23 @@ async def chat(
         body["temperature"] = temperature
 
     headers = {
-        "x-api-key": API_KEY,
+        "x-api-key": resolved_key,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
 
     try:
         async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(API_URL, json=body, headers=headers)
+            resp = await client.post(api_url, json=body, headers=headers)
             if resp.status_code != 200:
-                logger.error(f"Claude API error {resp.status_code}: {resp.text[:300]}")
+                logger.error("Claude API error %s: %s", resp.status_code, resp.text[:300])
                 return None
 
             data = resp.json()
             usage = data.get("usage") or {}
             try:
                 from . import database as db
+
                 input_tokens = int(usage.get("input_tokens", 0) or 0)
                 output_tokens = int(usage.get("output_tokens", 0) or 0)
                 await db.log_api_usage(
@@ -127,7 +146,6 @@ async def chat(
             content_blocks = data.get("content", [])
             text_parts = [b["text"] for b in content_blocks if b.get("type") == "text"]
             return "\n".join(text_parts) if text_parts else None
-
-    except Exception as e:
-        logger.error(f"Claude API request failed: {e}")
+    except Exception as exc:
+        logger.error("Claude API request failed: %s", exc)
         return None

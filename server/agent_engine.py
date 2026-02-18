@@ -30,6 +30,8 @@ from .database import (
     get_setting,
     create_task_record,
     list_tasks,
+    get_agent_api_key,
+    get_agent_credential_meta,
 )
 from .websocket import manager
 from .memory import get_known_context
@@ -303,6 +305,42 @@ async def _read_project_file_excerpt(channel: str, rel_path: str, max_lines: int
     return clipped
 
 
+async def _resolve_remote_credentials(
+    channel: str,
+    project_name: str,
+    agent_id: str,
+    backend: str,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Return (api_key, base_url, error_message)."""
+    backend_norm = (backend or "").strip().lower()
+    if backend_norm not in {"openai", "claude"}:
+        return None, None, None
+
+    api_key = await get_agent_api_key(agent_id, backend_norm)
+    meta = await get_agent_credential_meta(agent_id, backend_norm)
+    base_url = None
+    if isinstance(meta, dict):
+        base_url = (meta.get("base_url") or "").strip() or None
+
+    env_ok = openai_adapter.is_available() if backend_norm == "openai" else claude_adapter.is_available()
+    if not api_key and not env_ok:
+        env_var = "OPENAI_API_KEY" if backend_norm == "openai" else "ANTHROPIC_API_KEY"
+        await emit_console_event(
+            channel=channel,
+            event_type="backend_unavailable",
+            source="agent_engine",
+            message=f"{backend_norm} backend missing key for {agent_id}",
+            project_name=project_name,
+            data={"agent_id": agent_id, "backend": backend_norm},
+        )
+        return None, base_url, (
+            f"{backend_norm.upper()} backend is not configured for agent '{agent_id}'. "
+            f"Set a key in the Agents tab (Credentials) or set {env_var} in .env."
+        )
+
+    return (api_key or None), base_url, None
+
+
 async def _generate_auto_review(
     reviewer: dict,
     channel: str,
@@ -340,6 +378,14 @@ async def _generate_auto_review(
                     "Severity: warning\n"
                     "- API budget reached, auto-review skipped for this write."
                 )
+            api_key, base_url, backend_err = await _resolve_remote_credentials(
+                channel=channel,
+                project_name=active_project["project"],
+                agent_id=reviewer.get("id", "reviewer"),
+                backend=backend,
+            )
+            if backend_err:
+                return "Severity: warning\n- " + backend_err
         if backend == "claude":
             return await claude_adapter.generate(
                 prompt=prompt,
@@ -347,6 +393,8 @@ async def _generate_auto_review(
                 temperature=0.2,
                 max_tokens=450,
                 model=reviewer.get("model", "claude-sonnet-4-20250514"),
+                api_key=api_key,
+                base_url=base_url,
                 channel=channel,
                 project_name=active_project["project"],
             )
@@ -357,6 +405,8 @@ async def _generate_auto_review(
                 temperature=0.2,
                 max_tokens=450,
                 model=reviewer.get("model", "gpt-4o-mini"),
+                api_key=api_key,
+                base_url=base_url,
                 channel=channel,
                 project_name=active_project["project"],
             )
@@ -562,6 +612,14 @@ async def _generate_sprint_task_plan(director: dict, channel: str, goal: str) ->
             used = budget_state["used_usd"]
             if budget > 0 and used >= budget:
                 return "API budget reached. Sprint planner cannot call remote model right now."
+            api_key, base_url, backend_err = await _resolve_remote_credentials(
+                channel=channel,
+                project_name=active_project["project"],
+                agent_id=director.get("id", "director"),
+                backend=backend,
+            )
+            if backend_err:
+                return backend_err
         if backend == "claude":
             return await claude_adapter.generate(
                 prompt=prompt,
@@ -569,6 +627,8 @@ async def _generate_sprint_task_plan(director: dict, channel: str, goal: str) ->
                 temperature=0.35,
                 max_tokens=500,
                 model=director.get("model", "claude-sonnet-4-20250514"),
+                api_key=api_key,
+                base_url=base_url,
                 channel=channel,
                 project_name=active_project["project"],
             )
@@ -579,6 +639,8 @@ async def _generate_sprint_task_plan(director: dict, channel: str, goal: str) ->
                 temperature=0.35,
                 max_tokens=500,
                 model=director.get("model", "gpt-4o-mini"),
+                api_key=api_key,
+                base_url=base_url,
                 channel=channel,
                 project_name=active_project["project"],
             )
@@ -1148,6 +1210,14 @@ async def _generate_oracle_answer(agent: dict, channel: str, question: str, file
                     f"Current estimated usage is ${used:.2f}. "
                     "Please raise budget or switch this query to local models."
                 )
+            api_key, base_url, backend_err = await _resolve_remote_credentials(
+                channel=channel,
+                project_name=active_project["project"],
+                agent_id=agent.get("id", "researcher"),
+                backend=backend,
+            )
+            if backend_err:
+                return backend_err
         if backend == "claude":
             return await claude_adapter.generate(
                 prompt=prompt,
@@ -1155,6 +1225,8 @@ async def _generate_oracle_answer(agent: dict, channel: str, question: str, file
                 temperature=0.2,
                 max_tokens=700,
                 model=agent.get("model", "claude-sonnet-4-20250514"),
+                api_key=api_key,
+                base_url=base_url,
                 channel=channel,
                 project_name=active_project["project"],
             )
@@ -1165,6 +1237,8 @@ async def _generate_oracle_answer(agent: dict, channel: str, question: str, file
                 temperature=0.2,
                 max_tokens=700,
                 model=agent.get("model", "gpt-4o-mini"),
+                api_key=api_key,
+                base_url=base_url,
                 channel=channel,
                 project_name=active_project["project"],
             )
@@ -2142,6 +2216,14 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                     f"Current estimated usage is ${used:.2f}. "
                     "Please raise budget or switch this task to local models."
                 )
+            api_key, base_url, backend_err = await _resolve_remote_credentials(
+                channel=channel,
+                project_name=active_project["project"],
+                agent_id=agent.get("id", "agent"),
+                backend=backend,
+            )
+            if backend_err:
+                return backend_err
         if backend == "claude":
             response = await claude_adapter.generate(
                 prompt=prompt,
@@ -2149,6 +2231,8 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                 temperature=0.7,
                 max_tokens=600,
                 model=agent.get("model", "claude-sonnet-4-20250514"),
+                api_key=api_key,
+                base_url=base_url,
                 channel=channel,
                 project_name=active_project["project"],
             )
@@ -2159,6 +2243,8 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                 temperature=0.7,
                 max_tokens=600,
                 model=agent.get("model", "gpt-4o-mini"),
+                api_key=api_key,
+                base_url=base_url,
                 channel=channel,
                 project_name=active_project["project"],
             )

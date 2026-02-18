@@ -14,6 +14,8 @@ async def generate(
     temperature: float = 0.7,
     max_tokens: int = 1024,
     model: str = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
     channel: str = None,
     project_name: str = None,
 ) -> Optional[str]:
@@ -24,6 +26,8 @@ async def generate(
         temperature=temperature,
         max_tokens=max_tokens,
         model=model,
+        api_key=api_key,
+        base_url=base_url,
         channel=channel,
         project_name=project_name,
     )

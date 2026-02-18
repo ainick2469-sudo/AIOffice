@@ -16,6 +16,8 @@ MODEL_RATES_PER_1K = {
 
 
 def _read_key_from_env_file() -> str:
+    if (os.environ.get("AI_OFFICE_TESTING") or "").strip() == "1":
+        return ""
     env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
     if not os.path.exists(env_path):
         return ""
@@ -78,13 +80,16 @@ async def chat(
     temperature: float = 0.7,
     max_tokens: int = 1024,
     model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
     channel: Optional[str] = None,
     project_name: Optional[str] = None,
 ) -> Optional[str]:
-    api_key = get_api_key()
-    if not api_key:
+    resolved_key = (api_key or "").strip() or get_api_key()
+    if not resolved_key:
         logger.error("No OPENAI_API_KEY configured")
         return None
+    resolved_base_url = (base_url or "").strip() or get_base_url()
 
     use_model = model or get_model()
     api_messages = []
@@ -108,11 +113,11 @@ async def chat(
     }
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {resolved_key}",
         "Content-Type": "application/json",
     }
 
-    url = f"{get_base_url().rstrip('/')}/chat/completions"
+    url = f"{resolved_base_url.rstrip('/')}/chat/completions"
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(url, headers=headers, json=body)

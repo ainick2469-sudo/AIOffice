@@ -1994,3 +1994,37 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P0.2 Per-Agent Credentials Wired Into OpenAI/Claude Calls
+
+### Backend changes
+- `server/openai_client.py`
+  - `chat(...)` now accepts optional `api_key` and `base_url` overrides (per-agent).
+  - Test safety: when `AI_OFFICE_TESTING=1`, `.env` is ignored for keys.
+- `server/openai_adapter.py`
+  - Threads `api_key` and `base_url` through to `openai_client.chat(...)`.
+- `server/claude_client.py`
+  - Refactored to remove import-time global API key.
+  - `chat(...)` now accepts optional `api_key` and `base_url` overrides.
+  - Test safety: when `AI_OFFICE_TESTING=1`, `.env` is ignored for keys.
+- `server/claude_adapter.py`
+  - Threads `api_key` and `base_url` through to `claude_client.chat(...)`.
+- `server/agent_engine.py`
+  - Remote backends (`openai`/`claude`) now fetch per-agent credentials from `agent_credentials` and pass overrides to adapters.
+  - If no key is configured (neither per-agent nor env), returns a clear, user-visible error message and emits a `backend_unavailable` console event.
+
+### Tests
+- `tests/test_agent_engine_uses_credential_overrides.py`
+  - Verifies `agent_engine` passes per-agent OpenAI `api_key` + `base_url` into the adapter call.
+- `tests/test_backend_unavailable_message.py`
+  - Verifies a helpful message is returned when OpenAI backend is selected but no key exists anywhere.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS
