@@ -2080,3 +2080,38 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P0.5 Embedded Preview Tab (Iframe + Process Logs)
+
+### Backend changes
+- `server/models.py`
+  - Extended `BuildConfigIn` with `preview_cmd` and `preview_port`.
+- `server/build_runner.py`
+  - Persists `preview_cmd` and `preview_port` in `.ai-office/config.json` per project.
+
+### Frontend changes
+- `client/src/components/PreviewPanel.jsx`
+  - New Preview tab UI:
+    - Start/Stop/Restart preview process
+    - Embedded iframe to `http://127.0.0.1:<port>`
+    - Live process logs (polls `include_logs=true`)
+    - Editable preview command + preferred port persisted to build config
+    - Clear guidance when no port is detected (add `--port ####` / `-p ####`)
+- `client/src/App.jsx`
+  - Added `Preview` tab.
+- `client/src/App.css`
+  - Preview panel layout + iframe/log styling.
+
+### Tests
+- `tests/test_build_config_preview_fields.py`
+  - Confirms preview config fields round-trip via build-config API.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS

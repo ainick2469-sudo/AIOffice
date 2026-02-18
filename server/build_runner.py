@@ -34,16 +34,39 @@ def _config_path(project_name: str) -> Path:
 def get_build_config(project_name: str) -> dict:
     path = _config_path(project_name)
     if not path.exists():
-        return {"build_cmd": "", "test_cmd": "", "run_cmd": "", "detected": {}, "manual_overrides": []}
+        return {
+            "build_cmd": "",
+            "test_cmd": "",
+            "run_cmd": "",
+            "preview_cmd": "",
+            "preview_port": None,
+            "detected": {},
+            "manual_overrides": [],
+        }
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return {"build_cmd": "", "test_cmd": "", "run_cmd": "", "detected": {}, "manual_overrides": []}
+        return {
+            "build_cmd": "",
+            "test_cmd": "",
+            "run_cmd": "",
+            "preview_cmd": "",
+            "preview_port": None,
+            "detected": {},
+            "manual_overrides": [],
+        }
     data.setdefault("build_cmd", "")
     data.setdefault("test_cmd", "")
     data.setdefault("run_cmd", "")
+    data.setdefault("preview_cmd", "")
+    data.setdefault("preview_port", None)
     data.setdefault("detected", {})
     data.setdefault("manual_overrides", [])
+    try:
+        if data.get("preview_port") is not None:
+            data["preview_port"] = int(data["preview_port"])
+    except Exception:
+        data["preview_port"] = None
     return data
 
 
@@ -57,10 +80,18 @@ def set_build_config(project_name: str, updates: dict) -> dict:
     current = get_build_config(project_name)
 
     manual_overrides = set(current.get("manual_overrides", []))
-    for key in ("build_cmd", "test_cmd", "run_cmd"):
+    for key in ("build_cmd", "test_cmd", "run_cmd", "preview_cmd"):
         if key in updates and updates[key] is not None:
             current[key] = str(updates[key]).strip()
             manual_overrides.add(key)
+
+    if "preview_port" in updates:
+        value = updates.get("preview_port")
+        if value is None:
+            current["preview_port"] = None
+        else:
+            current["preview_port"] = int(value)
+        manual_overrides.add("preview_port")
 
     if "detected" in updates and isinstance(updates["detected"], dict):
         current["detected"] = updates["detected"]

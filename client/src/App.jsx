@@ -15,6 +15,7 @@ import ProjectPanel from './components/ProjectPanel';
 import GitPanel from './components/GitPanel';
 import ConsolePanel from './components/ConsolePanel';
 import DebugPanel from './components/DebugPanel';
+import PreviewPanel from './components/PreviewPanel';
 import './App.css';
 
 export default function App() {
@@ -100,6 +101,9 @@ export default function App() {
           <button className={panel === 'projects' ? 'active' : ''} onClick={() => setPanel('projects')}>
             Projects
           </button>
+          <button className={panel === 'preview' ? 'active' : ''} onClick={() => setPanel('preview')}>
+            Preview
+          </button>
           <button className={panel === 'git' ? 'active' : ''} onClick={() => setPanel('git')}>
             Git
           </button>
@@ -141,6 +145,7 @@ export default function App() {
         {panel === 'audit' && <AuditLog onAuditChanged={refreshAuditCount} />}
         {panel === 'controls' && <Controls />}
         {panel === 'projects' && <ProjectPanel channel={channel} />}
+        {panel === 'preview' && <PreviewPanel channel={channel} />}
         {panel === 'git' && <GitPanel channel={channel} />}
         {panel === 'console' && <ConsolePanel channel={channel} />}
         {panel === 'debug' && <DebugPanel channel={channel} />}

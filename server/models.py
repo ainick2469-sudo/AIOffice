@@ -176,6 +176,8 @@ class BuildConfigIn(BaseModel):
     build_cmd: Optional[str] = None
     test_cmd: Optional[str] = None
     run_cmd: Optional[str] = None
+    preview_cmd: Optional[str] = None
+    preview_port: Optional[int] = Field(default=None, ge=1, le=65535)
 
 
 class ExecuteCodeIn(BaseModel):
