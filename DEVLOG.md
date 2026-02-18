@@ -2028,3 +2028,33 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P0.3 Codex Defaults + Repair Flow
+
+### Backend changes
+- `agents/registry.json`
+  - Updated `codex` defaults to `backend=openai`, `model=gpt-4o-mini` for fresh DB seeds.
+- `server/routes_api.py`
+  - Added `POST /api/agents/repair` to safely upgrade Codex only when it matches the legacy signature:
+    - `backend=ollama` and `model=qwen2.5:14b` → `backend=openai`, `model=gpt-4o-mini`
+  - Normalized agent responses for `GET /api/agents/{agent_id}` and `PATCH /api/agents/{agent_id}` by setting `response_model=AgentOut`
+    (so `active` consistently serializes as a boolean).
+
+### Frontend changes
+- `client/src/components/AgentConfig.jsx`
+  - Added "Repair Codex Defaults" button.
+  - When switching backends, nudges the model field to a sane default if the current model obviously belongs to a different provider.
+
+### Tests
+- `tests/test_agents_update_backend.py`
+- `tests/test_agents_repair_codex_defaults.py`
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS

@@ -2,6 +2,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { fetchAgents, updateAgent } from '../api';
 
 const BACKEND_OPTIONS = ['ollama', 'claude', 'openai'];
+const DEFAULT_MODELS = {
+  ollama: 'qwen2.5:14b',
+  claude: 'claude-sonnet-4-20250514',
+  openai: 'gpt-4o-mini',
+};
 
 function toDraft(agent) {
   return {
@@ -112,6 +117,56 @@ export default function AgentConfig() {
     setDraft(prev => ({ ...prev, [field]: value }));
   };
 
+  const handleBackendChange = (nextBackend) => {
+    setDraft(prev => {
+      if (!prev) return prev;
+      const currentModel = (prev.model || '').trim();
+      const next = { ...prev, backend: nextBackend };
+
+      // If the model clearly belongs to a different provider, nudge to a sane default.
+      if (nextBackend === 'openai') {
+        if (!currentModel || currentModel.includes(':') || currentModel.startsWith('claude-')) {
+          next.model = DEFAULT_MODELS.openai;
+        }
+      } else if (nextBackend === 'claude') {
+        if (!currentModel || currentModel.includes(':') || currentModel.startsWith('gpt-')) {
+          next.model = DEFAULT_MODELS.claude;
+        }
+      } else if (nextBackend === 'ollama') {
+        if (!currentModel || currentModel.startsWith('gpt-') || currentModel.startsWith('claude-')) {
+          next.model = DEFAULT_MODELS.ollama;
+        }
+      }
+      return next;
+    });
+  };
+
+  const handleRepairCodexDefaults = async () => {
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      const resp = await fetch('/api/agents/repair', { method: 'POST' });
+      const payload = resp.ok ? await resp.json() : null;
+      if (!resp.ok) {
+        throw new Error(payload?.detail || 'Repair request failed.');
+      }
+      await refreshAgents(selectedId || 'codex');
+      if (payload?.changed) {
+        setNotice(
+          `Repaired Codex defaults: ${payload.before.backend}/${payload.before.model} → ${payload.after.backend}/${payload.after.model}`
+        );
+      } else {
+        setNotice('No repair needed.');
+      }
+      window.dispatchEvent(new Event('agents-updated'));
+    } catch (err) {
+      setError(err?.message || 'Failed to repair agent defaults.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!selectedId || !draft) return;
     setSaving(true);
@@ -157,6 +212,14 @@ export default function AgentConfig() {
     <div className="panel agent-config-panel">
       <div className="panel-header">
         <h3>Agent Config</h3>
+        <button
+          className="refresh-btn"
+          onClick={handleRepairCodexDefaults}
+          disabled={loading || saving}
+          title="Repair Codex defaults if it still matches the legacy local-model signature."
+        >
+          Repair Codex Defaults
+        </button>
         <button className="refresh-btn" onClick={handleRefresh} disabled={loading || saving}>
           Refresh
         </button>
@@ -207,7 +270,7 @@ export default function AgentConfig() {
                   <label>Backend</label>
                   <select
                     value={draft.backend}
-                    onChange={e => updateDraft('backend', e.target.value)}
+                    onChange={e => handleBackendChange(e.target.value)}
                   >
                     {BACKEND_OPTIONS.map(option => (
                       <option key={option} value={option}>

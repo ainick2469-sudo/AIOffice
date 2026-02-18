@@ -110,7 +110,7 @@ async def list_agents(active_only: bool = True):
     return agents
 
 
-@router.get("/agents/{agent_id}")
+@router.get("/agents/{agent_id}", response_model=AgentOut)
 async def get_agent(agent_id: str):
     agent = await db.get_agent(agent_id)
     if not agent:
@@ -118,7 +118,7 @@ async def get_agent(agent_id: str):
     return agent
 
 
-@router.patch("/agents/{agent_id}")
+@router.patch("/agents/{agent_id}", response_model=AgentOut)
 async def update_agent(agent_id: str, body: AgentUpdateIn):
     updates = body.model_dump(exclude_unset=True)
     if not updates:
@@ -166,6 +166,26 @@ async def delete_agent_credentials(agent_id: str, backend: str = Query(..., min_
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True, "deleted": ok}
+
+
+@router.post("/agents/repair")
+async def repair_agent_defaults():
+    """Repair safe defaults for known agents without surprising user-customized configs."""
+    agent = await db.get_agent("codex")
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+
+    before = {"id": "codex", "backend": agent.get("backend"), "model": agent.get("model")}
+    changed = False
+    updated = agent
+
+    # Only repair Codex if it matches the old default signature (pre-vault).
+    if (agent.get("backend") == "ollama") and (agent.get("model") == "qwen2.5:14b"):
+        updated = await db.update_agent("codex", {"backend": "openai", "model": "gpt-4o-mini"}) or agent
+        changed = True
+
+    after = {"id": "codex", "backend": updated.get("backend"), "model": updated.get("model")}
+    return {"ok": True, "changed": changed, "before": before, "after": after}
 
 
 @router.get("/messages/{channel}")
