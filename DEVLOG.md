@@ -1724,6 +1724,19 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
 
+## 2026-02-18 - Project Display Name (Rename Support)
+
+### Backend changes
+- `server/routes_api.py`
+  - `GET /api/projects` now includes `display_name` for each project when set.
+  - Added `PUT /api/projects/{name}/display-name` to persist a UI display name (stored in settings, does not rename folders).
+
+### Tests
+- Added `tests/test_project_display_name_api.py`.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+
 ## 2026-02-18 - Project Create From Prompt + Import API
 
 ### Backend changes

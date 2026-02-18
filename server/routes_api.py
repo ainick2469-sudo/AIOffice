@@ -377,6 +377,8 @@ async def list_projects_route():
     enriched = []
     for project in projects:
         name = (project.get("name") or "").strip()
+        display_key = f"project_display_name:{name}" if name else ""
+        display_name = await db.get_setting(display_key) if display_key else None
         config = build_runner.get_build_config(name) if name else {}
         detected = config.get("detected") if isinstance(config, dict) else {}
         if not isinstance(detected, dict):
@@ -385,12 +387,32 @@ async def list_projects_route():
         enriched.append(
             {
                 **project,
+                "display_name": (display_name or "").strip() or None,
                 "channel_id": f"proj-{name}" if name else None,
                 "detected_kinds": kinds,
                 "detected_kind": kinds[0] if kinds else None,
             }
         )
     return {"projects": enriched, "projects_root": str(pm.WORKSPACE_ROOT)}
+
+
+@router.put("/projects/{name}/display-name")
+async def set_project_display_name(name: str, body: dict):
+    from . import project_manager as pm
+
+    project = (name or "").strip().lower()
+    if not project or not pm.validate_project_name(project):
+        raise HTTPException(400, "Invalid project name.")
+
+    display_name = str(body.get("display_name") or "").strip()
+    if not display_name:
+        raise HTTPException(400, "display_name is required")
+    if len(display_name) > 80:
+        raise HTTPException(400, "display_name too long (max 80 chars)")
+
+    key = f"project_display_name:{project}"
+    await db.set_setting(key, display_name)
+    return {"ok": True, "project": project, "display_name": display_name}
 
 
 @router.post("/projects/create_from_prompt")
