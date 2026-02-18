@@ -113,6 +113,26 @@ def _resolve_path(filepath: str, sandbox: Path) -> Path:
     return p.resolve()
 
 
+def canonicalize_tool_path(raw: str) -> str:
+    """Normalize tool file paths to avoid accidental wrong roots (e.g. `@apps/...`).
+
+    Rules:
+    - Strip a leading `@` (only at the beginning).
+    - Strip leading `./` or `.\\`.
+    - Strip leading slashes/backslashes to keep the path relative.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    if text.startswith("@"):
+        text = text[1:]
+    if text.startswith("./") or text.startswith(".\\"):
+        text = text[2:]
+    while text.startswith(("/", "\\")):
+        text = text[1:]
+    return text
+
+
 def _is_command_allowed(command: str) -> bool:
     """Check command against allowlist and blocklist."""
     cmd_lower = command.lower().strip()
@@ -293,6 +313,8 @@ async def resolve_approval_response(request_id: str, approved: bool, decided_by:
 
 async def tool_read_file(agent_id: str, filepath: str, channel: str = "main") -> dict:
     """Read a file within the sandbox."""
+    raw_path = filepath
+    filepath = canonicalize_tool_path(filepath)
     policy = await evaluate_tool_policy(
         channel=channel,
         tool_type="read",
@@ -300,6 +322,15 @@ async def tool_read_file(agent_id: str, filepath: str, channel: str = "main") ->
         target_path=filepath,
         approved=True,
     )
+    if filepath != (raw_path or "").strip():
+        await emit_console_event(
+            channel=channel,
+            event_type="tool_path_canonicalized",
+            source="tool_gateway",
+            message=f'read path canonicalized: "{raw_path}" -> "{filepath}"',
+            project_name=policy.get("project"),
+            data={"tool_type": "read", "from": raw_path, "to": filepath},
+        )
     if not policy.get("allowed"):
         return {"ok": False, "error": policy.get("reason", "Policy denied read."), "policy": policy}
 
@@ -351,6 +382,8 @@ async def tool_read_file(agent_id: str, filepath: str, channel: str = "main") ->
 
 async def tool_search_files(agent_id: str, pattern: str, directory: str = ".", channel: str = "main") -> dict:
     """Search for files matching a glob pattern within sandbox."""
+    raw_dir = directory
+    directory = canonicalize_tool_path(directory) or "."
     policy = await evaluate_tool_policy(
         channel=channel,
         tool_type="read",
@@ -358,6 +391,15 @@ async def tool_search_files(agent_id: str, pattern: str, directory: str = ".", c
         target_path=directory,
         approved=True,
     )
+    if directory != (raw_dir or "").strip():
+        await emit_console_event(
+            channel=channel,
+            event_type="tool_path_canonicalized",
+            source="tool_gateway",
+            message=f'search directory canonicalized: "{raw_dir}" -> "{directory}"',
+            project_name=policy.get("project"),
+            data={"tool_type": "search", "from": raw_dir, "to": directory},
+        )
     if not policy.get("allowed"):
         return {"ok": False, "error": policy.get("reason", "Policy denied search."), "policy": policy}
 
@@ -652,6 +694,8 @@ async def tool_write_file(
     channel: str = "main",
 ) -> dict:
     """Write a file with diff preview. Auto-approved for sandboxed writes."""
+    raw_path = filepath
+    filepath = canonicalize_tool_path(filepath)
     policy = await evaluate_tool_policy(
         channel=channel,
         tool_type="write",
@@ -659,6 +703,15 @@ async def tool_write_file(
         target_path=filepath,
         approved=approved,
     )
+    if filepath != (raw_path or "").strip():
+        await emit_console_event(
+            channel=channel,
+            event_type="tool_path_canonicalized",
+            source="tool_gateway",
+            message=f'write path canonicalized: "{raw_path}" -> "{filepath}"',
+            project_name=policy.get("project"),
+            data={"tool_type": "write", "from": raw_path, "to": filepath},
+        )
     if not policy.get("allowed"):
         if policy.get("requires_approval"):
             # Build a preview so the approval modal can show a concrete diff.

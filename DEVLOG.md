@@ -1753,3 +1753,27 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P0-A Tool Parsing + Path Canonicalization
+
+### Backend changes
+- `server/tool_executor.py`
+  - Tool headers now accept both `[TOOL:write]` and legacy `[TOOLwrite]` (missing colon), case-insensitive.
+- `server/tool_gateway.py`
+  - Added `canonicalize_tool_path()` and applied it to read/search/write paths so leading `@` and `./` do not create wrong directories (e.g. `@apps/...`).
+  - Emits `console_event` `tool_path_canonicalized` when normalization changes a path.
+- `server/app_builder.py`
+  - `_sanitize_target_dir()` now strips leading `@` and `./` so app builder targets never land in `@apps`.
+
+### Tests
+- Added `tests/test_tool_parsing_legacy_and_at_paths.py`.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS

@@ -39,6 +39,10 @@ def _slugify(name: str) -> str:
 
 def _sanitize_target_dir(path: str | None, app_name: str) -> str:
     candidate = (path or "").strip().replace("\\", "/")
+    if candidate.startswith("@"):
+        candidate = candidate[1:]
+    if candidate.startswith("./"):
+        candidate = candidate[2:]
     if not candidate:
         candidate = f"apps/{_slugify(app_name)}"
     candidate = candidate.strip("/")

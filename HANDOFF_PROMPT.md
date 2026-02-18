@@ -304,3 +304,13 @@ All agents have deep, distinct personalities with anti-sycophancy rules. They di
   - Approval badge uses `ASK|AUTO|LOCKED` (via `ui_mode`) when available.
 - Tests: added `tests/test_policy_scope_prompts.py`.
 - Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.
+
+## SESSION 41 UPDATE (2026-02-18)
+
+- Tool parsing + path canonicalization hardening:
+  - Tool headers now accept both canonical `[TOOL:write]` and legacy `[TOOLwrite]` (missing colon), case-insensitive.
+  - File paths passed to tools are canonicalized so leading `@`/`./` cannot create wrong roots like `@apps/...`.
+  - Console now emits `tool_path_canonicalized` when a tool path is normalized.
+  - App Builder target dir sanitization strips leading `@`/`./` to avoid `@apps` outputs.
+- Tests: added `tests/test_tool_parsing_legacy_and_at_paths.py`.
+- Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.

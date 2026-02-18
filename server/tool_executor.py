@@ -20,7 +20,10 @@ from .observability import emit_console_event
 
 logger = logging.getLogger("ai-office.toolexec")
 
-# Pattern: agents wrap tool calls in [TOOL:x] blocks
+# Pattern: agents wrap tool calls in [TOOL:x] blocks.
+# Be liberal in what we accept:
+# - `[TOOL:write]` (canonical)
+# - `[TOOLwrite]`  (legacy/missing colon)
 # [TOOL:read] server/main.py
 # [TOOL:run] python -m pytest tests/
 # [TOOL:search] *.py
@@ -28,21 +31,21 @@ logger = logging.getLogger("ai-office.toolexec")
 # ```content here```
 # [TOOL:task] Task title | assigned_to | priority
 TOOL_PATTERNS = [
-    (r'\[TOOL:read\]\s*(.+)', 'read'),
-    (r'\[TOOL:run\]\s*(.+)', 'run'),
-    (r'\[TOOL:search\]\s*(.+)', 'search'),
-    (r'\[TOOL:write\]\s*(\S+)\s*\n```[\w]*\n(.*?)```', 'write'),
-    (r'\[TOOL:write\]\s*(\S+)', 'write_noblock'),  # Agent forgot content block
-    (r'\[TOOL:task\]\s*(.+)', 'task'),
-    (r'\[TOOL:web\]\s*(.+)', 'web'),
-    (r'\[TOOL:fetch\]\s*(.+)', 'fetch'),
-    (r'\[TOOL:create-skill\]\s*(.+)', 'create_skill'),
-    (r'\[TOOL:start_process\]\s*(.+)', 'start_process'),
-    (r'\[TOOL:stop_process\]\s*(.+)', 'stop_process'),
-    (r'\[TOOL:tail_process_logs\]\s*(.+)', 'tail_process_logs'),
-    (r'\[TOOL:list_processes\]\s*(.*)', 'list_processes'),
+    (r'\[TOOL:?read\]\s*(.+)', 'read'),
+    (r'\[TOOL:?run\]\s*(.+)', 'run'),
+    (r'\[TOOL:?search\]\s*(.+)', 'search'),
+    (r'\[TOOL:?write\]\s*(\S+)\s*\n```[\w]*\n(.*?)```', 'write'),
+    (r'\[TOOL:?write\]\s*(\S+)', 'write_noblock'),  # Agent forgot content block
+    (r'\[TOOL:?task\]\s*(.+)', 'task'),
+    (r'\[TOOL:?web\]\s*(.+)', 'web'),
+    (r'\[TOOL:?fetch\]\s*(.+)', 'fetch'),
+    (r'\[TOOL:?create-skill\]\s*(.+)', 'create_skill'),
+    (r'\[TOOL:?start_process\]\s*(.+)', 'start_process'),
+    (r'\[TOOL:?stop_process\]\s*(.+)', 'stop_process'),
+    (r'\[TOOL:?tail_process_logs\]\s*(.+)', 'tail_process_logs'),
+    (r'\[TOOL:?list_processes\]\s*(.*)', 'list_processes'),
 ]
-GENERIC_TOOL_PATTERN = re.compile(r"\[TOOL:([a-zA-Z0-9_-]+)\]\s*(.*)")
+GENERIC_TOOL_PATTERN = re.compile(r"\[TOOL:?([a-zA-Z0-9_-]+)\]\s*(.*)", re.IGNORECASE)
 KNOWN_TOOL_TYPES = {
     "read",
     "run",
@@ -78,24 +81,24 @@ def parse_tool_calls(text: str) -> list[dict]:
     # Check explicit [TOOL:x] patterns first
     for pattern, tool_type in TOOL_PATTERNS:
         if tool_type == 'write':
-            matches = re.finditer(pattern, text, re.DOTALL)
+            matches = re.finditer(pattern, text, re.DOTALL | re.IGNORECASE)
             for m in matches:
                 path = m.group(1).strip()
                 seen_writes.add(path)
                 calls.append({"type": "write", "path": path, "content": m.group(2)})
         elif tool_type == 'write_noblock':
             # Agent wrote [TOOL:write] path but no content block
-            matches = re.finditer(pattern, text, re.MULTILINE)
+            matches = re.finditer(pattern, text, re.MULTILINE | re.IGNORECASE)
             for m in matches:
                 path = m.group(1).strip()
                 if path not in seen_writes:  # Don't duplicate if already matched with content
                     calls.append({"type": "write_noblock", "path": path})
         elif tool_type == 'task':
-            matches = re.finditer(pattern, text, re.MULTILINE)
+            matches = re.finditer(pattern, text, re.MULTILINE | re.IGNORECASE)
             for m in matches:
                 calls.append({"type": "task", "arg": m.group(1).strip()})
         else:
-            matches = re.finditer(pattern, text, re.MULTILINE)
+            matches = re.finditer(pattern, text, re.MULTILINE | re.IGNORECASE)
             for m in matches:
                 calls.append({"type": tool_type, "arg": m.group(1).strip()})
     for line in (text or "").splitlines():
