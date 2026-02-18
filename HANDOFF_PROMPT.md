@@ -314,3 +314,14 @@ All agents have deep, distinct personalities with anti-sycophancy rules. They di
   - App Builder target dir sanitization strips leading `@`/`./` to avoid `@apps` outputs.
 - Tests: added `tests/test_tool_parsing_legacy_and_at_paths.py`.
 - Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.
+
+## SESSION 42 UPDATE (2026-02-18)
+
+- Pending approvals reliability (no more missed modals/timeouts):
+  - Approval requests now persist `project_name`, `branch`, `expires_at` and include them in websocket payloads.
+  - New API: `GET /api/approvals/pending` so the UI can reload pending approvals on reconnect/channel load.
+  - Approval timeouts now mark requests as `expired` and broadcast `approval_expired` for UI cleanup.
+  - Approval waits use `AI_OFFICE_APPROVAL_TTL_SECONDS` (default 600 seconds).
+- UI: Chat header shows `Pending: N` chip and a pending approvals panel; modal shows expiry countdown.
+- Tests: added `tests/test_approvals_pending_api.py` and `tests/test_approval_timeout_expires.py`.
+- Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.

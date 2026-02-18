@@ -395,6 +395,16 @@ async def permissions_approval_response(body: ApprovalResponseIn):
     return {"ok": True, "request": resolved}
 
 
+@router.get("/approvals/pending")
+async def approvals_pending(
+    channel: str = Query(default="main"),
+    project: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    requests = await db.list_pending_approval_requests(channel, project_name=project, limit=limit)
+    return {"ok": True, "channel": channel, "project": project, "requests": requests}
+
+
 @router.delete("/projects/{name}")
 async def delete_project_route(name: str, confirm_token: Optional[str] = Query(default=None)):
     from . import project_manager as pm

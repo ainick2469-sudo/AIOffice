@@ -9,7 +9,7 @@ import shlex
 import shutil
 import subprocess
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -18,7 +18,7 @@ from . import runtime_manager
 from .database import get_db
 from .observability import emit_console_event
 from .policy import evaluate_tool_policy
-from .project_manager import APP_ROOT, get_sandbox_root
+from .project_manager import APP_ROOT, get_active_project, get_sandbox_root
 from .runtime_config import build_runtime_env
 from .websocket import manager
 
@@ -229,6 +229,15 @@ def _risk_level(tool_type: str) -> str:
     return "low"
 
 
+def _approval_ttl_seconds() -> int:
+    raw = (os.environ.get("AI_OFFICE_APPROVAL_TTL_SECONDS") or "").strip()
+    try:
+        value = int(raw) if raw else 600
+    except Exception:
+        value = 600
+    return max(1, min(value, 24 * 60 * 60))
+
+
 async def _create_approval_request(
     *,
     channel: str,
@@ -241,9 +250,17 @@ async def _create_approval_request(
     task_id: Optional[str] = None,
 ) -> dict:
     request_id = uuid.uuid4().hex[:16]
+    active = await get_active_project(channel)
+    project_name = active.get("project") or "ai-office"
+    branch_name = (active.get("branch") or "main").strip() or "main"
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    created_at = now.isoformat().replace("+00:00", "Z")
+    expires_at = (now + timedelta(seconds=_approval_ttl_seconds())).isoformat().replace("+00:00", "Z")
     payload = {
         "id": request_id,
         "channel": channel,
+        "project_name": project_name,
+        "branch": branch_name,
         "agent_id": agent_id,
         "tool_type": tool_type,
         "command": command,
@@ -252,7 +269,8 @@ async def _create_approval_request(
         "risk_level": _risk_level(tool_type),
         "policy_mode": (policy or {}).get("permission_mode", "ask"),
         "missing_scope": (policy or {}).get("missing_scope"),
-        "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "created_at": created_at,
+        "expires_at": expires_at,
         "task_id": task_id,
     }
     await db_api.create_approval_request(
@@ -263,6 +281,9 @@ async def _create_approval_request(
         tool_type=tool_type,
         payload=payload,
         risk_level=payload["risk_level"],
+        project_name=project_name,
+        branch=branch_name,
+        expires_at=expires_at,
     )
     loop = asyncio.get_running_loop()
     _approval_waiters[request_id] = loop.create_future()

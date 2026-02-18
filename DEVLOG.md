@@ -1777,3 +1777,43 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P0-B Pending Approvals Reload + Expiry
+
+### Backend changes
+- `server/database.py`
+  - `approval_requests` now stores: `project_name`, `branch`, `expires_at` for UI filtering + countdown.
+  - Added helpers:
+    - `list_pending_approval_requests(...)`
+    - `expire_approval_request(...)`
+- `server/tool_gateway.py`
+  - Approval requests now include `project_name`, `branch`, `expires_at` and persist those fields.
+  - Default approval TTL: `AI_OFFICE_APPROVAL_TTL_SECONDS` (default 600).
+- `server/tool_executor.py`
+  - Approval waits now use the same TTL env var.
+  - On timeout, requests are marked `expired` and websocket broadcasts `approval_expired`.
+- `server/routes_api.py`
+  - Added `GET /api/approvals/pending` for reconnect-safe pending approvals reload.
+
+### Frontend changes
+- `client/src/components/ChatRoom.jsx`
+  - Reloads pending approvals on channel load + websocket reconnect.
+  - Header now shows a `Pending: N` chip that opens a pending approvals panel.
+  - Approval modal now shows expiry countdown when `expires_at` is present.
+- `client/src/App.css`
+  - Added styles for the pending approvals panel.
+
+### Tests
+- Added:
+  - `tests/test_approvals_pending_api.py`
+  - `tests/test_approval_timeout_expires.py`
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS

@@ -207,6 +207,9 @@ CREATE TABLE IF NOT EXISTS permission_policies (
 CREATE TABLE IF NOT EXISTS approval_requests (
     id TEXT PRIMARY KEY,
     channel TEXT NOT NULL,
+    project_name TEXT,
+    branch TEXT,
+    expires_at TEXT,
     task_id TEXT,
     agent_id TEXT NOT NULL,
     tool_type TEXT NOT NULL,
@@ -335,6 +338,9 @@ async def _run_migrations(db: aiosqlite.Connection):
         """CREATE TABLE IF NOT EXISTS approval_requests (
                id TEXT PRIMARY KEY,
                channel TEXT NOT NULL,
+               project_name TEXT,
+               branch TEXT,
+               expires_at TEXT,
                task_id TEXT,
                agent_id TEXT NOT NULL,
                tool_type TEXT NOT NULL,
@@ -346,6 +352,9 @@ async def _run_migrations(db: aiosqlite.Connection):
                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )"""
     )
+    await _ensure_column(db, "approval_requests", "project_name", "TEXT")
+    await _ensure_column(db, "approval_requests", "branch", "TEXT")
+    await _ensure_column(db, "approval_requests", "expires_at", "TEXT")
     await db.execute(
         """CREATE TABLE IF NOT EXISTS permission_grants (
                id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1622,17 +1631,23 @@ async def create_approval_request(
     payload: dict,
     risk_level: str = "medium",
     task_id: Optional[str] = None,
+    project_name: Optional[str] = None,
+    branch: Optional[str] = None,
+    expires_at: Optional[str] = None,
 ) -> dict:
     channel_id = (channel or "main").strip() or "main"
     db = await get_db()
     try:
         await db.execute(
             """INSERT INTO approval_requests (
-                   id, channel, task_id, agent_id, tool_type, payload_json, risk_level, status
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                   id, channel, project_name, branch, expires_at, task_id, agent_id, tool_type, payload_json, risk_level, status
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
             (
                 request_id,
                 channel_id,
+                (project_name or "").strip() or None,
+                (branch or "").strip() or None,
+                (expires_at or "").strip() or None,
                 (task_id or "").strip() or None,
                 (agent_id or "unknown").strip() or "unknown",
                 (tool_type or "").strip() or "run",
@@ -1660,6 +1675,65 @@ async def get_approval_request(request_id: str) -> Optional[dict]:
         await db.close()
 
 
+async def list_pending_approval_requests(
+    channel: str,
+    project_name: Optional[str] = None,
+    *,
+    limit: int = 50,
+) -> list[dict]:
+    channel_id = (channel or "main").strip() or "main"
+    project = (project_name or "").strip() or None
+    safe_limit = max(1, min(int(limit or 50), 200))
+    db = await get_db()
+    try:
+        if project:
+            cursor = await db.execute(
+                """
+                SELECT *
+                FROM approval_requests
+                WHERE channel = ?
+                  AND status = 'pending'
+                  AND (project_name = ? OR project_name IS NULL)
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (channel_id, project, safe_limit),
+            )
+        else:
+            cursor = await db.execute(
+                """
+                SELECT *
+                FROM approval_requests
+                WHERE channel = ?
+                  AND status = 'pending'
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (channel_id, safe_limit),
+            )
+        rows = await cursor.fetchall()
+        pending: list[dict] = []
+        for row in rows:
+            data = dict(row)
+            payload = _json_loads(data.get("payload_json"), {})
+            # Ensure the payload has the same shape the websocket delivers.
+            payload.setdefault("id", data.get("id"))
+            payload.setdefault("channel", data.get("channel"))
+            payload.setdefault("agent_id", data.get("agent_id"))
+            payload.setdefault("tool_type", data.get("tool_type"))
+            if data.get("project_name") and not payload.get("project_name"):
+                payload["project_name"] = data.get("project_name")
+            if data.get("branch") and not payload.get("branch"):
+                payload["branch"] = data.get("branch")
+            if data.get("expires_at") and not payload.get("expires_at"):
+                payload["expires_at"] = data.get("expires_at")
+            payload["status"] = data.get("status")
+            pending.append(payload)
+        return pending
+    finally:
+        await db.close()
+
+
 async def resolve_approval_request(
     request_id: str,
     *,
@@ -1676,6 +1750,29 @@ async def resolve_approval_request(
             (
                 status,
                 (decided_by or "user").strip() or "user",
+                _utc_now_iso(),
+                request_id,
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return await get_approval_request(request_id)
+
+
+async def expire_approval_request(
+    request_id: str,
+    *,
+    decided_by: str = "system",
+) -> Optional[dict]:
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE approval_requests
+               SET status = 'expired', decided_by = ?, decided_at = ?
+               WHERE id = ? AND status = 'pending'""",
+            (
+                (decided_by or "system").strip() or "system",
                 _utc_now_iso(),
                 request_id,
             ),

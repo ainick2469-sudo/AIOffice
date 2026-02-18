@@ -50,6 +50,7 @@ export default function ChatRoom({ channel }) {
   const [clockMs, setClockMs] = useState(Date.now());
   const [approvalQueue, setApprovalQueue] = useState([]);
   const [activeApproval, setActiveApproval] = useState(null);
+  const [approvalListOpen, setApprovalListOpen] = useState(false);
   const [trustMinutes, setTrustMinutes] = useState(30);
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [processActionBusy, setProcessActionBusy] = useState(false);
@@ -113,6 +114,9 @@ export default function ChatRoom({ channel }) {
     dragDepthRef.current = 0;
     loadedReactionIdsRef.current = new Set();
     setReactionsByMessage({});
+    setApprovalQueue([]);
+    setActiveApproval(null);
+    setApprovalListOpen(false);
   }, [channel]);
 
   // Poll conversation status
@@ -162,6 +166,20 @@ export default function ChatRoom({ channel }) {
     statusInterval.current = setInterval(poll, 2000);
     return () => clearInterval(statusInterval.current);
   }, [channel]);
+
+  // Reload pending approvals on channel load and websocket reconnect (in case events were missed).
+  useEffect(() => {
+    if (!connected) return;
+    const projectName = activeProject?.project || 'ai-office';
+    fetch(`/api/approvals/pending?channel=${encodeURIComponent(channel)}&project=${encodeURIComponent(projectName)}`)
+      .then((r) => (r.ok ? r.json() : { requests: [] }))
+      .then((payload) => {
+        const items = Array.isArray(payload?.requests) ? payload.requests : [];
+        items.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+        setApprovalQueue(items);
+      })
+      .catch(() => {});
+  }, [channel, connected, activeProject?.project]);
 
   // Auto-scroll
   useEffect(() => {
@@ -236,6 +254,10 @@ export default function ChatRoom({ channel }) {
       });
     }
     if (lastEvent.type === 'approval_resolved' && lastEvent.request_id) {
+      setApprovalQueue(prev => prev.filter(item => item.id !== lastEvent.request_id));
+      setActiveApproval(prev => (prev?.id === lastEvent.request_id ? null : prev));
+    }
+    if (lastEvent.type === 'approval_expired' && lastEvent.request_id) {
       setApprovalQueue(prev => prev.filter(item => item.id !== lastEvent.request_id));
       setActiveApproval(prev => (prev?.id === lastEvent.request_id ? null : prev));
     }
@@ -700,6 +722,9 @@ export default function ChatRoom({ channel }) {
   const sprintLabel = `SPRINT - ${formatElapsed(sprintRemaining)} remaining - Goal: ${sprintGoal}`;
   const approvalMode = (permissionPolicy?.ui_mode || (permissionPolicy?.mode || 'ask').toUpperCase()).toUpperCase();
   const approvalExpiry = permissionPolicy?.expires_at ? ` until ${new Date(permissionPolicy.expires_at).toLocaleTimeString()}` : '';
+  const approvalCountdownSeconds = activeApproval?.expires_at
+    ? Math.max(0, Math.floor((new Date(activeApproval.expires_at).getTime() - clockMs) / 1000))
+    : null;
   const runningProcesses = processState.items.filter((item) => item.status === 'running');
   const processSummaryTitle = runningProcesses.length
     ? runningProcesses
@@ -729,6 +754,15 @@ export default function ChatRoom({ channel }) {
           </span>
           <span className={`convo-status ${approvalMode === 'AUTO' ? 'active' : ''}`}>
             Approval: {approvalMode}{approvalExpiry}
+          </span>
+          <span
+            className={`convo-status ${approvalQueue.length > 0 ? 'active' : ''}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => setApprovalListOpen(prev => !prev)}
+            title={approvalQueue.length > 0 ? 'Click to view pending approvals' : 'No pending approvals'}
+          >
+            Pending: {approvalQueue.length}
           </span>
           <span className={`convo-status ${processState.running > 0 ? 'active' : ''}`} title={processSummaryTitle}>
             Processes: {processState.running} running
@@ -777,6 +811,42 @@ export default function ChatRoom({ channel }) {
           ))}
         </div>
       </div>
+
+      {approvalListOpen && approvalQueue.length > 0 && (
+        <div className="approval-queue-panel">
+          <div className="approval-queue-header">
+            <strong>Pending Approvals</strong>
+            <button className="msg-action-btn" onClick={() => setApprovalListOpen(false)}>
+              Close
+            </button>
+          </div>
+          <div className="approval-queue-body">
+            {approvalQueue.map((item) => (
+              <button
+                key={item.id}
+                className="approval-queue-item"
+                onClick={() => {
+                  setActiveApproval(item);
+                  setApprovalListOpen(false);
+                }}
+                disabled={!item?.id}
+              >
+                <div className="approval-queue-title">
+                  <strong>{item.tool_type}</strong> by <strong>{item.agent_id}</strong>
+                </div>
+                <div className="approval-queue-command">
+                  <code>{item.command}</code>
+                </div>
+                {item.expires_at && (
+                  <div className="approval-queue-meta">
+                    Expires at {new Date(item.expires_at).toLocaleTimeString()}
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div
         className={`chat-content ${dragActive ? 'drag-active' : ''}`}
@@ -1001,6 +1071,14 @@ export default function ChatRoom({ channel }) {
             <p><strong>Tool:</strong> {activeApproval.tool_type}</p>
             <p><strong>Agent:</strong> {activeApproval.agent_id}</p>
             <p><strong>Command:</strong> <code>{activeApproval.command}</code></p>
+            {activeApproval.expires_at ? (
+              <p>
+                <strong>Expires:</strong>{' '}
+                {approvalCountdownSeconds !== null
+                  ? `${formatElapsed(approvalCountdownSeconds)} remaining`
+                  : new Date(activeApproval.expires_at).toLocaleTimeString()}
+              </p>
+            ) : null}
             {activeApproval.missing_scope ? (
               <p><strong>Scope needed:</strong> <code>{activeApproval.missing_scope}</code></p>
             ) : null}

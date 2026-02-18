@@ -1,6 +1,7 @@
 """AI Office — Tool Executor. Parses tool calls from agent messages and runs them."""
 
 import json
+import os
 import re
 import logging
 from typing import Optional
@@ -11,7 +12,13 @@ from .tool_gateway import (
     tool_write_file,
     wait_for_approval_response,
 )
-from .database import insert_message, update_task_from_tag, get_agent, create_task_record
+from .database import (
+    create_task_record,
+    expire_approval_request,
+    get_agent,
+    insert_message,
+    update_task_from_tag,
+)
 from .websocket import manager
 from . import web_search
 from . import skills_loader
@@ -19,6 +26,15 @@ from . import project_manager
 from .observability import emit_console_event
 
 logger = logging.getLogger("ai-office.toolexec")
+
+
+def _approval_wait_seconds() -> int:
+    raw = (os.environ.get("AI_OFFICE_APPROVAL_TTL_SECONDS") or "").strip()
+    try:
+        value = int(raw) if raw else 600
+    except Exception:
+        value = 600
+    return max(1, min(value, 24 * 60 * 60))
 
 # Pattern: agents wrap tool calls in [TOOL:x] blocks.
 # Be liberal in what we accept:
@@ -289,7 +305,8 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                     result = await tool_run_command(agent_id, call["arg"], channel=channel, approved=False)
                 if result.get("status") == "needs_approval":
                     request = result.get("request") or {}
-                    approved = await wait_for_approval_response(request.get("id", ""), timeout_seconds=180)
+                    request_id = request.get("id", "")
+                    approved = await wait_for_approval_response(request_id, timeout_seconds=_approval_wait_seconds())
                     if approved is True:
                         if run_payload:
                             result = await tool_run_command(
@@ -341,6 +358,18 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                             "result": {"ok": False, "error": "Approval timed out", "request": request},
                             "msg": msg,
                         })
+                        if request_id:
+                            await expire_approval_request(request_id, decided_by="system")
+                            await manager.broadcast(channel, {"type": "approval_expired", "request_id": request_id})
+                            await emit_console_event(
+                                channel=channel,
+                                event_type="approval_expired",
+                                source="tool_executor",
+                                message=f"approval expired: {request_id}",
+                                project_name=project_name,
+                                severity="warning",
+                                data={"request_id": request_id, "tool_type": "run", "agent_id": agent_id},
+                            )
                         continue
 
                 if result["ok"]:
@@ -482,7 +511,8 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                 )
                 if preview.get("status") == "needs_approval":
                     request = preview.get("request") or {}
-                    approved = await wait_for_approval_response(request.get("id", ""), timeout_seconds=180)
+                    request_id = request.get("id", "")
+                    approved = await wait_for_approval_response(request_id, timeout_seconds=_approval_wait_seconds())
                     if approved is True:
                         result = await tool_write_file(
                             agent_id,
@@ -528,6 +558,18 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                             "result": {"ok": False, "error": "Approval timed out", "request": request},
                             "msg": msg,
                         })
+                        if request_id:
+                            await expire_approval_request(request_id, decided_by="system")
+                            await manager.broadcast(channel, {"type": "approval_expired", "request_id": request_id})
+                            await emit_console_event(
+                                channel=channel,
+                                event_type="approval_expired",
+                                source="tool_executor",
+                                message=f"approval expired: {request_id}",
+                                project_name=project_name,
+                                severity="warning",
+                                data={"request_id": request_id, "tool_type": "write", "agent_id": agent_id},
+                            )
                         continue
                 else:
                     # Trusted mode may write immediately on first call.
