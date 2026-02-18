@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -314,3 +315,115 @@ def cleanup_memories(agent_id: Optional[str] = None, project_name: Optional[str]
             deduped.append(entry)
         _json_save(path, deduped)
     return removed
+
+
+def get_memory_stats(project_name: Optional[str] = None) -> dict:
+    """Return counts/sizes for the project's memory banks (facts/decisions/daily/agent logs/index)."""
+    project = _project_name(project_name)
+    _ensure_dirs(project)
+
+    facts = _json_load(_facts_file(project), [])
+    decisions = _json_load(_decisions_file(project), [])
+
+    daily_dir = _daily_dir(project)
+    daily_files = list(daily_dir.glob("*.md")) if daily_dir.exists() else []
+
+    agents_dir = _agents_dir(project)
+    agent_files = list(agents_dir.glob("*.jsonl")) if agents_dir.exists() else []
+    agent_entries = 0
+    for path in agent_files:
+        agent_entries += len(_json_load(path, []))
+
+    index_rows = 0
+    index_db_bytes = 0
+    if INDEX_DB.exists():
+        index_db_bytes = int(INDEX_DB.stat().st_size)
+    try:
+        _ensure_index()
+        conn = sqlite3.connect(str(INDEX_DB))
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM memory_entries WHERE project_name = ?",
+                (project,),
+            ).fetchone()
+            index_rows = int(row[0] if row else 0)
+        finally:
+            conn.close()
+    except Exception:
+        index_rows = 0
+
+    return {
+        "project": project,
+        "facts_count": len(facts),
+        "decisions_count": len(decisions),
+        "daily_files": len(daily_files),
+        "agent_files": len(agent_files),
+        "agent_entries": agent_entries,
+        "index_rows": index_rows,
+        "index_db_bytes": index_db_bytes,
+    }
+
+
+def erase_memory(project_name: Optional[str], scopes: list[str]) -> dict:
+    """Erase selected project-scoped memory banks and return stats after."""
+    project = _project_name(project_name)
+    requested = [str(scope or "").strip().lower() for scope in (scopes or [])]
+    requested_set = {scope for scope in requested if scope}
+    valid = {"facts", "decisions", "daily", "agent_logs", "index"}
+    targets = sorted(requested_set.intersection(valid))
+
+    _ensure_dirs(project)
+    removed = {"facts": 0, "decisions": 0, "daily": 0, "agent_logs": 0, "index": 0}
+
+    if "facts" in targets:
+        path = _facts_file(project)
+        if path.exists():
+            path.unlink(missing_ok=True)
+            removed["facts"] = 1
+
+    if "decisions" in targets:
+        path = _decisions_file(project)
+        if path.exists():
+            path.unlink(missing_ok=True)
+            removed["decisions"] = 1
+
+    if "daily" in targets:
+        path = _daily_dir(project)
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+        removed["daily"] = 1
+
+    if "agent_logs" in targets:
+        path = _agents_dir(project)
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+        removed["agent_logs"] = 1
+
+    if "index" in targets:
+        try:
+            _ensure_index()
+            conn = sqlite3.connect(str(INDEX_DB))
+            try:
+                conn.execute("DELETE FROM memory_entries WHERE project_name = ?", (project,))
+                try:
+                    conn.execute("DELETE FROM memory_fts WHERE project_name = ?", (project,))
+                except Exception:
+                    rows = conn.execute("SELECT rowid FROM memory_fts WHERE project_name = ?", (project,)).fetchall()
+                    if rows:
+                        conn.executemany("DELETE FROM memory_fts WHERE rowid = ?", [(r[0],) for r in rows])
+                conn.commit()
+                removed["index"] = 1
+            finally:
+                conn.close()
+        except Exception:
+            logger.exception("Failed to erase memory index rows for %s", project)
+
+    # Recreate required dirs/index for future writes.
+    _ensure_dirs(project)
+    return {
+        "ok": True,
+        "project": project,
+        "scopes_erased": targets,
+        "removed": removed,
+        "stats": get_memory_stats(project),
+    }

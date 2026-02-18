@@ -1837,3 +1837,37 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P1-A Erase Memory Banks (Stats + Scoped Wipe)
+
+### Backend changes
+- `server/memory.py`
+  - Added `get_memory_stats(project)` and `erase_memory(project, scopes)` with project-scoped index cleanup.
+- `server/database.py`
+  - Added helpers for scoped cleanup:
+    - `clear_tasks_for_scope(channel, project_name)`
+    - `clear_approval_requests_for_scope(channel, project_name)`
+- `server/routes_api.py`
+  - Added:
+    - `GET /api/memory/stats?project=...`
+    - `POST /api/memory/erase` (supports optional clears for tasks/approvals/messages)
+  - Placed routes above `/api/memory/{agent_id}` to avoid route shadowing.
+- `server/models.py`
+  - Added `MemoryEraseIn` request model.
+
+### Frontend changes
+- `client/src/components/Controls.jsx`
+  - Added "Erase Memory Banks" UI: memory stats + scoped wipe + optional clear toggles.
+
+### Tests
+- Added `tests/test_memory_stats_and_erase.py`.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS

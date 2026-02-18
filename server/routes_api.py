@@ -24,6 +24,7 @@ from .models import (
     ProcessStopIn,
     ProjectActiveOut,
     DebugBundleIn,
+    MemoryEraseIn,
     ExecuteCodeIn,
     OllamaPullIn,
     PermissionPolicyIn,
@@ -734,6 +735,63 @@ async def startup_health():
 async def get_shared_memory(limit: int = 50, type_filter: Optional[str] = None):
     from .memory import read_memory
     return read_memory(None, limit=limit, type_filter=type_filter)
+
+
+@router.get("/memory/stats")
+async def memory_stats(project: str = Query(default="ai-office")):
+    from .memory import get_memory_stats
+    return get_memory_stats(project)
+
+
+@router.post("/memory/erase")
+async def memory_erase(body: MemoryEraseIn):
+    from .memory import erase_memory
+
+    project = (body.project or "").strip() or "ai-office"
+    channel = (body.channel or "main").strip() or "main"
+    scopes = list(body.scopes or [])
+
+    result = erase_memory(project, scopes)
+    cleared = {"messages_deleted": 0, "tasks_deleted": 0, "approvals_deleted": 0}
+    system_message = None
+
+    if body.also_clear_tasks:
+        cleared["tasks_deleted"] = await db.clear_tasks_for_scope(channel=channel, project_name=project)
+
+    if body.also_clear_approvals:
+        cleared["approvals_deleted"] = await db.clear_approval_requests_for_scope(channel=channel, project_name=project)
+
+    if body.also_clear_channel_messages:
+        cleared["messages_deleted"] = await db.clear_channel_messages(channel)
+        system_message = await db.insert_message(
+            channel=channel,
+            sender="system",
+            content="Chat history cleared.",
+            msg_type="system",
+        )
+        from .websocket import manager
+        await manager.broadcast(channel, {"type": "chat", "message": system_message})
+
+    try:
+        await db.log_console_event(
+            channel=channel,
+            event_type="memory_erase",
+            source="controls",
+            project_name=project,
+            message=f"Memory erased: {', '.join(result.get('scopes_erased') or [])}",
+            data={"scopes": result.get("scopes_erased") or [], "cleared": cleared},
+        )
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "project": project,
+        "scopes_erased": result.get("scopes_erased") or [],
+        "memory_stats": result.get("stats") or {},
+        "cleared": cleared,
+        "system_message": system_message,
+    }
 
 
 @router.get("/memory/{agent_id}")

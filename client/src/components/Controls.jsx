@@ -24,12 +24,42 @@ export default function Controls() {
   const [modelStatus, setModelStatus] = useState('');
   const [budget, setBudget] = useState(0);
   const [usage, setUsage] = useState(null);
+  const [memoryProject, setMemoryProject] = useState('ai-office');
+  const [memoryChannel, setMemoryChannel] = useState('main');
+  const [memoryStats, setMemoryStats] = useState(null);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memoryErasing, setMemoryErasing] = useState(false);
+  const [memoryStatus, setMemoryStatus] = useState('');
+  const [memoryConfirm, setMemoryConfirm] = useState('');
+  const [memoryScopes, setMemoryScopes] = useState({
+    facts: true,
+    decisions: true,
+    daily: false,
+    agent_logs: false,
+    index: true,
+  });
+  const [memoryAlso, setMemoryAlso] = useState({
+    clear_messages: false,
+    clear_tasks: false,
+    clear_approvals: false,
+  });
 
   useEffect(() => {
     fetch('/api/pulse/status').then(r => r.json()).then(setPulse).catch(() => {});
     fetch('/api/release-gate/history').then(r => r.json()).then(setGateHistory).catch(() => {});
     fetch('/api/usage/budget').then(r => r.json()).then((d) => setBudget(Number(d?.budget_usd || 0))).catch(() => {});
     fetch('/api/usage/summary').then(r => r.json()).then(setUsage).catch(() => {});
+    fetch('/api/projects/active/main')
+      .then(r => r.json())
+      .then((active) => {
+        const proj = active?.project || 'ai-office';
+        setMemoryProject(proj);
+        fetch(`/api/memory/stats?project=${encodeURIComponent(proj)}`)
+          .then(r => r.json())
+          .then(setMemoryStats)
+          .catch(() => {});
+      })
+      .catch(() => {});
     refreshModelInfo();
   }, []);
 
@@ -126,6 +156,68 @@ export default function Controls() {
       .catch(() => {});
   };
 
+  const refreshMemoryStats = async (projectOverride = null) => {
+    const proj = (projectOverride || memoryProject || 'ai-office').trim() || 'ai-office';
+    setMemoryLoading(true);
+    setMemoryStatus('');
+    try {
+      const res = await fetch(`/api/memory/stats?project=${encodeURIComponent(proj)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || 'Failed to load memory stats');
+      }
+      setMemoryStats(data);
+      setMemoryProject(data?.project || proj);
+    } catch (err) {
+      setMemoryStatus(err?.message || 'Failed to load memory stats');
+    } finally {
+      setMemoryLoading(false);
+    }
+  };
+
+  const eraseMemoryBanks = async () => {
+    const proj = (memoryProject || 'ai-office').trim() || 'ai-office';
+    const channel = (memoryChannel || 'main').trim() || 'main';
+    const selectedScopes = Object.entries(memoryScopes).filter(([, v]) => v).map(([k]) => k);
+    if (selectedScopes.length === 0 && !memoryAlso.clear_messages && !memoryAlso.clear_tasks && !memoryAlso.clear_approvals) {
+      setMemoryStatus('Select at least one scope/toggle to erase.');
+      return;
+    }
+    if (memoryConfirm.trim().toUpperCase() !== 'ERASE') {
+      setMemoryStatus('Type ERASE to confirm.');
+      return;
+    }
+
+    setMemoryErasing(true);
+    setMemoryStatus('');
+    try {
+      const res = await fetch('/api/memory/erase', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project: proj,
+          channel,
+          scopes: selectedScopes,
+          also_clear_channel_messages: !!memoryAlso.clear_messages,
+          also_clear_tasks: !!memoryAlso.clear_tasks,
+          also_clear_approvals: !!memoryAlso.clear_approvals,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.detail || 'Memory erase failed');
+      }
+      setMemoryStats(data?.memory_stats || null);
+      setMemoryConfirm('');
+      setMemoryStatus(`Erased: ${(data?.scopes_erased || []).join(', ') || '(none)'} | Cleared tasks: ${data?.cleared?.tasks_deleted || 0} | Cleared approvals: ${data?.cleared?.approvals_deleted || 0}`);
+      await refreshMemoryStats(proj);
+    } catch (err) {
+      setMemoryStatus(err?.message || 'Memory erase failed');
+    } finally {
+      setMemoryErasing(false);
+    }
+  };
+
   return (
     <div className="panel controls-panel">
       <div className="panel-header"><h3>Controls</h3></div>
@@ -149,6 +241,94 @@ export default function Controls() {
               Used: ${Number(usage.total_estimated_cost || 0).toFixed(3)} | Tokens: {usage.total_tokens || 0} | Remaining: ${Number(usage.remaining_usd || 0).toFixed(3)}
             </div>
           )}
+        </div>
+
+        <div className="control-section">
+          <h4>Erase Memory Banks</h4>
+          <p className="control-desc">
+            Clear poisoned project memory safely (facts/decisions/daily/agent logs/index). Optional: clear tasks/approvals/messages for a channel.
+          </p>
+          <div className="project-create-row">
+            <label className="builder-field" style={{ margin: 0 }}>
+              <span>Project</span>
+              <input
+                type="text"
+                value={memoryProject}
+                onChange={(e) => setMemoryProject(e.target.value)}
+                placeholder="ai-office"
+                style={{ maxWidth: 240 }}
+              />
+            </label>
+            <label className="builder-field" style={{ margin: 0 }}>
+              <span>Channel</span>
+              <input
+                type="text"
+                value={memoryChannel}
+                onChange={(e) => setMemoryChannel(e.target.value)}
+                placeholder="main"
+                style={{ maxWidth: 160 }}
+              />
+            </label>
+            <button className="control-btn pulse-btn" onClick={() => refreshMemoryStats()} disabled={memoryLoading}>
+              {memoryLoading ? 'Loading...' : 'Refresh Stats'}
+            </button>
+          </div>
+          {memoryStats && (
+            <div className="builder-status">
+              Facts: {memoryStats.facts_count} | Decisions: {memoryStats.decisions_count} | Daily files: {memoryStats.daily_files} | Agent entries: {memoryStats.agent_entries} | Index rows: {memoryStats.index_rows}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 10 }}>
+            {Object.keys(memoryScopes).map((key) => (
+              <label key={key} className="builder-checkbox" style={{ margin: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={!!memoryScopes[key]}
+                  onChange={(e) => setMemoryScopes({ ...memoryScopes, [key]: e.target.checked })}
+                />
+                <span>{key}</span>
+              </label>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
+            <label className="builder-checkbox" style={{ margin: 0 }}>
+              <input
+                type="checkbox"
+                checked={!!memoryAlso.clear_tasks}
+                onChange={(e) => setMemoryAlso({ ...memoryAlso, clear_tasks: e.target.checked })}
+              />
+              <span>Also clear tasks</span>
+            </label>
+            <label className="builder-checkbox" style={{ margin: 0 }}>
+              <input
+                type="checkbox"
+                checked={!!memoryAlso.clear_approvals}
+                onChange={(e) => setMemoryAlso({ ...memoryAlso, clear_approvals: e.target.checked })}
+              />
+              <span>Also clear approvals</span>
+            </label>
+            <label className="builder-checkbox" style={{ margin: 0 }}>
+              <input
+                type="checkbox"
+                checked={!!memoryAlso.clear_messages}
+                onChange={(e) => setMemoryAlso({ ...memoryAlso, clear_messages: e.target.checked })}
+              />
+              <span>Also clear channel messages</span>
+            </label>
+          </div>
+          <div className="project-create-row" style={{ marginTop: 8 }}>
+            <input
+              type="text"
+              value={memoryConfirm}
+              onChange={(e) => setMemoryConfirm(e.target.value)}
+              placeholder="Type ERASE to confirm"
+              style={{ maxWidth: 240 }}
+            />
+            <button className="control-btn gate-btn" onClick={eraseMemoryBanks} disabled={memoryErasing}>
+              {memoryErasing ? 'Erasing...' : 'Erase Selected'}
+            </button>
+          </div>
+          {memoryStatus && <div className="builder-status">{memoryStatus}</div>}
         </div>
 
         <div className="control-section">

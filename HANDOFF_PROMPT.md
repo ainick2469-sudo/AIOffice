@@ -335,3 +335,14 @@ All agents have deep, distinct personalities with anti-sycophancy rules. They di
 - Agent prompt guidance:
   - Updated `builder` and `codex` prompts with an "IMPORTANT TOOL RULES" block reinforcing `start_process` + structured argv usage.
 - Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.
+
+## SESSION 44 UPDATE (2026-02-18)
+
+- Erase Memory Banks (project-scoped, selectable wipe):
+  - New APIs:
+    - `GET /api/memory/stats?project=...`
+    - `POST /api/memory/erase` (scopes: facts/decisions/daily/agent_logs/index + optional clears for tasks/approvals/messages)
+  - Controls tab now includes Memory Banks stats + scoped wipe UI (type `ERASE` to confirm).
+  - Route ordering fixed so `/api/memory/stats` is not shadowed by `/api/memory/{agent_id}`.
+- Tests: added `tests/test_memory_stats_and_erase.py`.
+- Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.

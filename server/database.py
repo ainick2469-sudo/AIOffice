@@ -605,6 +605,44 @@ async def clear_channel_messages(channel: str) -> int:
         await db.close()
 
 
+async def clear_tasks_for_scope(*, channel: str, project_name: Optional[str] = None) -> int:
+    """Delete tasks for a channel, optionally limited to a project."""
+    channel_id = (channel or "main").strip() or "main"
+    project = (project_name or "").strip() or None
+    db = await get_db()
+    try:
+        if project:
+            cursor = await db.execute(
+                "DELETE FROM tasks WHERE channel = ? AND project_name = ?",
+                (channel_id, project),
+            )
+        else:
+            cursor = await db.execute("DELETE FROM tasks WHERE channel = ?", (channel_id,))
+        await db.commit()
+        return int(cursor.rowcount or 0)
+    finally:
+        await db.close()
+
+
+async def clear_approval_requests_for_scope(*, channel: str, project_name: Optional[str] = None) -> int:
+    """Delete approval requests for a channel, optionally limited to a project."""
+    channel_id = (channel or "main").strip() or "main"
+    project = (project_name or "").strip() or None
+    db = await get_db()
+    try:
+        if project:
+            cursor = await db.execute(
+                "DELETE FROM approval_requests WHERE channel = ? AND (project_name = ? OR project_name IS NULL)",
+                (channel_id, project),
+            )
+        else:
+            cursor = await db.execute("DELETE FROM approval_requests WHERE channel = ?", (channel_id,))
+        await db.commit()
+        return int(cursor.rowcount or 0)
+    finally:
+        await db.close()
+
+
 async def create_task_record(
     task: dict,
     channel: Optional[str] = None,

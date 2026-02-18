@@ -342,6 +342,15 @@ class DebugBundleOut(BaseModel):
     bytes: int
 
 
+class MemoryEraseIn(BaseModel):
+    project: str = Field(..., min_length=1, max_length=120)
+    scopes: list[str] = Field(default_factory=list)
+    channel: Optional[str] = None
+    also_clear_channel_messages: bool = False
+    also_clear_tasks: bool = False
+    also_clear_approvals: bool = False
+
+
 class ChannelResetIn(BaseModel):
     clear_messages: bool = True
     clear_channel_memory: bool = False
