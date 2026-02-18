@@ -51,6 +51,23 @@ class AgentUpdateIn(BaseModel):
     system_prompt: Optional[str] = None
 
 
+class AgentCredentialIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    backend: Literal["openai", "claude"]
+    api_key: str = Field(..., min_length=1, max_length=500)
+    base_url: Optional[str] = Field(default=None, max_length=500)
+
+
+class AgentCredentialMetaOut(BaseModel):
+    agent_id: str
+    backend: Literal["openai", "claude"]
+    has_key: bool = False
+    last4: Optional[str] = None
+    base_url: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class TaskIn(BaseModel):
     title: str
     description: Optional[str] = None

@@ -18,6 +18,7 @@ venv/
 
 # Data (local state)
 data/
+apps/
 
 # Environment
 .env

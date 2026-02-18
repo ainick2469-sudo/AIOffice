@@ -1950,3 +1950,47 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
     - approvals + pending queue + TTL
     - spec-first hard gate + approval flow
     - memory banks erase controls
+
+## 2026-02-18 - P0.1 Per-Agent Credentials Vault (DB + API)
+
+### Backend changes
+- `server/secrets_vault.py`
+  - Added local secret encryption helpers.
+  - Windows: DPAPI (CryptProtectData/CryptUnprotectData).
+  - Fallback: base64 plaintext with a warning (keeps app functional on non-Windows or if DPAPI fails).
+- `server/database.py`
+  - Added `agent_credentials` table for per-agent OpenAI/Claude credentials.
+  - Added helpers:
+    - `upsert_agent_credential`, `get_agent_credential_meta`, `get_agent_api_key` (internal),
+      `clear_agent_credential`, `has_any_backend_key`.
+- `server/models.py`
+  - Added `AgentCredentialIn`, `AgentCredentialMetaOut`.
+- `server/routes_api.py`
+  - Added credential endpoints:
+    - `GET /api/agents/{agent_id}/credentials`
+    - `POST /api/agents/{agent_id}/credentials`
+    - `DELETE /api/agents/{agent_id}/credentials`
+  - Added backend status endpoints that treat stored credentials as available:
+    - `GET /api/openai/status`
+    - `GET /api/claude/status`
+  - Updated startup health backend availability to include stored credentials.
+
+### Test/dev hygiene
+- `.gitignore`
+  - Ignore `apps/` (local artifacts like `apps/runtime-smoke-app` should not be committed).
+- `tools/toolchain_smoke.py`
+  - Stabilized by forcing `channel=main` active project to `ai-office` (prevents cross-test project switching from breaking the smoke run).
+
+### Tests
+- `tests/test_agent_credentials.py`
+  - Covers credential set/get/delete, last4 masking, and backend status reflecting vault keys.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS

@@ -143,6 +143,15 @@ CREATE TABLE IF NOT EXISTS agents (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS agent_credentials (
+    agent_id TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    api_key_enc TEXT NOT NULL,
+    base_url TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (agent_id, backend)
+);
+
 CREATE TABLE IF NOT EXISTS channel_projects (
     channel TEXT PRIMARY KEY,
     project_name TEXT NOT NULL,
@@ -890,6 +899,155 @@ async def update_agent(agent_id: str, updates: dict) -> Optional[dict]:
         row = await db.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
         result = await row.fetchone()
         return dict(result) if result else None
+    finally:
+        await db.close()
+
+
+def _normalize_credential_backend(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
+
+
+async def upsert_agent_credential(
+    agent_id: str,
+    backend: str,
+    api_key: str,
+    base_url: Optional[str] = None,
+) -> dict:
+    backend = _normalize_credential_backend(backend)
+    if backend not in {"openai", "claude"}:
+        raise ValueError("backend must be one of: openai, claude")
+    api_key = (api_key or "").strip()
+    if not api_key:
+        raise ValueError("api_key is required")
+
+    from .secrets_vault import encrypt_secret
+
+    enc = encrypt_secret(api_key)
+    base_url = (base_url or "").strip() or None
+
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO agent_credentials (agent_id, backend, api_key_enc, base_url, updated_at)
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(agent_id, backend)
+               DO UPDATE SET api_key_enc=excluded.api_key_enc,
+                             base_url=excluded.base_url,
+                             updated_at=CURRENT_TIMESTAMP""",
+            (agent_id, backend, enc, base_url),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    return await get_agent_credential_meta(agent_id, backend)
+
+
+async def get_agent_credential_meta(agent_id: str, backend: str) -> dict:
+    backend = _normalize_credential_backend(backend)
+    if backend not in {"openai", "claude"}:
+        raise ValueError("backend must be one of: openai, claude")
+
+    db = await get_db()
+    try:
+        row = await db.execute(
+            "SELECT api_key_enc, base_url, updated_at FROM agent_credentials WHERE agent_id = ? AND backend = ?",
+            (agent_id, backend),
+        )
+        result = await row.fetchone()
+    finally:
+        await db.close()
+
+    if not result:
+        return {
+            "agent_id": agent_id,
+            "backend": backend,
+            "has_key": False,
+            "last4": None,
+            "base_url": None,
+            "updated_at": None,
+        }
+
+    enc = (result["api_key_enc"] or "").strip()
+    last4 = None
+    if enc:
+        try:
+            from .secrets_vault import decrypt_secret
+
+            raw = decrypt_secret(enc)
+            raw = (raw or "").strip()
+            if raw:
+                last4 = raw[-4:] if len(raw) >= 4 else raw
+        except Exception:
+            last4 = None
+
+    return {
+        "agent_id": agent_id,
+        "backend": backend,
+        "has_key": bool(enc),
+        "last4": last4,
+        "base_url": (result["base_url"] or "").strip() or None,
+        "updated_at": result["updated_at"],
+    }
+
+
+async def get_agent_api_key(agent_id: str, backend: str) -> str:
+    """Internal use only: returns decrypted key or empty string."""
+    backend = _normalize_credential_backend(backend)
+    if backend not in {"openai", "claude"}:
+        return ""
+
+    db = await get_db()
+    try:
+        row = await db.execute(
+            "SELECT api_key_enc FROM agent_credentials WHERE agent_id = ? AND backend = ?",
+            (agent_id, backend),
+        )
+        result = await row.fetchone()
+    finally:
+        await db.close()
+
+    enc = (result["api_key_enc"] or "").strip() if result else ""
+    if not enc:
+        return ""
+
+    try:
+        from .secrets_vault import decrypt_secret
+
+        return (decrypt_secret(enc) or "").strip()
+    except Exception:
+        return ""
+
+
+async def clear_agent_credential(agent_id: str, backend: str) -> bool:
+    backend = _normalize_credential_backend(backend)
+    if backend not in {"openai", "claude"}:
+        raise ValueError("backend must be one of: openai, claude")
+
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "DELETE FROM agent_credentials WHERE agent_id = ? AND backend = ?",
+            (agent_id, backend),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def has_any_backend_key(backend: str) -> bool:
+    backend = _normalize_credential_backend(backend)
+    if backend not in {"openai", "claude"}:
+        return False
+
+    db = await get_db()
+    try:
+        row = await db.execute(
+            "SELECT 1 AS ok FROM agent_credentials WHERE backend = ? LIMIT 1",
+            (backend,),
+        )
+        return bool(await row.fetchone())
     finally:
         await db.close()
 

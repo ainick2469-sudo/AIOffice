@@ -13,6 +13,8 @@ from .models import (
     ApprovalResponseIn,
     AutonomyModeIn,
     AgentOut,
+    AgentCredentialIn,
+    AgentCredentialMetaOut,
     AgentUpdateIn,
     AppBuilderStartIn,
     BranchSwitchIn,
@@ -134,6 +136,36 @@ async def update_agent(agent_id: str, body: AgentUpdateIn):
     if not updated:
         raise HTTPException(404, "Agent not found")
     return updated
+
+
+@router.get("/agents/{agent_id}/credentials", response_model=AgentCredentialMetaOut)
+async def get_agent_credentials(agent_id: str, backend: str = Query(..., min_length=1, max_length=20)):
+    try:
+        return await db.get_agent_credential_meta(agent_id, backend)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.post("/agents/{agent_id}/credentials", response_model=AgentCredentialMetaOut)
+async def set_agent_credentials(agent_id: str, body: AgentCredentialIn):
+    try:
+        return await db.upsert_agent_credential(
+            agent_id=agent_id,
+            backend=body.backend,
+            api_key=body.api_key,
+            base_url=body.base_url,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.delete("/agents/{agent_id}/credentials")
+async def delete_agent_credentials(agent_id: str, backend: str = Query(..., min_length=1, max_length=20)):
+    try:
+        ok = await db.clear_agent_credential(agent_id, backend)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "deleted": ok}
 
 
 @router.get("/messages/{channel}")
@@ -776,10 +808,12 @@ async def startup_health():
 
     projects_root_ok = WORKSPACE_ROOT.exists() and WORKSPACE_ROOT.is_dir()
     frontend_dist_ok = (PROJECT_ROOT / "client-dist" / "index.html").exists()
+    openai_vault = await db.has_any_backend_key("openai")
+    claude_vault = await db.has_any_backend_key("claude")
     backends = {
         "ollama": bool(await ollama_client.is_available()),
-        "claude": bool(claude_adapter.is_available()),
-        "openai": bool(openai_adapter.is_available()),
+        "claude": bool(claude_adapter.is_available()) or claude_vault,
+        "openai": bool(openai_adapter.is_available()) or openai_vault,
     }
 
     warnings = []
@@ -804,6 +838,34 @@ async def startup_health():
         "overall_healthy": overall_healthy,
         "checks": checks,
         "warnings": warnings,
+    }
+
+
+@router.get("/openai/status")
+async def openai_status():
+    from . import openai_adapter
+
+    env_available = bool(openai_adapter.is_available())
+    vault_available = await db.has_any_backend_key("openai")
+    return {
+        "backend": "openai",
+        "available": env_available or vault_available,
+        "env": env_available,
+        "vault": vault_available,
+    }
+
+
+@router.get("/claude/status")
+async def claude_status():
+    from . import claude_adapter
+
+    env_available = bool(claude_adapter.is_available())
+    vault_available = await db.has_any_backend_key("claude")
+    return {
+        "backend": "claude",
+        "available": env_available or vault_available,
+        "env": env_available,
+        "vault": vault_available,
     }
 
 

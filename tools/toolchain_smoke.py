@@ -25,6 +25,8 @@ async def _latest_task_title() -> str:
 async def main() -> int:
     await db.init_db()
     failures: list[str] = []
+    # Ensure tools execute against the app repo root; other tests may switch the channel project.
+    await db.set_channel_active_project("main", "ai-office")
     await db.set_project_autonomy_mode("ai-office", "TRUSTED")
     await db.set_permission_policy(
         "main",
