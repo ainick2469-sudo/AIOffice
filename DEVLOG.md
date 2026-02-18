@@ -1914,3 +1914,30 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 - P2 Execution Status Panel (Chat Dock)
+
+### Frontend changes
+- `client/src/components/StatusPanel.jsx`
+  - New right-side status dock for the Chat tab that continuously surfaces:
+    - active project + branch
+    - spec state
+    - pending approvals
+    - running processes (with stop/open controls)
+    - recent tool calls (audit)
+    - recent console events
+- `client/src/components/ChatRoom.jsx`
+  - Added a `Show/Hide Status` toggle and embeds `StatusPanel` alongside the message list.
+  - Persists dock visibility in `localStorage` (`ai-office-status-panel-open`).
+- `client/src/App.css`
+  - Added status dock styling and responsive behavior.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS

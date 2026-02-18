@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { fetchMessages, fetchAgents } from '../api';
 import useWebSocket from '../hooks/useWebSocket';
 import MessageContent from './MessageContent';
+import StatusPanel from './StatusPanel';
 
 const HISTORY_LIMIT = 200;
 const MAX_ATTACHMENTS = 8;
@@ -56,8 +57,25 @@ export default function ChatRoom({ channel }) {
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [processActionBusy, setProcessActionBusy] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState(null);
+  const [statusPanelOpen, setStatusPanelOpen] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ai-office-status-panel-open');
+      if (saved === null) return true;
+      return saved !== 'false';
+    } catch {
+      return true;
+    }
+  });
   const bottomRef = useRef(null);
   const statusInterval = useRef(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('ai-office-status-panel-open', statusPanelOpen ? 'true' : 'false');
+    } catch {
+      // ignore storage failures (private mode, blocked storage, etc.)
+    }
+  }, [statusPanelOpen]);
   const fileInputRef = useRef(null);
   const dragDepthRef = useRef(0);
   const loadedReactionIdsRef = useRef(new Set());
@@ -819,6 +837,9 @@ export default function ChatRoom({ channel }) {
           <button className="stop-btn" onClick={refreshProcesses}>
             Refresh Proc
           </button>
+          <button className="stop-btn" onClick={() => setStatusPanelOpen(prev => !prev)}>
+            {statusPanelOpen ? 'Hide Status' : 'Show Status'}
+          </button>
           <button className="stop-btn" onClick={runKillSwitch}>
             Kill Switch
           </button>
@@ -995,6 +1016,10 @@ export default function ChatRoom({ channel }) {
           )}
           <div ref={bottomRef} />
         </div>
+
+        {statusPanelOpen && (
+          <StatusPanel channel={channel} onClose={() => setStatusPanelOpen(false)} />
+        )}
 
         {threadRootId && (
           <aside className="thread-panel">

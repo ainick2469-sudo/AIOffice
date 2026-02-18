@@ -361,3 +361,16 @@ All agents have deep, distinct personalities with anti-sycophancy rules. They di
   - UI: new Spec tab + chat header Spec chip + Approve button.
 - Tests: added `tests/test_spec_bank_and_gate.py`.
 - Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.
+
+## SESSION 46 UPDATE (2026-02-18)
+
+- Execution Status dock (Chat tab):
+  - New right-side status panel that surfaces, in one place:
+    - active project + branch
+    - spec state
+    - pending approvals
+    - running processes (stop/open controls)
+    - recent tool calls (audit)
+    - recent console events
+  - Chat header now has a `Show/Hide Status` toggle (visibility persisted via `localStorage`).
+- Verification: backend `pytest`, all smoke scripts, and frontend lint/build pass.
