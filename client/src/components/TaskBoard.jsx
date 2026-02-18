@@ -120,6 +120,21 @@ export default function TaskBoard({ channel = 'main' }) {
       });
   }, [channel]);
 
+  useEffect(() => {
+    const onNewTask = (event) => {
+      const detail = event?.detail || {};
+      setShowForm(true);
+      setNewTask({
+        ...blankTask,
+        title: String(detail.title || '').trim(),
+        description: String(detail.description || '').trim(),
+        branch: activeBranch || 'main',
+      });
+    };
+    window.addEventListener('taskboard:new-task', onNewTask);
+    return () => window.removeEventListener('taskboard:new-task', onNewTask);
+  }, [activeBranch]);
+
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
       const search = filters.search.trim().toLowerCase();

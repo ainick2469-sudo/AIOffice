@@ -1,0 +1,7 @@
+[
+  { "id": "reporting-dashboard", "label": "Reporting Dashboard", "template": "react", "prompt": "Build a reporting dashboard with KPIs, charts, filters, and CSV export." },
+  { "id": "gaming-platform", "label": "Gaming Platform", "template": "react", "prompt": "Build a gaming platform with user profiles, leaderboards, and session stats." },
+  { "id": "onboarding-portal", "label": "Onboarding Portal", "template": "react", "prompt": "Build an onboarding portal with account setup, checklist tracking, and guided steps." },
+  { "id": "ops-console", "label": "Ops Console", "template": "python", "prompt": "Build an operations console with service status, incident timeline, and runbook actions." },
+  { "id": "api-starter", "label": "API Starter", "template": "python", "prompt": "Build a FastAPI backend starter with auth-ready routes, tests, and local preview." }
+]

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 function normalizePort(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -7,6 +7,23 @@ function normalizePort(value) {
   const port = Math.trunc(n);
   if (port < 1 || port > 65535) return null;
   return port;
+}
+
+function formatDuration(seconds) {
+  const total = Math.max(0, Number(seconds) || 0);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = Math.floor(total % 60);
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function formatTime(epochSeconds) {
+  if (!epochSeconds) return '—';
+  const date = new Date(Number(epochSeconds) * 1000);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleTimeString();
 }
 
 export default function PreviewPanel({ channel = 'main' }) {
@@ -19,6 +36,8 @@ export default function PreviewPanel({ channel = 'main' }) {
   const [selectedProcessId, setSelectedProcessId] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [autoScroll, setAutoScroll] = useState(true);
+  const logsRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,8 +101,7 @@ export default function PreviewPanel({ channel = 'main' }) {
 
   const previewCandidates = useMemo(() => {
     return processes
-      .filter((proc) => proc?.status === 'running')
-      .filter((proc) => proc?.port || proc?.name === 'preview')
+      .filter((proc) => proc?.status === 'running' || proc?.name === 'preview')
       .filter((proc) => !proc.project || proc.project === activeProject)
       .sort((a, b) => Number(b?.started_at || 0) - Number(a?.started_at || 0));
   }, [processes, activeProject]);
@@ -104,6 +122,25 @@ export default function PreviewPanel({ channel = 'main' }) {
   }, [selectedProcess, draftPort, config]);
 
   const previewUrl = effectivePort ? `http://127.0.0.1:${effectivePort}` : '';
+  const logs = useMemo(
+    () => (Array.isArray(selectedProcess?.logs) ? selectedProcess.logs : []),
+    [selectedProcess]
+  );
+  const isRunning = selectedProcess?.status === 'running';
+  const statusLabel = isRunning ? 'Running' : selectedProcess?.status === 'exited' ? 'Error' : 'Stopped';
+  const statusClass = isRunning ? 'running' : selectedProcess?.status === 'exited' ? 'error' : 'stopped';
+
+  const uptime = useMemo(() => {
+    if (!selectedProcess?.started_at) return '—';
+    if (isRunning) return `since ${formatTime(selectedProcess.started_at)}`;
+    const end = Number(selectedProcess.ended_at || selectedProcess.started_at);
+    return formatDuration(end - Number(selectedProcess.started_at));
+  }, [selectedProcess, isRunning]);
+
+  useEffect(() => {
+    if (!autoScroll || !logsRef.current) return;
+    logsRef.current.scrollTop = logsRef.current.scrollHeight;
+  }, [logs, autoScroll]);
 
   const savePreviewConfig = async () => {
     setError('');
@@ -151,7 +188,6 @@ export default function PreviewPanel({ channel = 'main' }) {
       return;
     }
     setNotice('Preview started.');
-    // Let the polling loop pick up the new process quickly.
     if (data?.process?.id) {
       setSelectedProcessId(String(data.process.id));
     }
@@ -172,7 +208,6 @@ export default function PreviewPanel({ channel = 'main' }) {
       return;
     }
     setNotice('Preview stopped.');
-    // Let the polling loop pick up the stopped process quickly.
   };
 
   const restartPreview = async () => {
@@ -185,18 +220,30 @@ export default function PreviewPanel({ channel = 'main' }) {
     window.open(previewUrl, '_blank', 'noreferrer');
   };
 
+  const copyPortHint = async () => {
+    const cmd = String(draftCmd || '').trim() || 'npm run dev';
+    const hint = `${cmd} --host 127.0.0.1 --port 5173`;
+    try {
+      await navigator.clipboard.writeText(hint);
+      setNotice('Port hint copied.');
+    } catch {
+      setError('Clipboard unavailable. Copy manually: --host 127.0.0.1 --port 5173');
+    }
+  };
+
   return (
-    <div className="panel">
+    <div className="panel preview-panel">
       <div className="panel-header">
         <h3>Preview</h3>
         <div className="preview-meta">
           <span className="pill">Project: {activeProject}</span>
           <span className="pill">Branch: {activeBranch}</span>
+          <span className={`preview-status-badge ${statusClass}`}>{statusLabel}</span>
         </div>
       </div>
 
       <div className="panel-body preview-layout">
-        <div className="preview-controls">
+        <div className="preview-controls sticky">
           <div className="preview-controls-row">
             <button className="control-btn gate-btn" onClick={startPreview}>
               Start Preview
@@ -210,6 +257,13 @@ export default function PreviewPanel({ channel = 'main' }) {
             <button className="control-btn" onClick={openExternal} disabled={!previewUrl}>
               Open In Browser
             </button>
+          </div>
+
+          <div className="preview-health-row">
+            <span className="pill">PID: {selectedProcess?.pid || '—'}</span>
+            <span className="pill">Port: {selectedProcess?.port || effectivePort || '—'}</span>
+            <span className="pill">Uptime: {uptime}</span>
+            <span className="pill">Last update: {formatTime(selectedProcess?.ended_at || selectedProcess?.started_at)}</span>
           </div>
 
           <div className="preview-controls-row">
@@ -244,11 +298,9 @@ export default function PreviewPanel({ channel = 'main' }) {
                 ))}
               </select>
             </label>
-            {selectedProcess && (
-              <span className={`pill ${selectedProcess.status === 'running' ? 'pill-ok' : 'pill-warn'}`}>
-                {selectedProcess.status}
-              </span>
-            )}
+            <button className="control-btn" onClick={() => setAutoScroll((prev) => !prev)}>
+              {autoScroll ? 'Auto-scroll On' : 'Auto-scroll Off'}
+            </button>
           </div>
 
           {error && <div className="agent-config-error">{error}</div>}
@@ -260,9 +312,11 @@ export default function PreviewPanel({ channel = 'main' }) {
             <div className="preview-placeholder">
               <div>No preview URL yet.</div>
               <div className="preview-hint">
-                If the process is running but no port is detected, add an explicit port flag to your preview command:
-                <code> --port 5173</code> or <code> -p 5173</code>
+                If the process is running but no port is detected, add an explicit port flag to your preview command.
               </div>
+              <button className="control-btn" onClick={copyPortHint}>
+                Copy Port Hint
+              </button>
             </div>
           )}
 
@@ -276,8 +330,8 @@ export default function PreviewPanel({ channel = 'main' }) {
 
           <div className="preview-logs">
             <div className="preview-logs-header">Logs</div>
-            <pre className="preview-logs-body">
-              {(selectedProcess?.logs || []).slice(-200).join('\n') || '(no logs)'}
+            <pre ref={logsRef} className="preview-logs-body">
+              {logs.slice(-300).join('\n') || '(no logs)'}
             </pre>
           </div>
         </div>

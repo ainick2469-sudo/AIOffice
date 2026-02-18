@@ -32,6 +32,8 @@ from .database import (
     list_tasks,
     get_agent_api_key,
     get_agent_credential_meta,
+    get_provider_config,
+    get_provider_secret,
 )
 from .websocket import manager
 from .memory import get_known_context
@@ -310,6 +312,8 @@ async def _resolve_remote_credentials(
     project_name: str,
     agent_id: str,
     backend: str,
+    provider_key_ref: Optional[str] = None,
+    agent_base_url: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """Return (api_key, base_url, error_message)."""
     backend_norm = (backend or "").strip().lower()
@@ -318,9 +322,17 @@ async def _resolve_remote_credentials(
 
     api_key = await get_agent_api_key(agent_id, backend_norm)
     meta = await get_agent_credential_meta(agent_id, backend_norm)
-    base_url = None
-    if isinstance(meta, dict):
+    provider_cfg = await get_provider_config(backend_norm)
+
+    key_ref = (provider_key_ref or "").strip() or (provider_cfg.get("key_ref") or "").strip()
+    if not api_key and key_ref:
+        api_key = await get_provider_secret(key_ref)
+
+    base_url = (agent_base_url or "").strip() or None
+    if not base_url and isinstance(meta, dict):
         base_url = (meta.get("base_url") or "").strip() or None
+    if not base_url:
+        base_url = (provider_cfg.get("base_url") or "").strip() or None
 
     env_ok = openai_adapter.is_available() if backend_norm == "openai" else claude_adapter.is_available()
     if not api_key and not env_ok:
@@ -331,7 +343,7 @@ async def _resolve_remote_credentials(
             source="agent_engine",
             message=f"{backend_norm} backend missing key for {agent_id}",
             project_name=project_name,
-            data={"agent_id": agent_id, "backend": backend_norm},
+            data={"agent_id": agent_id, "backend": backend_norm, "key_ref": key_ref or None},
         )
         return None, base_url, (
             f"{backend_norm.upper()} backend is not configured for agent '{agent_id}'. "
@@ -383,6 +395,8 @@ async def _generate_auto_review(
                 project_name=active_project["project"],
                 agent_id=reviewer.get("id", "reviewer"),
                 backend=backend,
+                provider_key_ref=reviewer.get("provider_key_ref"),
+                agent_base_url=reviewer.get("base_url"),
             )
             if backend_err:
                 return "Severity: warning\n- " + backend_err
@@ -617,6 +631,8 @@ async def _generate_sprint_task_plan(director: dict, channel: str, goal: str) ->
                 project_name=active_project["project"],
                 agent_id=director.get("id", "director"),
                 backend=backend,
+                provider_key_ref=director.get("provider_key_ref"),
+                agent_base_url=director.get("base_url"),
             )
             if backend_err:
                 return backend_err
@@ -1215,6 +1231,8 @@ async def _generate_oracle_answer(agent: dict, channel: str, question: str, file
                 project_name=active_project["project"],
                 agent_id=agent.get("id", "researcher"),
                 backend=backend,
+                provider_key_ref=agent.get("provider_key_ref"),
+                agent_base_url=agent.get("base_url"),
             )
             if backend_err:
                 return backend_err
@@ -2221,6 +2239,8 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                 project_name=active_project["project"],
                 agent_id=agent.get("id", "agent"),
                 backend=backend,
+                provider_key_ref=agent.get("provider_key_ref"),
+                agent_base_url=agent.get("base_url"),
             )
             if backend_err:
                 return backend_err

@@ -28,6 +28,8 @@ ALLOWED_AGENT_UPDATE_FIELDS = {
     "role",
     "backend",
     "model",
+    "provider_key_ref",
+    "base_url",
     "permissions",
     "active",
     "color",
@@ -135,6 +137,8 @@ CREATE TABLE IF NOT EXISTS agents (
     skills TEXT,
     backend TEXT DEFAULT 'ollama',
     model TEXT NOT NULL,
+    provider_key_ref TEXT,
+    base_url TEXT,
     permissions TEXT DEFAULT 'read',
     active INTEGER DEFAULT 1,
     color TEXT DEFAULT '#6B7280',
@@ -150,6 +154,21 @@ CREATE TABLE IF NOT EXISTS agent_credentials (
     base_url TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (agent_id, backend)
+);
+
+CREATE TABLE IF NOT EXISTS provider_configs (
+    provider TEXT PRIMARY KEY,
+    key_ref TEXT,
+    base_url TEXT,
+    default_model TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS provider_secrets (
+    key_ref TEXT PRIMARY KEY,
+    api_key_enc TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS channel_projects (
@@ -203,6 +222,16 @@ CREATE TABLE IF NOT EXISTS build_results (
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS project_metadata (
+    project_name TEXT PRIMARY KEY,
+    display_name TEXT,
+    last_opened_at TEXT,
+    preview_focus_mode INTEGER NOT NULL DEFAULT 0,
+    layout_preset TEXT DEFAULT 'full-ide',
+    pane_layout_json TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -306,6 +335,8 @@ async def init_db():
         await db.executescript(SCHEMA)
         await _run_migrations(db)
         await _seed_agents(db)
+        await _seed_provider_configs(db)
+        await _migrate_codex_defaults(db)
         await _seed_channels(db)
         await db.commit()
     finally:
@@ -414,6 +445,40 @@ async def _run_migrations(db: aiosqlite.Connection):
                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
            )"""
     )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS project_metadata (
+               project_name TEXT PRIMARY KEY,
+               display_name TEXT,
+               last_opened_at TEXT,
+               preview_focus_mode INTEGER NOT NULL DEFAULT 0,
+               layout_preset TEXT DEFAULT 'full-ide',
+               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS provider_configs (
+               provider TEXT PRIMARY KEY,
+               key_ref TEXT,
+               base_url TEXT,
+               default_model TEXT,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS provider_secrets (
+               key_ref TEXT PRIMARY KEY,
+               api_key_enc TEXT NOT NULL,
+               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    await _ensure_column(db, "agents", "provider_key_ref", "TEXT")
+    await _ensure_column(db, "agents", "base_url", "TEXT")
+    await _ensure_column(db, "project_metadata", "display_name", "TEXT")
+    await _ensure_column(db, "project_metadata", "last_opened_at", "TEXT")
+    await _ensure_column(db, "project_metadata", "preview_focus_mode", "INTEGER NOT NULL DEFAULT 0")
+    await _ensure_column(db, "project_metadata", "layout_preset", "TEXT DEFAULT 'full-ide'")
+    await _ensure_column(db, "project_metadata", "pane_layout_json", "TEXT")
 
     await db.execute("UPDATE tasks SET branch = 'main' WHERE branch IS NULL OR TRIM(branch) = ''")
     await db.execute("UPDATE tasks SET channel = 'main' WHERE channel IS NULL OR TRIM(channel) = ''")
@@ -500,8 +565,8 @@ async def _seed_agents(db: aiosqlite.Connection):
             continue
         await db.execute(
             """INSERT INTO agents (id, display_name, role, skills, backend, model,
-               permissions, active, color, emoji, system_prompt)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               provider_key_ref, base_url, permissions, active, color, emoji, system_prompt)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 agent["id"],
                 agent["display_name"],
@@ -509,12 +574,64 @@ async def _seed_agents(db: aiosqlite.Connection):
                 json.dumps(agent.get("skills", [])),
                 agent.get("backend", "ollama"),
                 agent["model"],
+                (
+                    agent.get("provider_key_ref")
+                    or ("openai_default" if agent.get("id") == "codex" and agent.get("backend") == "openai" else None)
+                ),
+                (agent.get("base_url") or "").strip() or None,
                 agent.get("permissions", "read"),
                 1 if agent.get("active", True) else 0,
                 agent.get("color", "#6B7280"),
                 agent.get("emoji", "🤖"),
                 agent.get("system_prompt", ""),
             ),
+        )
+
+
+async def _migrate_codex_defaults(db: aiosqlite.Connection):
+    """One-time codex migration to OpenAI defaults for legacy installs."""
+    row = await db.execute(
+        "SELECT id, backend, model, provider_key_ref FROM agents WHERE id = ?",
+        ("codex",),
+    )
+    item = await row.fetchone()
+    if not item:
+        return
+
+    backend = (item["backend"] or "").strip().lower()
+    model = (item["model"] or "").strip()
+    key_ref = (item["provider_key_ref"] or "").strip()
+
+    # Repair known legacy signature only.
+    if backend == "ollama" and model == "qwen2.5:14b":
+        await db.execute(
+            """UPDATE agents
+               SET backend = ?, model = ?, provider_key_ref = COALESCE(NULLIF(provider_key_ref, ''), ?)
+               WHERE id = ?""",
+            ("openai", "gpt-4o-mini", "openai_default", "codex"),
+        )
+        return
+
+    # Keep OpenAI codex discoverable with a default key ref when unset.
+    if backend == "openai" and not key_ref:
+        await db.execute(
+            "UPDATE agents SET provider_key_ref = ? WHERE id = ?",
+            ("openai_default", "codex"),
+        )
+
+
+async def _seed_provider_configs(db: aiosqlite.Connection):
+    defaults = [
+        ("openai", "openai_default", None, "gpt-4o-mini"),
+        ("claude", "claude_default", None, "claude-sonnet-4-20250514"),
+        ("ollama", None, None, None),
+    ]
+    for provider, key_ref, base_url, default_model in defaults:
+        await db.execute(
+            """INSERT INTO provider_configs (provider, key_ref, base_url, default_model, created_at, updated_at)
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+               ON CONFLICT(provider) DO NOTHING""",
+            (provider, key_ref, base_url, default_model),
         )
 
 
@@ -907,6 +1024,13 @@ def _normalize_credential_backend(value: Optional[str]) -> str:
     return (value or "").strip().lower()
 
 
+def _normalize_provider_name(value: Optional[str]) -> str:
+    provider = (value or "").strip().lower()
+    if provider == "codex":
+        return "openai"
+    return provider
+
+
 async def upsert_agent_credential(
     agent_id: str,
     backend: str,
@@ -1037,7 +1161,7 @@ async def clear_agent_credential(agent_id: str, backend: str) -> bool:
 
 
 async def has_any_backend_key(backend: str) -> bool:
-    backend = _normalize_credential_backend(backend)
+    backend = _normalize_provider_name(backend)
     if backend not in {"openai", "claude"}:
         return False
 
@@ -1047,9 +1171,205 @@ async def has_any_backend_key(backend: str) -> bool:
             "SELECT 1 AS ok FROM agent_credentials WHERE backend = ? LIMIT 1",
             (backend,),
         )
-        return bool(await row.fetchone())
+        if await row.fetchone():
+            return True
+        cfg = await db.execute(
+            "SELECT key_ref FROM provider_configs WHERE provider = ?",
+            (backend,),
+        )
+        cfg_row = await cfg.fetchone()
+        if not cfg_row:
+            return False
+        key_ref = (cfg_row["key_ref"] or "").strip()
+        if not key_ref:
+            return False
+        secret = await db.execute(
+            "SELECT 1 AS ok FROM provider_secrets WHERE key_ref = ? LIMIT 1",
+            (key_ref,),
+        )
+        return bool(await secret.fetchone())
     finally:
         await db.close()
+
+
+async def upsert_provider_secret(key_ref: str, api_key: str) -> dict:
+    ref = (key_ref or "").strip()
+    if not ref:
+        raise ValueError("key_ref is required")
+    api_key = (api_key or "").strip()
+    if not api_key:
+        raise ValueError("api_key is required")
+
+    from .secrets_vault import encrypt_secret
+
+    enc = encrypt_secret(api_key)
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO provider_secrets (key_ref, api_key_enc, updated_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(key_ref) DO UPDATE SET
+                 api_key_enc = excluded.api_key_enc,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (ref, enc),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return await get_provider_secret_meta(ref)
+
+
+async def get_provider_secret(key_ref: Optional[str]) -> str:
+    ref = (key_ref or "").strip()
+    if not ref:
+        return ""
+
+    db = await get_db()
+    try:
+        row = await db.execute(
+            "SELECT api_key_enc FROM provider_secrets WHERE key_ref = ?",
+            (ref,),
+        )
+        result = await row.fetchone()
+    finally:
+        await db.close()
+
+    enc = (result["api_key_enc"] or "").strip() if result else ""
+    if not enc:
+        return ""
+    try:
+        from .secrets_vault import decrypt_secret
+
+        return (decrypt_secret(enc) or "").strip()
+    except Exception:
+        return ""
+
+
+async def get_provider_secret_meta(key_ref: Optional[str]) -> dict:
+    ref = (key_ref or "").strip()
+    if not ref:
+        return {"key_ref": None, "has_key": False, "last4": None, "updated_at": None}
+
+    db = await get_db()
+    try:
+        row = await db.execute(
+            "SELECT api_key_enc, updated_at FROM provider_secrets WHERE key_ref = ?",
+            (ref,),
+        )
+        result = await row.fetchone()
+    finally:
+        await db.close()
+
+    if not result:
+        return {"key_ref": ref, "has_key": False, "last4": None, "updated_at": None}
+
+    enc = (result["api_key_enc"] or "").strip()
+    last4 = None
+    if enc:
+        try:
+            from .secrets_vault import decrypt_secret
+
+            raw = (decrypt_secret(enc) or "").strip()
+            if raw:
+                last4 = raw[-4:] if len(raw) >= 4 else raw
+        except Exception:
+            last4 = None
+    return {
+        "key_ref": ref,
+        "has_key": bool(enc),
+        "last4": last4,
+        "updated_at": result["updated_at"],
+    }
+
+
+async def clear_provider_secret(key_ref: str) -> bool:
+    ref = (key_ref or "").strip()
+    if not ref:
+        return False
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM provider_secrets WHERE key_ref = ?", (ref,))
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def upsert_provider_config(
+    provider: str,
+    *,
+    key_ref: Optional[str] = None,
+    base_url: Optional[str] = None,
+    default_model: Optional[str] = None,
+) -> dict:
+    provider_name = _normalize_provider_name(provider)
+    if provider_name not in {"openai", "claude", "ollama"}:
+        raise ValueError("provider must be one of: openai, claude, ollama")
+
+    normalized_key_ref = (key_ref or "").strip() or None
+    normalized_base_url = (base_url or "").strip() or None
+    normalized_model = (default_model or "").strip() or None
+
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO provider_configs (provider, key_ref, base_url, default_model, created_at, updated_at)
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+               ON CONFLICT(provider) DO UPDATE SET
+                 key_ref = excluded.key_ref,
+                 base_url = excluded.base_url,
+                 default_model = excluded.default_model,
+                 updated_at = CURRENT_TIMESTAMP""",
+            (provider_name, normalized_key_ref, normalized_base_url, normalized_model),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return await get_provider_config(provider_name)
+
+
+async def get_provider_config(provider: str) -> dict:
+    provider_name = _normalize_provider_name(provider)
+    if provider_name not in {"openai", "claude", "ollama"}:
+        raise ValueError("provider must be one of: openai, claude, ollama")
+
+    db = await get_db()
+    try:
+        row = await db.execute(
+            "SELECT provider, key_ref, base_url, default_model, updated_at FROM provider_configs WHERE provider = ?",
+            (provider_name,),
+        )
+        item = await row.fetchone()
+    finally:
+        await db.close()
+
+    if not item:
+        fallback = {
+            "provider": provider_name,
+            "key_ref": f"{provider_name}_default" if provider_name in {"openai", "claude"} else None,
+            "base_url": None,
+            "default_model": "gpt-4o-mini" if provider_name == "openai" else ("claude-sonnet-4-20250514" if provider_name == "claude" else None),
+            "updated_at": None,
+        }
+        return fallback
+    return dict(item)
+
+
+async def list_provider_configs() -> list[dict]:
+    providers = ["openai", "claude", "ollama"]
+    results = []
+    for provider in providers:
+        cfg = await get_provider_config(provider)
+        secret_meta = await get_provider_secret_meta(cfg.get("key_ref"))
+        results.append(
+            {
+                **cfg,
+                "has_key": bool(secret_meta.get("has_key")),
+                "last4": secret_meta.get("last4"),
+                "key_updated_at": secret_meta.get("updated_at"),
+            }
+        )
+    return results
 
 
 async def get_channel_name(channel_id: str) -> Optional[str]:
@@ -2282,3 +2602,213 @@ async def get_api_usage_summary(
         "by_provider": by_provider,
         "rows": len(items),
     }
+
+
+def _normalize_layout_preset(value: Optional[str]) -> str:
+    preset = (value or "").strip().lower()
+    if preset not in {"chat-preview", "chat-files", "full-ide", "focus"}:
+        return "full-ide"
+    return preset
+
+
+DEFAULT_PANE_LAYOUTS: dict[str, list[float]] = {
+    "full-ide": [0.28, 0.40, 0.32],
+    "chat-files": [0.45, 0.55],
+    "chat-preview": [0.45, 0.55],
+}
+PANE_MIN_RATIOS: dict[str, float] = {
+    "full-ide": 0.16,
+    "chat-files": 0.22,
+    "chat-preview": 0.22,
+}
+
+
+def _clamp_pane_ratios(values: list[float], *, expected_len: int, min_ratio: float) -> Optional[list[float]]:
+    if not isinstance(values, list) or len(values) != expected_len:
+        return None
+    try:
+        parsed = [float(v) for v in values]
+    except Exception:
+        return None
+    if any((not isinstance(v, float) and not isinstance(v, int)) for v in parsed):
+        return None
+    if any(v <= 0 for v in parsed):
+        return None
+
+    total = float(sum(parsed))
+    if total <= 0:
+        return None
+    normalized = [v / total for v in parsed]
+
+    # Enforce minimum pane widths while preserving normalized distribution.
+    n = len(normalized)
+    if n * min_ratio >= 1.0:
+        equal = round(1.0 / n, 6)
+        fixed = [equal for _ in range(n)]
+        fixed[-1] = round(1.0 - sum(fixed[:-1]), 6)
+        return fixed
+
+    floors = [min_ratio for _ in range(n)]
+    remaining = 1.0 - (n * min_ratio)
+    slack = [max(0.0, v - min_ratio) for v in normalized]
+    slack_total = sum(slack)
+    if slack_total <= 0:
+        extras = [remaining / n for _ in range(n)]
+    else:
+        extras = [remaining * (v / slack_total) for v in slack]
+
+    result = [round(floors[i] + extras[i], 6) for i in range(n)]
+    # Guard against floating-point drift.
+    drift = round(1.0 - sum(result), 6)
+    result[-1] = round(result[-1] + drift, 6)
+    if any(v < min_ratio for v in result):
+        return None
+    return result
+
+
+def _normalize_pane_layout(value: Optional[dict]) -> dict[str, list[float]]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, list[float]] = {}
+    for preset, default_ratios in DEFAULT_PANE_LAYOUTS.items():
+        if preset not in value:
+            continue
+        ratios = _clamp_pane_ratios(
+            value.get(preset),
+            expected_len=len(default_ratios),
+            min_ratio=PANE_MIN_RATIOS[preset],
+        )
+        normalized[preset] = ratios if ratios else list(default_ratios)
+    return normalized
+
+
+def _load_pane_layout_json(raw: Optional[str]) -> dict[str, list[float]]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return _normalize_pane_layout(parsed)
+
+
+async def upsert_project_metadata(
+    project_name: str,
+    *,
+    display_name: Optional[str] = None,
+    last_opened_at: Optional[str] = None,
+    preview_focus_mode: Optional[bool] = None,
+    layout_preset: Optional[str] = None,
+    pane_layout: Optional[dict[str, list[float]]] = None,
+) -> dict:
+    project = (project_name or "").strip().lower()
+    if not project:
+        raise ValueError("project_name is required")
+
+    current = await get_project_metadata(project)
+    merged_display = (display_name if display_name is not None else current.get("display_name")) or None
+    merged_last_opened = (last_opened_at if last_opened_at is not None else current.get("last_opened_at")) or None
+    merged_preview = int(bool(preview_focus_mode if preview_focus_mode is not None else current.get("preview_focus_mode")))
+    merged_layout = _normalize_layout_preset(layout_preset if layout_preset is not None else current.get("layout_preset"))
+    merged_pane_layout = current.get("pane_layout") if pane_layout is None else _normalize_pane_layout(pane_layout)
+    if not isinstance(merged_pane_layout, dict):
+        merged_pane_layout = {}
+    pane_layout_json = json.dumps(merged_pane_layout) if merged_pane_layout else None
+
+    db = await get_db()
+    try:
+        await db.execute(
+            """
+            INSERT INTO project_metadata (project_name, display_name, last_opened_at, preview_focus_mode, layout_preset, pane_layout_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(project_name) DO UPDATE SET
+              display_name = excluded.display_name,
+              last_opened_at = excluded.last_opened_at,
+              preview_focus_mode = excluded.preview_focus_mode,
+              layout_preset = excluded.layout_preset,
+              pane_layout_json = excluded.pane_layout_json,
+              updated_at = CURRENT_TIMESTAMP
+            """,
+            (project, merged_display, merged_last_opened, merged_preview, merged_layout, pane_layout_json),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return await get_project_metadata(project)
+
+
+async def get_project_metadata(project_name: str) -> dict:
+    project = (project_name or "").strip().lower()
+    if not project:
+        return {
+            "project_name": "",
+            "display_name": None,
+            "last_opened_at": None,
+            "preview_focus_mode": 0,
+            "layout_preset": "full-ide",
+            "pane_layout": {},
+        }
+
+    db = await get_db()
+    try:
+        row = await db.execute(
+            "SELECT * FROM project_metadata WHERE project_name = ?",
+            (project,),
+        )
+        item = await row.fetchone()
+    finally:
+        await db.close()
+
+    if not item:
+        return {
+            "project_name": project,
+            "display_name": None,
+            "last_opened_at": None,
+            "preview_focus_mode": 0,
+            "layout_preset": "full-ide",
+            "pane_layout": {},
+        }
+    data = dict(item)
+    data["preview_focus_mode"] = 1 if bool(data.get("preview_focus_mode")) else 0
+    data["layout_preset"] = _normalize_layout_preset(data.get("layout_preset"))
+    data["pane_layout"] = _load_pane_layout_json(data.get("pane_layout_json"))
+    return data
+
+
+async def list_project_metadata() -> dict[str, dict]:
+    db = await get_db()
+    try:
+        rows = await db.execute("SELECT * FROM project_metadata")
+        items = [dict(r) for r in await rows.fetchall()]
+    finally:
+        await db.close()
+
+    result: dict[str, dict] = {}
+    for item in items:
+        name = (item.get("project_name") or "").strip().lower()
+        if not name:
+            continue
+        item["preview_focus_mode"] = 1 if bool(item.get("preview_focus_mode")) else 0
+        item["layout_preset"] = _normalize_layout_preset(item.get("layout_preset"))
+        item["pane_layout"] = _load_pane_layout_json(item.get("pane_layout_json"))
+        result[name] = item
+    return result
+
+
+async def touch_project_last_opened(project_name: str) -> dict:
+    return await upsert_project_metadata(project_name, last_opened_at=_utc_now_iso())
+
+
+async def set_project_ui_state(
+    project_name: str,
+    *,
+    preview_focus_mode: bool,
+    layout_preset: str,
+    pane_layout: Optional[dict[str, list[float]]] = None,
+) -> dict:
+    return await upsert_project_metadata(
+        project_name,
+        preview_focus_mode=bool(preview_focus_mode),
+        layout_preset=layout_preset,
+        pane_layout=pane_layout,
+    )

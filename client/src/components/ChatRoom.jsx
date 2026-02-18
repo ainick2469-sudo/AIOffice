@@ -33,6 +33,8 @@ export default function ChatRoom({
   channel = 'main',
   prefillText = '',
   onPrefillConsumed = null,
+  showStatusPanel = true,
+  onBackToWorkspace = null,
 }) {
   const { connected, messages, setMessages, send, typingAgents, lastEvent } = useWebSocket(channel);
   const [input, setInput] = useState('');
@@ -87,6 +89,12 @@ export default function ChatRoom({
       // ignore storage failures (private mode, blocked storage, etc.)
     }
   }, [statusPanelOpen]);
+
+  useEffect(() => {
+    if (!showStatusPanel) {
+      setStatusPanelOpen(false);
+    }
+  }, [showStatusPanel]);
   const fileInputRef = useRef(null);
   const dragDepthRef = useRef(0);
   const loadedReactionIdsRef = useRef(new Set());
@@ -235,6 +243,25 @@ export default function ChatRoom({
     const interval = setInterval(() => setClockMs(Date.now()), 1000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (event.key !== 'Escape') return;
+      if (activeApproval) {
+        setActiveApproval(null);
+        return;
+      }
+      if (approvalListOpen) {
+        setApprovalListOpen(false);
+        return;
+      }
+      if (threadRootId) {
+        setThreadRootId(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeApproval, approvalListOpen, threadRootId]);
 
   useEffect(() => {
     const missing = messages
@@ -845,6 +872,11 @@ export default function ChatRoom({
           </span>
         </div>
         <div className="chat-header-right">
+          {typeof onBackToWorkspace === 'function' && (
+            <button className="stop-btn" onClick={onBackToWorkspace}>
+              Back to Workspace
+            </button>
+          )}
           <button className="stop-btn" onClick={refreshProcesses}>
             Refresh Proc
           </button>
@@ -1028,7 +1060,7 @@ export default function ChatRoom({
           <div ref={bottomRef} />
         </div>
 
-        {statusPanelOpen && (
+        {showStatusPanel && statusPanelOpen && (
           <StatusPanel channel={channel} onClose={() => setStatusPanelOpen(false)} />
         )}
 

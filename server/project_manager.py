@@ -240,6 +240,7 @@ async def create_project(name: str, template: Optional[str] = None) -> dict:
     _apply_template(root, template)
     _run_git_bootstrap(root)
     _ensure_channel_workspace(normalized, "main")
+    await db.touch_project_last_opened(normalized)
 
     info = _workspace_metadata(root)
     info["template"] = template or ""
@@ -305,6 +306,7 @@ async def switch_project(channel: str, name: str) -> dict:
     normalized = (name or "").strip().lower()
     if normalized in {"app", "root", "ai-office"}:
         await db.set_channel_active_project(channel, "ai-office")
+        await db.touch_project_last_opened("ai-office")
         branch = await db.get_channel_active_branch(channel, "ai-office")
         if branch == "main":
             try:
@@ -330,6 +332,7 @@ async def switch_project(channel: str, name: str) -> dict:
 
     repo_path = _ensure_channel_workspace(normalized, channel)
     await db.set_channel_active_project(channel, normalized)
+    await db.touch_project_last_opened(normalized)
     branch = await db.get_channel_active_branch(channel, normalized)
     if branch == "main":
         try:

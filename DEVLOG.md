@@ -2329,3 +2329,38 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+## 2026-02-18 | Project-first Work OS shell migration (P0 pass)
+- Added project metadata persistence (last_opened_at, preview_focus_mode, layout_preset) and surfaced it through /api/projects.
+- Added POST /api/agents/{agent_id}/credentials/test for per-agent OpenAI/Claude connection checks with latency reporting.
+- Added channel_id aliases on create/import flows and metadata-aware project listing fields.
+- Replaced legacy top-tab shell with new Home/Workspace/Settings structure, Create Home prompt flow, Projects sidebar, Workspace shell, layout presets, and preview focus mode.
+- Added Codex mismatch startup banner with one-click repair and AgentConfig credential test UX.
+
+## 2026-02-18 | Codex/OpenAI provider routing hardening + chat lock cleanup
+- Added provider management API surface:
+  - `GET /api/providers`
+  - `POST /api/providers`
+  - `POST /api/providers/test`
+- Extended agent update model + persistence for `provider_key_ref` and `base_url` so runtime routing is per-agent and durable.
+- Added provider config/secret storage tables and startup seed/migration path for codex defaults (`ollama/qwen2.5:14b` -> `openai/gpt-4o-mini`).
+- Updated runtime credential resolution order in `server/agent_engine.py`:
+  - agent credential -> provider key ref secret -> env fallback
+  - base URL override resolution (agent -> credential -> provider config).
+- Added `ProviderSettings` UI in Settings and wired AgentConfig with explicit provider key ref/base URL controls.
+- Removed duplicate `/api/openai/status` and `/api/claude/status` route registrations so status responses are deterministic and include provider metadata.
+- Fixed chat escape/back behavior wiring in workspace shell (`Back to Workspace` now returns Chat subview to Builder).
+- Added regression coverage:
+  - `tests/test_provider_endpoints.py`
+  - `tests/test_codex_default_migration.py`
+  - `tests/test_agent_engine_provider_key_routing.py`
+  - Updated `tests/test_backend_unavailable_message.py` to clear provider secrets during the unavailable-backend assertion.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS
