@@ -1,40 +1,56 @@
-import { useState } from 'react';
-
-function hasDesktopApi() {
-  return typeof window !== 'undefined' && Boolean(window.pywebview?.api);
-}
-
-async function invokeDesktop(method) {
-  if (!hasDesktopApi()) return { ok: false, error: 'desktop_api_unavailable' };
-  const fn = window.pywebview?.api?.[method];
-  if (typeof fn !== 'function') return { ok: false, error: `missing_method:${method}` };
-  try {
-    const result = await fn();
-    if (result && typeof result === 'object') return result;
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error?.message || String(error) };
-  }
-}
+import { useCallback, useEffect, useState } from 'react';
+import {
+  DESKTOP_WINDOW_SYNC_EVENT,
+  hasDesktopWindowApi,
+  invokeDesktopWindow,
+  normalizeDesktopWindowState,
+  syncDesktopWindowState,
+} from '../lib/desktopWindow';
 
 export default function DesktopWindowControls({ className = '' }) {
-  const isDesktop = hasDesktopApi();
-  const [isMaximized, setIsMaximized] = useState(false);
+  const isDesktop = hasDesktopWindowApi();
+  const [windowState, setWindowState] = useState(() =>
+    normalizeDesktopWindowState({ state: 'unknown', maximized: false, fullscreen: false, minimized: false })
+  );
+
+  const refreshState = useCallback(async () => {
+    const synced = await syncDesktopWindowState();
+    if (!synced?.ok) return;
+    setWindowState(normalizeDesktopWindowState(synced.state));
+  }, []);
+
+  useEffect(() => {
+    if (!isDesktop) return undefined;
+    refreshState();
+    const interval = window.setInterval(refreshState, 1200);
+    const onSync = () => {
+      refreshState();
+    };
+    window.addEventListener(DESKTOP_WINDOW_SYNC_EVENT, onSync);
+    window.addEventListener('focus', onSync);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener(DESKTOP_WINDOW_SYNC_EVENT, onSync);
+      window.removeEventListener('focus', onSync);
+    };
+  }, [isDesktop, refreshState]);
 
   if (!isDesktop) return null;
 
   const handleMinimize = async () => {
-    const result = await invokeDesktop('minimize');
+    const result = await invokeDesktopWindow('minimize');
     if (!result?.ok && import.meta.env?.DEV) {
       // eslint-disable-next-line no-console
       console.warn('[DesktopWindowControls] Minimize failed', result);
     }
+    window.dispatchEvent(new CustomEvent(DESKTOP_WINDOW_SYNC_EVENT));
   };
 
   const handleToggleMaximize = async () => {
-    const result = await invokeDesktop('toggle_maximize');
+    const result = await invokeDesktopWindow('toggle_maximize');
     if (result?.ok) {
-      setIsMaximized((prev) => !prev);
+      setWindowState(normalizeDesktopWindowState(result?.state || result));
+      window.dispatchEvent(new CustomEvent(DESKTOP_WINDOW_SYNC_EVENT));
       return;
     }
     if (import.meta.env?.DEV) {
@@ -43,8 +59,21 @@ export default function DesktopWindowControls({ className = '' }) {
     }
   };
 
+  const handleToggleFullscreen = async () => {
+    const result = await invokeDesktopWindow('toggle_fullscreen');
+    if (result?.ok) {
+      setWindowState(normalizeDesktopWindowState(result?.state || result));
+      window.dispatchEvent(new CustomEvent(DESKTOP_WINDOW_SYNC_EVENT));
+      return;
+    }
+    if (import.meta.env?.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn('[DesktopWindowControls] Toggle fullscreen failed', result);
+    }
+  };
+
   const handleClose = async () => {
-    const result = await invokeDesktop('close');
+    const result = await invokeDesktopWindow('close');
     if (!result?.ok && import.meta.env?.DEV) {
       // eslint-disable-next-line no-console
       console.warn('[DesktopWindowControls] Close failed', result);
@@ -65,11 +94,20 @@ export default function DesktopWindowControls({ className = '' }) {
       <button
         type="button"
         className="desktop-window-btn maximize pywebview-no-drag"
-        title={isMaximized ? 'Restore' : 'Maximize'}
-        aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
+        title={windowState.maximized ? 'Restore' : 'Maximize'}
+        aria-label={windowState.maximized ? 'Restore window' : 'Maximize window'}
         onClick={handleToggleMaximize}
       >
-        <span aria-hidden="true">{isMaximized ? '[]' : '[ ]'}</span>
+        <span aria-hidden="true">{windowState.maximized ? '[]' : '[ ]'}</span>
+      </button>
+      <button
+        type="button"
+        className={`desktop-window-btn fullscreen pywebview-no-drag ${windowState.fullscreen ? 'active' : ''}`}
+        title={windowState.fullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+        aria-label={windowState.fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+        onClick={handleToggleFullscreen}
+      >
+        <span aria-hidden="true">{windowState.fullscreen ? 'Exit' : 'FS'}</span>
       </button>
       <button
         type="button"

@@ -4433,6 +4433,12 @@ body {
   color: var(--text-1);
 }
 
+.create-step-helper {
+  margin: -8px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
 .create-step-prompt {
   width: 100%;
   resize: vertical;
@@ -4792,10 +4798,17 @@ body {
 .create-prompt-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: var(--space-2);
   font-size: 11px;
   color: var(--text-2);
+}
+
+.create-review-subtext {
+  margin: 0 0 6px;
+  color: var(--text-2);
+  font-size: 12px;
 }
 
 .creation-pipeline-shell {
@@ -5573,6 +5586,8 @@ body.splitpane-dragging-horizontal * {
   align-items: center;
   gap: var(--space-1);
   margin-left: var(--space-1);
+  position: relative;
+  z-index: 2;
 }
 
 .desktop-window-btn {
@@ -5596,10 +5611,27 @@ body.splitpane-dragging-horizontal * {
   color: var(--textPrimary);
 }
 
+.desktop-window-btn.fullscreen {
+  width: auto;
+  min-width: 44px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.desktop-window-btn.fullscreen.active {
+  border-color: color-mix(in srgb, var(--warning) 46%, var(--border));
+  background: color-mix(in srgb, var(--warningSoft) 70%, var(--panel2));
+  color: var(--textPrimary);
+}
+
 .desktop-window-btn.close:hover {
   background: var(--dangerSoft);
   border-color: var(--danger);
   color: var(--textPrimary);
+}
+
+.app-exit-fullscreen-btn {
+  white-space: nowrap;
 }
 
 @supports (color: color-mix(in srgb, white, black)) {

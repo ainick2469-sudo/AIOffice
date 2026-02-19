@@ -198,13 +198,70 @@ class DesktopWindowApi:
             return None
         return self.window
 
+    def _window_state_name(self, window) -> str:
+        state = str(getattr(window, "state", "")).strip().lower()
+        return state
+
+    def _is_fullscreen(self, window) -> bool:
+        checker = getattr(window, "is_fullscreen", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                pass
+        value = getattr(window, "fullscreen", None)
+        if isinstance(value, bool):
+            return value
+        state = self._window_state_name(window)
+        return "fullscreen" in state
+
+    def _is_maximized(self, window) -> bool:
+        checker = getattr(window, "is_maximized", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                pass
+        state = self._window_state_name(window)
+        if "max" in state:
+            return True
+        if "normal" in state:
+            return False
+        return bool(self._maximized)
+
+    def _set_fullscreen(self, window, enabled: bool) -> bool:
+        setter = getattr(window, "set_fullscreen", None)
+        if callable(setter):
+            setter(bool(enabled))
+            return True
+        toggle = getattr(window, "toggle_fullscreen", None)
+        if callable(toggle):
+            current = self._is_fullscreen(window)
+            if bool(current) != bool(enabled):
+                toggle()
+            return True
+        return False
+
+    def _snapshot_state(self, window) -> dict:
+        state_name = self._window_state_name(window)
+        fullscreen = self._is_fullscreen(window)
+        maximized = self._is_maximized(window) and not fullscreen
+        minimized = "min" in state_name and "max" not in state_name
+        self._maximized = maximized
+        return {
+            "state": state_name or ("fullscreen" if fullscreen else ("maximized" if maximized else "normal")),
+            "maximized": bool(maximized),
+            "fullscreen": bool(fullscreen),
+            "minimized": bool(minimized),
+        }
+
     def minimize(self):
         window = self._require_window()
         if window is None:
             return {"ok": False, "error": "window_unavailable"}
         try:
             window.minimize()
-            return {"ok": True, "state": "minimized"}
+            return {"ok": True, "state": self._snapshot_state(window)}
         except Exception as exc:
             logger.exception("Desktop minimize failed.")
             return {"ok": False, "error": str(exc)}
@@ -215,26 +272,65 @@ class DesktopWindowApi:
             return {"ok": False, "error": "window_unavailable"}
 
         try:
-            state = str(getattr(window, "state", "")).lower()
-            is_maximized = "max" in state if state else self._maximized
-            if is_maximized and hasattr(window, "restore"):
-                window.restore()
+            if self._is_fullscreen(window):
+                if not self._set_fullscreen(window, False):
+                    return {"ok": False, "error": "fullscreen_not_supported"}
+
+            is_maximized = self._is_maximized(window)
+            if is_maximized:
+                if hasattr(window, "unmaximize"):
+                    window.unmaximize()
+                elif hasattr(window, "restore"):
+                    window.restore()
+                else:
+                    return {"ok": False, "error": "restore_not_supported"}
                 self._maximized = False
-                return {"ok": True, "state": "restored"}
+                return {"ok": True, "state": self._snapshot_state(window)}
 
             if hasattr(window, "maximize"):
                 window.maximize()
                 self._maximized = True
-                return {"ok": True, "state": "maximized"}
-
-            if hasattr(window, "toggle_fullscreen"):
-                window.toggle_fullscreen()
-                self._maximized = not self._maximized
-                return {"ok": True, "state": "fullscreen_toggled"}
+                return {"ok": True, "state": self._snapshot_state(window)}
 
             return {"ok": False, "error": "maximize_not_supported"}
         except Exception as exc:
             logger.exception("Desktop maximize toggle failed.")
+            return {"ok": False, "error": str(exc)}
+
+    def toggle_fullscreen(self):
+        window = self._require_window()
+        if window is None:
+            return {"ok": False, "error": "window_unavailable"}
+        try:
+            current = self._is_fullscreen(window)
+            if not self._set_fullscreen(window, not current):
+                return {"ok": False, "error": "fullscreen_not_supported"}
+            return {"ok": True, "state": self._snapshot_state(window)}
+        except Exception as exc:
+            logger.exception("Desktop fullscreen toggle failed.")
+            return {"ok": False, "error": str(exc)}
+
+    def exit_fullscreen(self):
+        window = self._require_window()
+        if window is None:
+            return {"ok": False, "error": "window_unavailable"}
+        try:
+            if self._is_fullscreen(window):
+                if not self._set_fullscreen(window, False):
+                    return {"ok": False, "error": "fullscreen_not_supported"}
+            return {"ok": True, "state": self._snapshot_state(window)}
+        except Exception as exc:
+            logger.exception("Desktop exit fullscreen failed.")
+            return {"ok": False, "error": str(exc)}
+
+    def get_window_state(self):
+        window = self._require_window()
+        if window is None:
+            return {"ok": False, "error": "window_unavailable"}
+        try:
+            return {"ok": True, "state": self._snapshot_state(window)}
+        except Exception as exc:
+            logger.exception("Desktop get_window_state failed.")
             return {"ok": False, "error": str(exc)}
 
     def close(self):

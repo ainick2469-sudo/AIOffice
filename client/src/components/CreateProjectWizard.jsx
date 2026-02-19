@@ -527,14 +527,22 @@ export default function CreateProjectWizard({
   };
 
   const primaryCtaLabel = step === 1 ? 'Next: Review' : step === 2 ? 'Next: Create' : 'Create Project';
+  const draftSavedLabel = draftSavedAt ? `Draft saved ${draftSavedAt.toLocaleTimeString()}` : 'Draft not saved yet';
+
+  const handleWizardKeyDown = (event) => {
+    if (event.key !== 'Enter') return;
+    if (!(event.ctrlKey || event.metaKey)) return;
+    event.preventDefault();
+    gotoNext();
+  };
 
   return (
-    <section className="create-wizard-card">
+    <section className="create-wizard-card" onKeyDown={handleWizardKeyDown}>
       <div className="create-wizard-layout">
         <div className="create-wizard-main">
           <div className="create-wizard-top">
             <h1>Create a Project</h1>
-            <button type="button" className="refresh-btn ui-btn" onClick={clearDraft} disabled={busy}>
+            <button type="button" className="refresh-btn ui-btn ui-btn-ghost" onClick={clearDraft} disabled={busy}>
               Clear Draft
             </button>
           </div>
@@ -559,7 +567,8 @@ export default function CreateProjectWizard({
 
           {step === 1 && (
             <div className="create-step-panel">
-              <label className="create-step-label">Describe what you want to build</label>
+              <label className="create-step-label">Describe your project</label>
+              <p className="create-step-helper">This creates a project draft. It is not chat.</p>
               <textarea
                 value={prompt}
                 onChange={(event) => {
@@ -568,7 +577,7 @@ export default function CreateProjectWizard({
                   setPrompt(nextValue);
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
+                  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
                     event.preventDefault();
                     gotoNext();
                   }
@@ -579,7 +588,8 @@ export default function CreateProjectWizard({
               />
               <div className="create-prompt-meta">
                 <span>{String(prompt || '').length} characters</span>
-                <span>Enter = continue, Shift+Enter = newline</span>
+                <span>Ctrl+Enter = continue, Enter = newline</span>
+                <span>{draftSavedLabel}</span>
               </div>
 
               <div className="create-starter-chip-row">
@@ -616,7 +626,8 @@ export default function CreateProjectWizard({
             <div className="create-step-panel">
               <div className="create-review-grid">
                 <div className="create-review-block">
-                  <h4>Prompt (exact input)</h4>
+                  <h4>Describe your project</h4>
+                  <p className="create-review-subtext">This creates a project draft. It is not chat.</p>
                   <pre className="create-review-prompt">{prompt}</pre>
 
                   <div className="create-next-box">
@@ -710,7 +721,7 @@ export default function CreateProjectWizard({
 
           <div className="create-wizard-actions">
             <div className="create-wizard-draft-status">
-              {draftSavedAt ? `Draft saved ${draftSavedAt.toLocaleTimeString()}` : 'Draft not saved yet'}
+              {draftSavedLabel}
             </div>
             <div className="create-wizard-action-buttons">
               {step > 1 && (
@@ -743,7 +754,7 @@ export default function CreateProjectWizard({
         <aside className={`create-wizard-summary ${summaryOpen ? 'expanded' : 'collapsed'}`}>
           <div className="create-summary-header">
             <h3>Creation Summary</h3>
-            <button type="button" className="refresh-btn ui-btn" onClick={() => setSummaryOpen((prev) => !prev)}>
+            <button type="button" className="refresh-btn ui-btn ui-btn-ghost" onClick={() => setSummaryOpen((prev) => !prev)}>
               {summaryOpen ? 'Collapse' : 'Expand'}
             </button>
           </div>

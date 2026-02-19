@@ -7,6 +7,14 @@ import CommandPalette from './components/CommandPalette';
 import DesktopWindowControls from './components/DesktopWindowControls';
 import TooltipLayer from './components/ui/TooltipLayer';
 import {
+  DESKTOP_WINDOW_STATE_EVENT,
+  DESKTOP_WINDOW_SYNC_EVENT,
+  hasDesktopWindowApi,
+  invokeDesktopWindow,
+  normalizeDesktopWindowState,
+  syncDesktopWindowState,
+} from './lib/desktopWindow';
+import {
   buildCreationDraft,
   loadCreationDraft,
   saveCreationDraft,
@@ -448,6 +456,9 @@ export default function App() {
   const [ingestionProgress, setIngestionProgress] = useState(null);
   const [creationDraft, setCreationDraft] = useState(null);
   const [leaveDraftModalOpen, setLeaveDraftModalOpen] = useState(false);
+  const [desktopWindowState, setDesktopWindowState] = useState(() =>
+    normalizeDesktopWindowState({ state: 'unknown', maximized: false, fullscreen: false, minimized: false })
+  );
   const [layoutDebugOpen, setLayoutDebugOpen] = useState(false);
   const [layoutDebug, setLayoutDebug] = useState({
     route: 'home/chat',
@@ -1283,9 +1294,64 @@ export default function App() {
   ];
 
   const paletteCommands = [...workspacePanelCommands, ...actionCommands, ...projectCommands];
+  const desktopAvailable = hasDesktopWindowApi();
+  const desktopIsFullscreen = Boolean(desktopWindowState?.fullscreen);
+
+  const syncDesktopState = useCallback(async () => {
+    if (!desktopAvailable) return;
+    const synced = await syncDesktopWindowState();
+    if (synced?.ok) {
+      setDesktopWindowState(normalizeDesktopWindowState(synced.state));
+    }
+  }, [desktopAvailable]);
+
+  const exitDesktopFullscreen = useCallback(async () => {
+    if (!desktopAvailable) return false;
+    const result = await invokeDesktopWindow('exit_fullscreen');
+    if (result?.ok) {
+      setDesktopWindowState(normalizeDesktopWindowState(result?.state || result));
+      window.dispatchEvent(new CustomEvent(DESKTOP_WINDOW_SYNC_EVENT));
+      return true;
+    }
+    return false;
+  }, [desktopAvailable]);
+
+  const toggleDesktopFullscreen = useCallback(async () => {
+    if (!desktopAvailable) return false;
+    const result = await invokeDesktopWindow('toggle_fullscreen');
+    if (result?.ok) {
+      setDesktopWindowState(normalizeDesktopWindowState(result?.state || result));
+      window.dispatchEvent(new CustomEvent(DESKTOP_WINDOW_SYNC_EVENT));
+      return true;
+    }
+    return false;
+  }, [desktopAvailable]);
+
+  useEffect(() => {
+    if (!desktopAvailable) return undefined;
+    const onState = (event) => {
+      setDesktopWindowState(normalizeDesktopWindowState(event?.detail || {}));
+    };
+    const onSync = () => {
+      syncDesktopState();
+    };
+    window.addEventListener(DESKTOP_WINDOW_STATE_EVENT, onState);
+    window.addEventListener(DESKTOP_WINDOW_SYNC_EVENT, onSync);
+    syncDesktopState();
+    return () => {
+      window.removeEventListener(DESKTOP_WINDOW_STATE_EVENT, onState);
+      window.removeEventListener(DESKTOP_WINDOW_SYNC_EVENT, onSync);
+    };
+  }, [desktopAvailable, syncDesktopState]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
+      if (event.key === 'F11') {
+        if (!desktopAvailable) return;
+        event.preventDefault();
+        void toggleDesktopFullscreen();
+        return;
+      }
       if (isTypingTarget(event.target)) return;
       if (!event.ctrlKey) return;
       const key = String(event.key || '').toLowerCase();
@@ -1310,7 +1376,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [setWorkspaceTabWithHistory]);
+  }, [desktopAvailable, setWorkspaceTabWithHistory, toggleDesktopFullscreen]);
 
   useEffect(() => {
     if (IS_DEV) {
@@ -1370,6 +1436,7 @@ export default function App() {
   const resetUiState = useCallback(() => {
     clearAllBodyScrollLocks();
     window.dispatchEvent(new CustomEvent('ai-office:reset-ui-state'));
+    window.dispatchEvent(new CustomEvent(DESKTOP_WINDOW_SYNC_EVENT));
     setPaletteOpen(false);
     setLeaveDraftModalOpen(false);
     setWorkspaceTabWithHistory(DEFAULT_WORKSPACE_TAB, { replace: true, forcePush: false });
@@ -1380,6 +1447,11 @@ export default function App() {
   }, [collectLayoutDebugState, setWorkspaceTabWithHistory]);
 
   useEscapeKey((event) => {
+    if (desktopIsFullscreen) {
+      event.preventDefault();
+      void exitDesktopFullscreen();
+      return;
+    }
     const detail = { handled: false, source: 'global-escape' };
     window.dispatchEvent(new CustomEvent('ai-office:escape', { detail }));
     if (detail.handled) {
@@ -1453,6 +1525,17 @@ export default function App() {
           </div>
 
           <div className="app-header-right pywebview-no-drag">
+            {desktopIsFullscreen ? (
+              <button
+                type="button"
+                className="refresh-btn ui-btn ui-btn-primary app-exit-fullscreen-btn pywebview-no-drag"
+                onClick={() => {
+                  void exitDesktopFullscreen();
+                }}
+              >
+                Exit Fullscreen
+              </button>
+            ) : null}
             <div className="app-header-details">
               <span className="pill ui-chip app-global-status">
                 {globalStatusLabel}
@@ -1465,6 +1548,7 @@ export default function App() {
                 🎨 Scheme: {schemeLabel}
               </button>
               <span className="pill ui-chip">Mode: {themeLabel}</span>
+              {desktopIsFullscreen ? <span className="pill ui-chip">Fullscreen active</span> : null}
               {IS_DEV && (
                 <>
                   <button
@@ -1484,6 +1568,17 @@ export default function App() {
               <summary>More</summary>
               <div className="app-header-compact-popover">
                 <div className="app-header-compact-row"><strong>View</strong><span>{topTab}</span></div>
+                {desktopIsFullscreen ? (
+                  <button
+                    type="button"
+                    className="refresh-btn ui-btn ui-btn-primary"
+                    onClick={() => {
+                      void exitDesktopFullscreen();
+                    }}
+                  >
+                    Exit Fullscreen
+                  </button>
+                ) : null}
                 <button
                   className="refresh-btn ui-btn app-theme-toggle"
                   onClick={cycleThemeScheme}
