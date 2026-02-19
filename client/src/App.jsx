@@ -673,7 +673,7 @@ export default function App() {
     setLeaveDraftModalOpen(false);
   };
 
-  const createProjectFromDraft = async (overrideDraft = null) => {
+  const createProjectFromDraft = async (overrideDraft = null, options = {}) => {
     const draft = overrideDraft || creationDraft;
     const requestText = String(draft?.rawRequest ?? draft?.text ?? '');
     if (!requestText.trim()) {
@@ -758,7 +758,9 @@ export default function App() {
     setCreateRouteDraftId('');
     setLeaveDraftModalOpen(false);
     await openProject(data);
-    setWorkspaceTab('spec');
+    const requestedTab = String(options?.openTab || 'spec').trim().toLowerCase();
+    const nextTab = ['chat', 'spec', 'preview'].includes(requestedTab) ? requestedTab : 'spec';
+    setWorkspaceTab(nextTab);
     navigateToTab('workspace');
     return data;
   };

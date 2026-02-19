@@ -71,6 +71,8 @@ export default function ImportDropzone({
   queuedItems = [],
   onQueueChange,
   disabled = false,
+  open = false,
+  onToggleOpen,
 }) {
   const zipInputRef = useRef(null);
   const folderInputRef = useRef(null);
@@ -113,7 +115,7 @@ export default function ImportDropzone({
   };
 
   return (
-    <section className={`import-dropzone-wizard ${dragActive ? 'active' : ''} ${disabled ? 'disabled' : ''}`}>
+    <section className={`import-dropzone-wizard ${dragActive ? 'active' : ''} ${disabled ? 'disabled' : ''} ${open ? 'expanded' : 'collapsed'}`}>
       <input
         ref={zipInputRef}
         type="file"
@@ -131,42 +133,63 @@ export default function ImportDropzone({
         className="hidden-file-input"
       />
 
-      <div
-        className="import-dropzone-hitarea"
-        onDragOver={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          if (!disabled) setDragActive(true);
-        }}
-        onDragEnter={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          if (!disabled) setDragActive(true);
-        }}
-        onDragLeave={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          setDragActive(false);
-        }}
-        onDrop={handleDrop}
-      >
-        <h4>Import zip or folder</h4>
-        <p>Drop files here to queue import inputs. Supported: <code>.zip</code> or folder upload.</p>
-        <div className="import-dropzone-actions">
-          <button type="button" className="refresh-btn ui-btn" disabled={disabled} onClick={() => zipInputRef.current?.click()}>
-            Choose Zip
-          </button>
-          <button type="button" className="refresh-btn ui-btn" disabled={disabled} onClick={() => folderInputRef.current?.click()}>
-            Choose Folder
-          </button>
-          <button type="button" className="refresh-btn ui-btn" disabled={disabled || queuedItems.length === 0} onClick={clearAll}>
-            Clear Queue
-          </button>
+      <div className="import-dropzone-top">
+        <div>
+          <h4>Import Existing Project</h4>
+          <p>Use this when you already have code and want AI Office to understand it.</p>
         </div>
+        <button
+          type="button"
+          className="refresh-btn ui-btn"
+          disabled={disabled}
+          onClick={() => onToggleOpen?.(!open)}
+        >
+          {open ? 'Hide Import' : `Import existing project${queuedItems.length ? ` (${queuedItems.length})` : ''}`}
+        </button>
       </div>
 
+      {open ? (
+        <div
+          className="import-dropzone-hitarea"
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!disabled) setDragActive(true);
+          }}
+          onDragEnter={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!disabled) setDragActive(true);
+          }}
+          onDragLeave={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setDragActive(false);
+          }}
+          onDrop={handleDrop}
+        >
+          <h5>Drop zip or folder here</h5>
+          <p>Supported: <code>.zip</code>, project folders, or selected files. Imported items appear in Review.</p>
+          <div className="import-dropzone-actions">
+            <button type="button" className="refresh-btn ui-btn" disabled={disabled} onClick={() => zipInputRef.current?.click()}>
+              Choose Zip
+            </button>
+            <button type="button" className="refresh-btn ui-btn" disabled={disabled} onClick={() => folderInputRef.current?.click()}>
+              Choose Folder
+            </button>
+            <button type="button" className="refresh-btn ui-btn" disabled={disabled || queuedItems.length === 0} onClick={clearAll}>
+              Clear Queue
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="import-dropzone-collapsed-hint">
+          <span>Keep this closed for new projects. Open it when importing existing code.</span>
+        </div>
+      )}
+
       <div className="import-queue-list">
-        {queuedItems.length === 0 && <div className="import-queue-empty">Nothing queued yet.</div>}
+        {queuedItems.length === 0 && open && <div className="import-queue-empty">Nothing queued yet.</div>}
         {queuedItems.map((item) => (
           <article key={item.id} className="import-queue-item">
             <div className="import-queue-item-main">

@@ -1,7 +1,86 @@
 [
-  { "id": "reporting-dashboard", "label": "Reporting Dashboard", "template": "react", "prompt": "Build a reporting dashboard with KPIs, charts, filters, and CSV export." },
-  { "id": "gaming-platform", "label": "Gaming Platform", "template": "react", "prompt": "Build a gaming platform with user profiles, leaderboards, and session stats." },
-  { "id": "onboarding-portal", "label": "Onboarding Portal", "template": "react", "prompt": "Build an onboarding portal with account setup, checklist tracking, and guided steps." },
-  { "id": "ops-console", "label": "Ops Console", "template": "python", "prompt": "Build an operations console with service status, incident timeline, and runbook actions." },
-  { "id": "api-starter", "label": "API Starter", "template": "python", "prompt": "Build a FastAPI backend starter with auth-ready routes, tests, and local preview." }
+  {
+    "id": "blank-guided",
+    "title": "Blank (Guided)",
+    "description": "Start with a clean spec-first scaffold for any project.",
+    "template": "blank-guided",
+    "stackPreset": "auto-detect",
+    "recommended": true,
+    "bullets": [
+      "README scaffold",
+      "Spec stub",
+      "Tasks stub"
+    ],
+    "prompt": ""
+  },
+  {
+    "id": "simple-web-react",
+    "title": "Simple Web App (React)",
+    "description": "Bootstrap a minimal React app that is preview-ready.",
+    "template": "react-web",
+    "stackPreset": "react-web",
+    "recommended": false,
+    "bullets": [
+      "React starter structure",
+      "Dev server command preset",
+      "Preview-ready setup"
+    ],
+    "prompt": "Build a simple React web app with clear navigation, reusable components, and a local preview workflow."
+  },
+  {
+    "id": "api-starter-fastapi",
+    "title": "API Starter (FastAPI)",
+    "description": "Generate a clean Python API base with health checks and tests.",
+    "template": "fastapi",
+    "stackPreset": "python-api",
+    "recommended": false,
+    "bullets": [
+      "FastAPI app skeleton",
+      "/health endpoint",
+      "Pytest starter tests"
+    ],
+    "prompt": "Build a FastAPI backend starter with a /health route, structured modules, and starter tests."
+  },
+  {
+    "id": "dashboard-react-api",
+    "title": "Dashboard (React + API stub)",
+    "description": "Pair a React dashboard UI with a lightweight JSON API stub.",
+    "template": "dashboard",
+    "stackPreset": "full-stack",
+    "recommended": false,
+    "bullets": [
+      "Dashboard UI scaffold",
+      "Simple API stub",
+      "Seeded implementation tasks"
+    ],
+    "prompt": "Build a dashboard app with a React frontend, API stub data source, and a clear task roadmap."
+  },
+  {
+    "id": "cli-tool-python",
+    "title": "CLI Tool (Python)",
+    "description": "Create a Python CLI starter with tests and docs.",
+    "template": "python-cli",
+    "stackPreset": "python-cli",
+    "recommended": false,
+    "bullets": [
+      "argparse command structure",
+      "README usage examples",
+      "Tests scaffold"
+    ],
+    "prompt": "Build a Python CLI tool starter with argparse commands, README usage examples, and test stubs."
+  },
+  {
+    "id": "import-existing-project",
+    "title": "Import Existing Project",
+    "description": "Bring in an existing zip/folder and generate a migration plan.",
+    "template": "import-existing",
+    "stackPreset": "auto-detect",
+    "recommended": false,
+    "bullets": [
+      "Guided import queue",
+      "Auto stack detection",
+      "Spec + task extraction"
+    ],
+    "prompt": "Analyze the imported project files, summarize architecture, and propose a clean Discuss -> Spec -> Build plan."
+  }
 ]

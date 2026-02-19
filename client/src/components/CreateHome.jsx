@@ -104,6 +104,7 @@ export default function CreateHome({
         <CreateProjectWizard
           templates={templateLibrary}
           onStartDraftDiscussion={onStartDraftDiscussion}
+          onCreateProjectFromDraft={onCreateProjectFromDraft}
           summaryProject={summaryProject}
           initialDraft={creationDraft}
           onDraftUpdate={onCreationDraftChange}

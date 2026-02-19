@@ -2829,3 +2829,10 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python -m pytest -q tests/test_creation_flow_api.py` PASS
 - `with-runtime.cmd python -m pytest -q tests` PASS (warnings only)
 - `cd client && npm run build` PASS
+## 2026-02-19 - Prompt #004 Create Project UX Simplification
+- Rebuilt the Create Project wizard into a cleaner 3-step flow: Describe > Review > Create with simplified copy and clearer step intent.
+- Replaced starter templates with a curated set (Blank Guided, React app, FastAPI API starter, Dashboard, Python CLI, Import Existing Project) and richer metadata (stack preset, bullets, recommended badge).
+- Upgraded template cards and import UX: import is now a focused expandable path and auto-expands when the Import template is selected.
+- Improved Review + Summary confidence surfaces: editable name, stack override, template summary, command preview, target path, and potential issue hints.
+- Wired Create step to project creation handler with destination hinting (Workspace/Spec/Preview), while preserving Discuss-first as an explicit secondary action.
+- Updated styles for calmer layout hierarchy, tighter spacing, and responsive summary behavior.
