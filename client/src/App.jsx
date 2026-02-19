@@ -28,6 +28,7 @@ import useEscapeKey from './hooks/useEscapeKey';
 import useBodyScrollLock, { getBodyScrollLockSnapshot } from './hooks/useBodyScrollLock';
 import { clearAllBodyScrollLocks } from './hooks/scrollLockManager';
 import { createStartupRequestMeter } from './lib/perf/requestMeter';
+import fetchWithTimeout, { FetchWithTimeoutError } from './utils/fetchWithTimeout';
 import './styles/tokens.css';
 import './styles/theme.css';
 import './styles/schemes.css';
@@ -50,6 +51,37 @@ const NAV_STATE_MARKER = '__aiOfficeNav';
 const WORKSPACE_TABS = new Set(['chat', 'files', 'git', 'tasks', 'spec', 'preview']);
 const TOP_TABS = new Set(['home', 'workspace', 'settings', 'create']);
 const INGESTION_TASKS = ['Index file tree', 'Summarize architecture', 'Generate Spec + Blueprint'];
+const BOOT_REQUEST_TIMEOUT_MS = 8_000;
+const BOOT_HARD_TIMEOUT_MS = 10_000;
+const BOOT_STEPS = [
+  { name: 'projects', label: 'Loading projects' },
+  { name: 'active', label: 'Restoring active workspace' },
+  { name: 'providers', label: 'Checking provider setup' },
+];
+
+function buildBootSteps(overrides = {}) {
+  return BOOT_STEPS.map((step) => {
+    const incoming = overrides?.[step.name] || {};
+    return {
+      ...step,
+      status: incoming.status || 'pending',
+      detail: incoming.detail || '',
+    };
+  });
+}
+
+function toBootError(step, error, fallbackMessage) {
+  const code = String(error?.code || '').trim() || 'UNKNOWN';
+  const detail = error?.message || fallbackMessage || 'Boot request failed.';
+  return {
+    step,
+    code,
+    message: detail,
+    actionHint: code === 'TIMEOUT'
+      ? 'Backend timed out. Check the server and retry.'
+      : 'Retry startup checks or open Settings to fix provider setup.',
+  };
+}
 
 function channelForProject(projectName) {
   const name = String(projectName || '').trim().toLowerCase();
@@ -403,7 +435,10 @@ export default function App() {
       return true;
     }
   });
-  const [loading, setLoading] = useState(true);
+  const [bootState, setBootState] = useState('idle');
+  const [bootSteps, setBootSteps] = useState(() => buildBootSteps());
+  const [bootElapsedSeconds, setBootElapsedSeconds] = useState(0);
+  const [bootError, setBootError] = useState(null);
   const [error, setError] = useState('');
   const [codexMismatch, setCodexMismatch] = useState(false);
   const [dismissCodexBanner, setDismissCodexBanner] = useState(false);
@@ -423,6 +458,8 @@ export default function App() {
   if (!homeRequestMeterRef.current) {
     homeRequestMeterRef.current = createStartupRequestMeter('home-shell');
   }
+  const bootAbortRef = useRef(null);
+  const bootStartRef = useRef(0);
 
   const activeProject = active.project || 'ai-office';
   const activeChannel = active.channel || channelForProject(activeProject);
@@ -598,30 +635,43 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  const refreshProjects = async () => {
+  const refreshProjects = useCallback(async (options = {}) => {
+    const timeoutMs = Number.isFinite(options?.timeoutMs) ? options.timeoutMs : BOOT_REQUEST_TIMEOUT_MS;
     homeRequestMeterRef.current?.track('/api/projects');
-    const resp = await fetch('/api/projects');
-    const payload = resp.ok ? await resp.json() : { projects: [] };
+    const { data } = await fetchWithTimeout('/api/projects', {
+      signal: options?.signal,
+      timeoutMs,
+    });
+    const payload = data && typeof data === 'object' ? data : { projects: [] };
     setProjects(Array.isArray(payload?.projects) ? payload.projects : []);
     return payload;
-  };
+  }, []);
 
-  const refreshCodexMismatch = async () => {
+  const refreshCodexMismatch = useCallback(async (options = {}) => {
+    const timeoutMs = Number.isFinite(options?.timeoutMs) ? options.timeoutMs : BOOT_REQUEST_TIMEOUT_MS;
     homeRequestMeterRef.current?.track('/api/agents?active_only=false');
-    const resp = await fetch('/api/agents?active_only=false');
-    const payload = resp.ok ? await resp.json() : [];
-    const codex = (payload || []).find((item) => item.id === 'codex');
+    const { data } = await fetchWithTimeout('/api/agents?active_only=false', {
+      signal: options?.signal,
+      timeoutMs,
+    });
+    const payload = Array.isArray(data) ? data : [];
+    const codex = payload.find((item) => item.id === 'codex');
     const model = String(codex?.model || '').toLowerCase();
     const legacyModels = new Set(['qwen2.5:14b', 'qwen2.5:32b', 'qwen2.5:7b', 'qwen3:14b', 'qwen3:32b']);
     const mismatch = Boolean(codex && codex.backend === 'ollama' && legacyModels.has(model));
     setCodexMismatch(mismatch);
-  };
+    return mismatch;
+  }, []);
 
-  const loadProjectUiState = async (projectName) => {
+  const loadProjectUiState = useCallback(async (projectName, options = {}) => {
     if (!projectName) return;
+    const timeoutMs = Number.isFinite(options?.timeoutMs) ? options.timeoutMs : BOOT_REQUEST_TIMEOUT_MS;
     try {
-      const resp = await fetch(`/api/projects/${encodeURIComponent(projectName)}/ui-state`);
-      const payload = resp.ok ? await resp.json() : null;
+      const { data } = await fetchWithTimeout(`/api/projects/${encodeURIComponent(projectName)}/ui-state`, {
+        signal: options?.signal,
+        timeoutMs,
+      });
+      const payload = data && typeof data === 'object' ? data : null;
       if (!payload) return;
       setLayoutPreset(payload.layout_preset || DEFAULT_LAYOUT_PRESET);
       const safePaneLayout = payload?.pane_layout && typeof payload.pane_layout === 'object'
@@ -630,11 +680,12 @@ export default function App() {
       setPaneLayout(safePaneLayout);
       setPreviewFocus(Boolean(payload.preview_focus_mode));
     } catch {
+      if (options?.silent) return;
       setLayoutPreset(DEFAULT_LAYOUT_PRESET);
       setPaneLayout(DEFAULT_PANE_LAYOUT);
       setPreviewFocus(false);
     }
-  };
+  }, []);
 
   const saveProjectUiState = async (projectName, nextPreviewFocus, nextLayoutPreset, nextPaneLayout) => {
     if (!projectName) return;
@@ -649,50 +700,173 @@ export default function App() {
     });
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    const init = async () => {
-      setLoading(true);
+  const runBoot = useCallback(async (options = {}) => {
+    const reason = String(options?.reason || 'startup');
+    bootAbortRef.current?.abort();
+    const controller = new AbortController();
+    bootAbortRef.current = controller;
+    bootStartRef.current = Date.now();
+    setBootElapsedSeconds(0);
+    setBootState('booting');
+    setBootError(null);
+    setBootSteps(buildBootSteps());
+    if (reason !== 'workspace-open') {
       setError('');
-      try {
-        const persistedDraft = loadCreationDraft(createRouteDraftId || null);
-        if (!cancelled) {
-          setCreationDraft(persistedDraft);
-          if (topTab === 'create' && !persistedDraft?.text) {
-            navigateToTab('home', { replace: true });
-          }
-        }
+    }
 
-        await refreshProjects();
-        await refreshCodexMismatch();
+    const nextStepState = {
+      projects: { status: 'pending', detail: '' },
+      active: { status: 'pending', detail: '' },
+      providers: { status: 'pending', detail: '' },
+    };
+    const markStep = (name, status, detail = '') => {
+      if (bootAbortRef.current !== controller) return;
+      nextStepState[name] = { status, detail };
+      setBootSteps(buildBootSteps(nextStepState));
+    };
 
-        homeRequestMeterRef.current?.track('/api/projects/active/main');
-        const activeResp = await fetch('/api/projects/active/main');
-        const activePayload = activeResp.ok ? await activeResp.json() : null;
-        if (!cancelled && activePayload) {
-          const normalized = normalizeActiveContext(activePayload);
-          setActive(normalized);
-          await loadProjectUiState(normalized.project);
-        }
-      } catch (err) {
-        if (!cancelled) setError(err?.message || 'Failed to load app state.');
-      } finally {
-        if (!cancelled) setLoading(false);
+    const hardTimeout = window.setTimeout(() => {
+      controller.abort('boot-hard-timeout');
+    }, BOOT_HARD_TIMEOUT_MS);
+
+    try {
+      const persistedDraft = loadCreationDraft(createRouteDraftId || null);
+      setCreationDraft(persistedDraft);
+      if (topTab === 'create' && !persistedDraft?.text) {
+        navigateToTab('home', { replace: true });
       }
-    };
-    init();
-    return () => {
-      cancelled = true;
-    };
-    // run once on app boot; route-specific draft updates handled below
+
+      const projectsPromise = (async () => {
+        try {
+          await refreshProjects({ signal: controller.signal, timeoutMs: BOOT_REQUEST_TIMEOUT_MS });
+          markStep('projects', 'ok');
+        } catch (error) {
+          const detail = error?.message || 'Unable to load projects.';
+          markStep('projects', 'fail', detail);
+          throw toBootError('projects', error, detail);
+        }
+      })();
+
+      const activeProjectPromise = (async () => {
+        try {
+          homeRequestMeterRef.current?.track('/api/projects/active/main');
+          const { data } = await fetchWithTimeout('/api/projects/active/main', {
+            signal: controller.signal,
+            timeoutMs: BOOT_REQUEST_TIMEOUT_MS,
+          });
+          if (data) {
+            const normalized = normalizeActiveContext(data);
+            setActive(normalized);
+          }
+          markStep('active', 'ok');
+        } catch (error) {
+          const detail = error?.message || 'Unable to restore active workspace.';
+          markStep('active', 'fail', detail);
+          throw toBootError('active', error, detail);
+        }
+      })();
+
+      const providersPromise = (async () => {
+        try {
+          homeRequestMeterRef.current?.track('/api/providers');
+          await fetchWithTimeout('/api/providers', {
+            signal: controller.signal,
+            timeoutMs: BOOT_REQUEST_TIMEOUT_MS,
+          });
+          markStep('providers', 'ok');
+        } catch (error) {
+          const detail = error?.message || 'Unable to read provider status.';
+          markStep('providers', 'fail', detail);
+          throw toBootError('providers', error, detail);
+        }
+      })();
+
+      const settled = await Promise.allSettled([projectsPromise, activeProjectPromise, providersPromise]);
+      if (bootAbortRef.current !== controller) return;
+
+      const failures = settled
+        .filter((entry) => entry.status === 'rejected')
+        .map((entry) => entry.reason)
+        .filter(Boolean);
+
+      if (failures.length > 0) {
+        const primaryError = failures[0];
+        setBootError(primaryError);
+        setBootState(failures.length >= BOOT_STEPS.length ? 'error' : 'partial');
+        setError(primaryError?.message || 'Startup is incomplete.');
+      } else {
+        setBootError(null);
+        setBootState('ready');
+      }
+    } catch (error) {
+      if (bootAbortRef.current !== controller) return;
+      if (controller.signal.aborted) {
+        const timeoutError = toBootError(
+          'boot',
+          new FetchWithTimeoutError('Startup timed out before completion.', 'TIMEOUT'),
+          'Startup timed out before completion.'
+        );
+        setBootError(timeoutError);
+        setBootState('error');
+        setError(timeoutError.message);
+        return;
+      }
+      const normalized = toBootError('boot', error, 'Failed to initialize app state.');
+      setBootError(normalized);
+      setBootState('error');
+      setError(normalized.message);
+    } finally {
+      window.clearTimeout(hardTimeout);
+      if (bootAbortRef.current === controller) {
+        bootAbortRef.current = null;
+      }
+    }
+  }, [createRouteDraftId, navigateToTab, refreshProjects, topTab]);
+
+  useEffect(() => {
+    runBoot({ reason: 'startup' });
+    // startup boot runs once
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
+    if (bootState !== 'booting') return undefined;
+    const tick = () => {
+      const elapsed = Math.max(0, Math.floor((Date.now() - bootStartRef.current) / 1000));
+      setBootElapsedSeconds(elapsed);
+    };
+    tick();
+    const timer = window.setInterval(tick, 250);
+    return () => window.clearInterval(timer);
+  }, [bootState]);
+
+  useEffect(() => {
     return () => {
+      bootAbortRef.current?.abort();
       homeRequestMeterRef.current?.stop('app-unmount');
     };
   }, []);
+
+  useEffect(() => {
+    if (topTab !== 'workspace') return undefined;
+    const controller = new AbortController();
+    loadProjectUiState(activeProject, {
+      signal: controller.signal,
+      timeoutMs: BOOT_REQUEST_TIMEOUT_MS,
+      silent: true,
+    });
+    return () => controller.abort();
+  }, [activeProject, loadProjectUiState, topTab]);
+
+  useEffect(() => {
+    if (!(topTab === 'workspace' || topTab === 'settings')) return undefined;
+    const controller = new AbortController();
+    refreshCodexMismatch({
+      signal: controller.signal,
+      timeoutMs: BOOT_REQUEST_TIMEOUT_MS,
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [refreshCodexMismatch, topTab]);
 
   useEffect(() => {
     if (topTab !== 'create') return;
@@ -1229,6 +1403,11 @@ export default function App() {
     ? `System (${theme === 'dark' ? 'Dark' : 'Light'})`
     : (theme === 'dark' ? 'Dark' : 'Light');
   const schemeLabel = getThemeSchemeMeta(themeScheme).label;
+  const startupIncomplete = bootState === 'partial' || bootState === 'error';
+  const workspaceBooting = topTab === 'workspace' && bootState === 'booting';
+  const globalStatusLabel = bootState === 'booting'
+    ? 'Starting…'
+    : (topTab === 'workspace' ? 'Workspace' : topTab === 'settings' ? 'Settings' : 'Ready');
 
   return (
     <div
@@ -1274,7 +1453,7 @@ export default function App() {
           <div className="app-header-right pywebview-no-drag">
             <div className="app-header-details">
               <span className="pill ui-chip app-global-status">
-                {topTab === 'workspace' ? 'Workspace' : topTab === 'settings' ? 'Settings' : 'Ready'}
+                {globalStatusLabel}
               </span>
               <button
                 className="refresh-btn ui-btn app-theme-toggle"
@@ -1330,16 +1509,56 @@ export default function App() {
           </div>
         </header>
 
-        {loading && <div className="panel-empty">Loading workspace...</div>}
-        {!loading && error && <div className="agent-config-error app-error">{error}</div>}
-        {!loading && IS_DEV && topTab === 'create' && creationDraft ? (
+        {startupIncomplete && (
+          <div className={`startup-status-banner ${bootState === 'error' ? 'error' : 'partial'}`}>
+            <div className="startup-status-copy">
+              <strong>Setup incomplete</strong>
+              <p>{bootError?.message || 'Some startup checks failed. You can keep using Home while fixing setup.'}</p>
+              <div className="startup-status-meta">
+                {bootSteps.map((step) => (
+                  <span key={step.name} className={`startup-step startup-step-${step.status}`}>
+                    {step.label}: {step.status === 'ok' ? 'ok' : step.status === 'fail' ? 'failed' : 'pending'}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="startup-status-actions">
+              <button
+                type="button"
+                className="refresh-btn ui-btn ui-btn-primary"
+                onClick={() => runBoot({ reason: 'retry' })}
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                className="refresh-btn ui-btn"
+                onClick={() => navigateToTab('settings')}
+              >
+                Open Settings
+              </button>
+              {topTab === 'workspace' ? (
+                <button
+                  type="button"
+                  className="refresh-btn ui-btn"
+                  onClick={() => navigateToTab('home', { replace: true })}
+                >
+                  Continue to Home
+                </button>
+              ) : null}
+            </div>
+          </div>
+        )}
+
+        {error && !startupIncomplete && <div className="agent-config-error app-error">{error}</div>}
+        {IS_DEV && topTab === 'create' && creationDraft ? (
           <details className="creation-debug-panel">
             <summary>Creation Draft Debug</summary>
             <pre>{JSON.stringify(creationDraft, null, 2)}</pre>
           </details>
         ) : null}
 
-        {!loading && topTab === 'home' && (
+        {topTab === 'home' && (
           <CreateHome
             projects={sortedProjects}
             onOpenProject={openProject}
@@ -1355,7 +1574,7 @@ export default function App() {
           />
         )}
 
-        {!loading && topTab === 'create' && (
+        {topTab === 'create' && (
           <CreateHome
             projects={sortedProjects}
             onOpenProject={openProject}
@@ -1374,7 +1593,47 @@ export default function App() {
           />
         )}
 
-        {!loading && topTab === 'workspace' && (
+        {workspaceBooting && (
+          <div className="workspace-boot-state panel">
+            <div className="workspace-boot-state-copy">
+              <h3>Loading workspace…</h3>
+              <p>Trying for {bootElapsedSeconds}s. You can go back Home if startup checks keep failing.</p>
+            </div>
+            <ul className="workspace-boot-step-list">
+              {bootSteps.map((step) => (
+                <li key={step.name} className={`workspace-boot-step workspace-boot-step-${step.status}`}>
+                  <span>{step.label}</span>
+                  <strong>{step.status === 'ok' ? 'ok' : step.status === 'fail' ? 'failed' : 'pending'}</strong>
+                </li>
+              ))}
+            </ul>
+            <div className="workspace-boot-actions">
+              <button
+                type="button"
+                className="refresh-btn ui-btn ui-btn-primary"
+                onClick={() => runBoot({ reason: 'workspace-retry' })}
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                className="refresh-btn ui-btn"
+                onClick={() => navigateToTab('settings')}
+              >
+                Open Settings
+              </button>
+              <button
+                type="button"
+                className="refresh-btn ui-btn"
+                onClick={() => navigateToTab('home', { replace: true })}
+              >
+                Continue to Home
+              </button>
+            </div>
+          </div>
+        )}
+
+        {!workspaceBooting && topTab === 'workspace' && (
           <WorkspaceShell
             channel={activeChannel}
             projectName={activeProject}
@@ -1409,7 +1668,7 @@ export default function App() {
           />
         )}
 
-        {!loading && topTab === 'settings' && (
+        {topTab === 'settings' && (
           <SettingsShell
             themeMode={themeMode}
             onThemeModeChange={setThemeMode}

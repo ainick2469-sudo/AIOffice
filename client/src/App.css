@@ -3412,6 +3412,135 @@ body {
   margin: 12px;
 }
 
+.startup-status-banner {
+  margin: 10px 12px 0;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel2) 64%, transparent);
+  padding: 10px 12px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.startup-status-banner.partial {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--divider));
+  background: color-mix(in srgb, var(--warning) 14%, var(--panel2));
+}
+
+.startup-status-banner.error {
+  border-color: color-mix(in srgb, var(--danger) 52%, var(--divider));
+  background: color-mix(in srgb, var(--danger) 14%, var(--panel2));
+}
+
+.startup-status-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.startup-status-copy strong {
+  font-size: 13px;
+  color: var(--textPrimary);
+}
+
+.startup-status-copy p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--textSecondary);
+}
+
+.startup-status-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.startup-step {
+  font-size: 11px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+  color: var(--textSecondary);
+  background: color-mix(in srgb, var(--panel) 80%, transparent);
+}
+
+.startup-step-ok {
+  border-color: color-mix(in srgb, var(--success) 56%, var(--divider));
+  color: var(--textPrimary);
+}
+
+.startup-step-fail {
+  border-color: color-mix(in srgb, var(--danger) 58%, var(--divider));
+}
+
+.startup-status-actions {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.workspace-boot-state {
+  margin: 12px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 220px;
+}
+
+.workspace-boot-state-copy h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.workspace-boot-state-copy p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--textSecondary);
+}
+
+.workspace-boot-step-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.workspace-boot-step {
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel2) 58%, transparent);
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--textSecondary);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.workspace-boot-step-ok {
+  border-color: color-mix(in srgb, var(--success) 55%, var(--divider));
+  color: var(--textPrimary);
+}
+
+.workspace-boot-step-fail {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--divider));
+}
+
+.workspace-boot-actions {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .agent-runtime-row {
   display: flex;
   flex-wrap: wrap;

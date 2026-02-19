@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 
 function hasDesktopApi() {
   return typeof window !== 'undefined' && Boolean(window.pywebview?.api);
@@ -18,7 +18,7 @@ async function invokeDesktop(method) {
 }
 
 export default function DesktopWindowControls({ className = '' }) {
-  const isDesktop = useMemo(() => hasDesktopApi(), []);
+  const isDesktop = hasDesktopApi();
   const [isMaximized, setIsMaximized] = useState(false);
 
   if (!isDesktop) return null;
@@ -60,7 +60,7 @@ export default function DesktopWindowControls({ className = '' }) {
         aria-label="Minimize window"
         onClick={handleMinimize}
       >
-        <span aria-hidden="true">−</span>
+        <span aria-hidden="true">_</span>
       </button>
       <button
         type="button"
@@ -69,7 +69,7 @@ export default function DesktopWindowControls({ className = '' }) {
         aria-label={isMaximized ? 'Restore window' : 'Maximize window'}
         onClick={handleToggleMaximize}
       >
-        <span aria-hidden="true">{isMaximized ? '❐' : '☐'}</span>
+        <span aria-hidden="true">{isMaximized ? '[]' : '[ ]'}</span>
       </button>
       <button
         type="button"
@@ -78,7 +78,7 @@ export default function DesktopWindowControls({ className = '' }) {
         aria-label="Close window"
         onClick={handleClose}
       >
-        <span aria-hidden="true">×</span>
+        <span aria-hidden="true">X</span>
       </button>
     </div>
   );

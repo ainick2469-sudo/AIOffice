@@ -2900,3 +2900,34 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
   - DashboardHome now loads one summary payload and lazy-loads heavy cards only on demand.
   - Added `useVisibilityInterval` and abort/dedupe guards to stop hidden-tab polling and overlap.
   - Added dev-only startup request meters for Home/Sidebar to validate first-10s request counts in browser console.
+
+## 2026-02-19 - Regression triage (last 2 hours)
+- Suspect commit: `f8a4a5e` (`perf-stop-startup-request-storms-sidebar-unread-dashboard-batching-visibility-aware-polling`).
+- Files touched in suspect range:
+  - `client/src/App.jsx`
+  - `client/src/App.css`
+  - `client/src/components/DashboardHome.jsx`
+  - `client/src/components/Sidebar.jsx`
+- Symptom mapping:
+  - Infinite `Loading workspace...` hang: global app render was still hard-gated by `loading` in `App.jsx` with no timeout/abort safety.
+  - Back/Home confusion: history state was updated, but startup failure path still left users stuck behind workspace loader and made navigation feel broken.
+  - Theme/scheme inconsistency reports: app state could appear stale while stuck in boot gate, making mode/scheme changes look non-functional.
+  - Maximize/fullscreen complaints: desktop controls had brittle runtime detection and broken glyph rendering, so maximize/restore affordance was unreliable.
+
+## 2026-02-19 - Prompt #010 retail startup hotfix (unbrick + bounded boot)
+- Replaced blocking startup gate with a bounded boot state machine in `client/src/App.jsx`:
+  - `bootState: idle | booting | ready | partial | error`
+  - step-level status for `projects`, `active workspace`, and `providers`
+  - global hard timeout (`10s`) and per-request timeout (`8s`) with abort.
+- Added `client/src/utils/fetchWithTimeout.js` and moved startup-critical requests to timeout + typed error handling (`TIMEOUT`, `NETWORK`, `HTTP`, `ABORT`).
+- Startup is now non-blocking:
+  - Home/Create/Settings render immediately during boot.
+  - Workspace uses a local loader card with step status + timer + actions (`Retry`, `Open Settings`, `Continue to Home`).
+  - Added top startup banner for `partial/error` states; no silent infinite loading.
+- Removed Home auto-polling by default in `client/src/components/DashboardHome.jsx` (manual refresh only).
+- Desktop maximize/fullscreen affordance hardened in `client/src/components/DesktopWindowControls.jsx`:
+  - desktop API is checked live (not once at first render)
+  - control glyphs replaced with stable ASCII labels.
+- Before/After first-10s request pressure (dev startup meter + endpoint audit):
+  - Before: ~48 requests / 10s under cold start stress path.
+  - After: 3 startup API requests on Home boot (`/api/projects`, `/api/projects/active/main`, `/api/providers`) and no Home polling interval by default.

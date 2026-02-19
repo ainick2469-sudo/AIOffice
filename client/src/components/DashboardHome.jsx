@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import useVisibilityInterval from '../hooks/useVisibilityInterval';
 import { createStartupRequestMeter } from '../lib/perf/requestMeter';
-
-const AUTO_REFRESH_MS = 90_000;
 
 const EMPTY_DASHBOARD = {
   channels_count: 0,
@@ -136,10 +133,6 @@ export default function DashboardHome({ onJumpToChannel, onOpenTasks, onOpenDeci
       return next;
     });
   }, [details, loadDetails]);
-
-  useVisibilityInterval(() => {
-    loadDashboard({ silent: true });
-  }, AUTO_REFRESH_MS, { enabled: true });
 
   useEffect(() => {
     loadDashboard();
