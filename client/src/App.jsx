@@ -16,6 +16,7 @@ import {
   THEME_MODE_KEY,
   THEME_SCHEME_KEY,
   LEGACY_THEME_MODE_KEY,
+  LEGACY_THEME_SCHEME_KEY,
   LEGACY_THEME_KEY,
   getThemeSchemeMeta,
   nextThemeScheme,
@@ -26,6 +27,7 @@ import {
 import useEscapeKey from './hooks/useEscapeKey';
 import useBodyScrollLock, { getBodyScrollLockSnapshot } from './hooks/useBodyScrollLock';
 import { clearAllBodyScrollLocks } from './hooks/scrollLockManager';
+import { createStartupRequestMeter } from './lib/perf/requestMeter';
 import './styles/tokens.css';
 import './styles/theme.css';
 import './styles/schemes.css';
@@ -43,6 +45,10 @@ const DEFAULT_PANE_LAYOUT = {
   'chat-files': [0.45, 0.55],
   'files-preview': [0.62, 0.38],
 };
+const DEFAULT_WORKSPACE_TAB = 'chat';
+const NAV_STATE_MARKER = '__aiOfficeNav';
+const WORKSPACE_TABS = new Set(['chat', 'files', 'git', 'tasks', 'spec', 'preview']);
+const TOP_TABS = new Set(['home', 'workspace', 'settings', 'create']);
 const INGESTION_TASKS = ['Index file tree', 'Summarize architecture', 'Generate Spec + Blueprint'];
 
 function channelForProject(projectName) {
@@ -205,6 +211,16 @@ function normalizeDraftRouteId(value) {
   return raw || '';
 }
 
+function normalizeTopTab(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  return TOP_TABS.has(raw) ? raw : 'home';
+}
+
+function normalizeWorkspaceTab(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  return WORKSPACE_TABS.has(raw) ? raw : DEFAULT_WORKSPACE_TAB;
+}
+
 function parseAppPathname(pathname) {
   const path = String(pathname || '/').trim() || '/';
   if (path === '/workspace') return { topTab: 'workspace', draftId: '' };
@@ -215,6 +231,39 @@ function parseAppPathname(pathname) {
     return { topTab: 'create', draftId: normalizeDraftRouteId(slug) };
   }
   return { topTab: 'home', draftId: '' };
+}
+
+function parseNavState(rawState, pathname = '/') {
+  if (!rawState || typeof rawState !== 'object' || rawState?.[NAV_STATE_MARKER] !== true) {
+    return null;
+  }
+  const parsedPath = parseAppPathname(pathname);
+  const topTab = normalizeTopTab(rawState.topTab || parsedPath.topTab);
+  const draftId = topTab === 'create'
+    ? normalizeDraftRouteId(rawState.draftId || parsedPath.draftId || '')
+    : '';
+  const workspaceTab = normalizeWorkspaceTab(rawState.workspaceTab);
+  const navIndex = Number.isFinite(rawState.navIndex)
+    ? Math.max(0, Math.trunc(rawState.navIndex))
+    : 0;
+  return {
+    topTab,
+    draftId,
+    workspaceTab,
+    navIndex,
+  };
+}
+
+function buildNavState({ topTab, workspaceTab, draftId, navIndex }) {
+  const normalizedTopTab = normalizeTopTab(topTab);
+  const normalizedWorkspaceTab = normalizeWorkspaceTab(workspaceTab);
+  return {
+    [NAV_STATE_MARKER]: true,
+    topTab: normalizedTopTab,
+    workspaceTab: normalizedWorkspaceTab,
+    draftId: normalizedTopTab === 'create' ? normalizeDraftRouteId(draftId || '') : '',
+    navIndex: Number.isFinite(navIndex) ? Math.max(0, Math.trunc(navIndex)) : 0,
+  };
 }
 
 function buildAppPathname(topTab, draftId = '') {
@@ -288,6 +337,8 @@ function readThemeScheme() {
   try {
     const next = localStorage.getItem(THEME_SCHEME_KEY);
     if (next) return normalizeThemeScheme(next);
+    const legacy = localStorage.getItem(LEGACY_THEME_SCHEME_KEY);
+    if (legacy) return normalizeThemeScheme(legacy);
   } catch {
     // ignore storage failures
   }
@@ -309,16 +360,32 @@ const INITIAL_THEME = resolveTheme(INITIAL_THEME_MODE, prefersLightScheme());
 applyRootThemeAttributes(INITIAL_THEME, INITIAL_THEME_SCHEME);
 
 export default function App() {
-  const initialRoute = useMemo(
-    () => parseAppPathname(typeof window !== 'undefined' ? window.location.pathname : '/'),
-    []
-  );
+  const initialRoute = useMemo(() => {
+    const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+    const parsedPath = parseAppPathname(pathname);
+    if (typeof window === 'undefined') {
+      return {
+        topTab: parsedPath.topTab,
+        draftId: parsedPath.draftId || '',
+        workspaceTab: DEFAULT_WORKSPACE_TAB,
+        navIndex: 0,
+      };
+    }
+    const navState = parseNavState(window.history.state, pathname);
+    return {
+      topTab: navState?.topTab ?? parsedPath.topTab,
+      draftId: navState?.draftId ?? parsedPath.draftId ?? '',
+      workspaceTab: navState?.workspaceTab ?? DEFAULT_WORKSPACE_TAB,
+      navIndex: navState?.navIndex ?? 0,
+    };
+  }, []);
   const [themeMode, setThemeMode] = useState(INITIAL_THEME_MODE);
   const [themeScheme, setThemeScheme] = useState(INITIAL_THEME_SCHEME);
   const [theme, setTheme] = useState(INITIAL_THEME);
   const [topTab, setTopTab] = useState(initialRoute.topTab);
   const [createRouteDraftId, setCreateRouteDraftId] = useState(initialRoute.draftId || '');
-  const [workspaceTab, setWorkspaceTab] = useState('builder');
+  const [workspaceTab, setWorkspaceTab] = useState(initialRoute.workspaceTab || DEFAULT_WORKSPACE_TAB);
+  const [navIndex, setNavIndex] = useState(initialRoute.navIndex || 0);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState('default');
   const [paletteEpoch, setPaletteEpoch] = useState(0);
@@ -346,13 +413,16 @@ export default function App() {
   const [leaveDraftModalOpen, setLeaveDraftModalOpen] = useState(false);
   const [layoutDebugOpen, setLayoutDebugOpen] = useState(false);
   const [layoutDebug, setLayoutDebug] = useState({
-    route: 'home/builder',
+    route: 'home/chat',
     bodyOverflow: '',
     scrollLocks: [],
     scrollContainers: [],
     updatedAt: '',
   });
-  const navHistoryRef = useRef([]);
+  const homeRequestMeterRef = useRef(null);
+  if (!homeRequestMeterRef.current) {
+    homeRequestMeterRef.current = createStartupRequestMeter('home-shell');
+  }
 
   const activeProject = active.project || 'ai-office';
   const activeChannel = active.channel || channelForProject(activeProject);
@@ -406,6 +476,7 @@ export default function App() {
       try {
         localStorage.setItem(THEME_MODE_KEY, themeMode);
         localStorage.setItem(THEME_SCHEME_KEY, themeScheme);
+        localStorage.setItem(LEGACY_THEME_SCHEME_KEY, themeScheme);
         localStorage.setItem(LEGACY_THEME_MODE_KEY, themeMode);
         localStorage.setItem(LEGACY_THEME_KEY, resolved);
       } catch {
@@ -426,35 +497,100 @@ export default function App() {
   }, [themeMode, themeScheme]);
 
   const navigateToTab = useCallback((nextTopTab, options = {}) => {
-    const normalized = String(nextTopTab || 'home').trim().toLowerCase();
-    const tab = ['home', 'workspace', 'settings', 'create'].includes(normalized) ? normalized : 'home';
+    const tab = normalizeTopTab(nextTopTab);
+    const nextWorkspaceTab = normalizeWorkspaceTab(options?.workspaceTab || workspaceTab);
     const nextDraftId = tab === 'create'
       ? normalizeDraftRouteId(options?.draftId || createRouteDraftId)
       : '';
     const pathname = buildAppPathname(tab, nextDraftId);
     const replace = Boolean(options?.replace);
+    const forcePush = Boolean(options?.forcePush);
     if (tab === 'create') {
       setCreateRouteDraftId(nextDraftId);
     } else if (createRouteDraftId) {
       setCreateRouteDraftId('');
     }
+    if (nextWorkspaceTab !== workspaceTab) {
+      setWorkspaceTab(nextWorkspaceTab);
+    }
     setTopTab(tab);
     if (typeof window !== 'undefined') {
       const samePath = window.location.pathname === pathname;
-      if (replace || samePath) {
-        window.history.replaceState({ topTab: tab, draftId: nextDraftId }, '', pathname);
+      const shouldReplace = !forcePush && (replace || samePath);
+      const nextNavIndex = shouldReplace ? navIndex : navIndex + 1;
+      const state = buildNavState({
+        topTab: tab,
+        workspaceTab: nextWorkspaceTab,
+        draftId: nextDraftId,
+        navIndex: nextNavIndex,
+      });
+      if (shouldReplace) {
+        window.history.replaceState(state, '', pathname);
       } else {
-        window.history.pushState({ topTab: tab, draftId: nextDraftId }, '', pathname);
+        window.history.pushState(state, '', pathname);
       }
+      setNavIndex(nextNavIndex);
     }
-  }, [createRouteDraftId]);
+  }, [createRouteDraftId, navIndex, workspaceTab]);
+
+  const setWorkspaceTabWithHistory = useCallback((nextTab, options = {}) => {
+    const normalized = normalizeWorkspaceTab(nextTab);
+    const replace = Boolean(options?.replace);
+    const forcePush = options?.forcePush !== undefined ? Boolean(options.forcePush) : !replace;
+    const changed = normalized !== workspaceTab;
+    if (changed) {
+      setWorkspaceTab(normalized);
+    }
+    if (topTab !== 'workspace') {
+      navigateToTab('workspace', { replace, workspaceTab: normalized });
+      return;
+    }
+    if (changed || replace) {
+      navigateToTab('workspace', {
+        replace,
+        workspaceTab: normalized,
+        forcePush,
+      });
+    }
+  }, [navigateToTab, topTab, workspaceTab]);
 
   useEffect(() => {
-    const onPopState = () => {
+    if (typeof window === 'undefined') return;
+    const marked = parseNavState(window.history.state, window.location.pathname);
+    if (marked) return;
+    const parsed = parseAppPathname(window.location.pathname);
+    const initialState = buildNavState({
+      topTab: parsed.topTab,
+      workspaceTab,
+      draftId: parsed.draftId || '',
+      navIndex: 0,
+    });
+    window.history.replaceState(initialState, '', window.location.pathname);
+    setNavIndex(0);
+    // initialize marker once on app boot
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onPopState = (event) => {
+      const marked = parseNavState(event?.state, window.location.pathname);
+      if (marked) {
+        setTopTab(marked.topTab);
+        setWorkspaceTab(marked.workspaceTab);
+        setCreateRouteDraftId(marked.draftId || '');
+        setNavIndex(marked.navIndex);
+        if (marked.topTab === 'create') {
+          setCreationDraft(loadCreationDraft(marked.draftId || null));
+        }
+        return;
+      }
       const parsed = parseAppPathname(window.location.pathname);
-      setTopTab(parsed.topTab);
+      const safeTopTab = normalizeTopTab(parsed.topTab);
+      setTopTab(safeTopTab);
+      setWorkspaceTab(DEFAULT_WORKSPACE_TAB);
       setCreateRouteDraftId(parsed.draftId || '');
-      if (parsed.topTab === 'create') {
+      setNavIndex(0);
+      if (safeTopTab === 'create') {
         setCreationDraft(loadCreationDraft(parsed.draftId || null));
       }
     };
@@ -463,6 +599,7 @@ export default function App() {
   }, []);
 
   const refreshProjects = async () => {
+    homeRequestMeterRef.current?.track('/api/projects');
     const resp = await fetch('/api/projects');
     const payload = resp.ok ? await resp.json() : { projects: [] };
     setProjects(Array.isArray(payload?.projects) ? payload.projects : []);
@@ -470,6 +607,7 @@ export default function App() {
   };
 
   const refreshCodexMismatch = async () => {
+    homeRequestMeterRef.current?.track('/api/agents?active_only=false');
     const resp = await fetch('/api/agents?active_only=false');
     const payload = resp.ok ? await resp.json() : [];
     const codex = (payload || []).find((item) => item.id === 'codex');
@@ -528,6 +666,7 @@ export default function App() {
         await refreshProjects();
         await refreshCodexMismatch();
 
+        homeRequestMeterRef.current?.track('/api/projects/active/main');
         const activeResp = await fetch('/api/projects/active/main');
         const activePayload = activeResp.ok ? await activeResp.json() : null;
         if (!cancelled && activePayload) {
@@ -547,6 +686,12 @@ export default function App() {
     };
     // run once on app boot; route-specific draft updates handled below
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      homeRequestMeterRef.current?.stop('app-unmount');
+    };
   }, []);
 
   useEffect(() => {
@@ -770,8 +915,7 @@ export default function App() {
     await openProject(data);
     const requestedTab = String(options?.openTab || 'spec').trim().toLowerCase();
     const nextTab = ['chat', 'spec', 'preview'].includes(requestedTab) ? requestedTab : 'spec';
-    setWorkspaceTab(nextTab);
-    navigateToTab('workspace');
+    navigateToTab('workspace', { workspaceTab: nextTab });
     return data;
   };
 
@@ -838,8 +982,7 @@ export default function App() {
   };
 
   const openWorkspacePanel = (panel) => {
-    navigateToTab('workspace');
-    setWorkspaceTab(panel || 'builder');
+    setWorkspaceTabWithHistory(panel || DEFAULT_WORKSPACE_TAB);
   };
 
   const startPreviewFromPalette = async () => {
@@ -986,22 +1129,14 @@ export default function App() {
       }
       if (event.key === '`') {
         event.preventDefault();
-        navigateToTab('workspace');
-        setWorkspaceTab('chat');
+        setWorkspaceTabWithHistory(DEFAULT_WORKSPACE_TAB);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [navigateToTab]);
+  }, [setWorkspaceTabWithHistory]);
 
   useEffect(() => {
-    const history = navHistoryRef.current;
-    if (history[history.length - 1] !== routeKey) {
-      history.push(routeKey);
-      if (history.length > 80) {
-        history.splice(0, history.length - 80);
-      }
-    }
     if (IS_DEV) {
       console.debug('[layout] route', routeKey);
     }
@@ -1030,52 +1165,43 @@ export default function App() {
     };
   }, [layoutDebugOpen, collectLayoutDebugState]);
 
-  const goBack = useCallback(() => {
+  const canGoBack = useMemo(() => {
+    if (typeof window === 'undefined') return topTab !== 'home';
+    const marked = parseNavState(window.history.state, window.location.pathname);
+    const hasMarkedHistory = window.history.length > 1 && Boolean(marked?.navIndex > 0);
+    return hasMarkedHistory || topTab !== 'home';
+  }, [navIndex, topTab]);
+
+  const safeBack = useCallback(() => {
     const detail = { handled: false, source: 'back-button' };
     window.dispatchEvent(new CustomEvent('ai-office:escape', { detail }));
     if (detail.handled) return;
 
-    const history = navHistoryRef.current;
-    if (history.length > 1) {
-      history.pop();
-      const previous = String(history[history.length - 1] || '');
-      const [prevTopToken, prevWorkspaceTab] = previous.split('|');
-      const [prevTopTab, prevDraftId] = String(prevTopToken || '').split(':');
-      navigateToTab(prevTopTab || 'workspace', {
-        draftId: prevTopTab === 'create' ? prevDraftId : '',
-      });
-      if ((prevTopTab || 'workspace') === 'workspace') {
-        setWorkspaceTab(prevWorkspaceTab || 'chat');
+    if (typeof window !== 'undefined') {
+      const marked = parseNavState(window.history.state, window.location.pathname);
+      if (window.history.length > 1 && marked?.navIndex > 0) {
+        window.history.back();
+        return;
       }
-      return;
     }
 
-    if (topTab !== 'workspace') {
-      navigateToTab('workspace');
-      setWorkspaceTab('chat');
+    if (topTab !== 'home') {
+      navigateToTab('home', { replace: true });
       return;
     }
-
-    if (workspaceTab !== 'chat') {
-      setWorkspaceTab('chat');
-      return;
-    }
-
-    navigateToTab('home');
-  }, [navigateToTab, topTab, workspaceTab]);
+  }, [navigateToTab, topTab]);
 
   const resetUiState = useCallback(() => {
     clearAllBodyScrollLocks();
     window.dispatchEvent(new CustomEvent('ai-office:reset-ui-state'));
     setPaletteOpen(false);
     setLeaveDraftModalOpen(false);
-    navigateToTab('workspace');
-    setWorkspaceTab('chat');
+    setWorkspaceTabWithHistory(DEFAULT_WORKSPACE_TAB, { replace: true, forcePush: false });
     setError('');
     if (IS_DEV) {
       collectLayoutDebugState();
     }
-  }, [collectLayoutDebugState, navigateToTab]);
+  }, [collectLayoutDebugState, setWorkspaceTabWithHistory]);
 
   useEscapeKey((event) => {
     const detail = { handled: false, source: 'global-escape' };
@@ -1085,13 +1211,12 @@ export default function App() {
       return;
     }
     if (topTab !== 'workspace') {
-      navigateToTab('workspace');
-      setWorkspaceTab('chat');
+      setWorkspaceTabWithHistory(DEFAULT_WORKSPACE_TAB, { replace: true, forcePush: false });
       event.preventDefault();
       return;
     }
-    if (workspaceTab !== 'chat') {
-      setWorkspaceTab('chat');
+    if (workspaceTab !== DEFAULT_WORKSPACE_TAB) {
+      setWorkspaceTabWithHistory(DEFAULT_WORKSPACE_TAB, { replace: true, forcePush: false });
       event.preventDefault();
     }
   }, true);
@@ -1108,8 +1233,6 @@ export default function App() {
   return (
     <div
       className={`app app-v2 ${previewFocus ? 'preview-focus-enabled' : ''}`}
-      data-theme={theme}
-      data-scheme={themeScheme}
     >
       {!previewFocus && topTab !== 'create' && (
         <ProjectsSidebar
@@ -1126,7 +1249,12 @@ export default function App() {
       <div className="app-main-v2">
         <header className="app-topbar-v2">
           <div className="app-header-left pywebview-no-drag">
-            <button className="refresh-btn ui-btn app-back-btn pywebview-no-drag" onClick={goBack}>
+            <button
+              className={`refresh-btn ui-btn app-back-btn pywebview-no-drag ${canGoBack ? '' : 'is-disabled'}`}
+              onClick={safeBack}
+              disabled={!canGoBack}
+              aria-disabled={!canGoBack}
+            >
               Back
             </button>
             <div className="app-drag-region pywebview-drag-region">
@@ -1153,7 +1281,7 @@ export default function App() {
                 onClick={cycleThemeScheme}
                 data-tooltip="Cycle color scheme"
               >
-                🎨 {schemeLabel}
+                🎨 Scheme: {schemeLabel}
               </button>
               <span className="pill ui-chip">Mode: {themeLabel}</span>
               {IS_DEV && (
@@ -1180,7 +1308,7 @@ export default function App() {
                   onClick={cycleThemeScheme}
                   data-tooltip="Cycle color scheme"
                 >
-                  🎨 {schemeLabel}
+                  🎨 Scheme: {schemeLabel}
                 </button>
                 <span className="pill ui-chip">Mode: {themeLabel}</span>
                 {IS_DEV && (
@@ -1261,7 +1389,7 @@ export default function App() {
             projectSidebarCollapsed={projectsSidebarCollapsed}
             onToggleProjectSidebar={() => setProjectsSidebarCollapsed((prev) => !prev)}
             activeTab={workspaceTab}
-            onActiveTabChange={setWorkspaceTab}
+            onActiveTabChange={setWorkspaceTabWithHistory}
             creationDraft={creationDraft}
             onCreationDraftChange={updateCreationDraft}
             onCreateProjectFromDraft={createProjectFromDraft}

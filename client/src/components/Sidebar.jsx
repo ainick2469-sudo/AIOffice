@@ -1,12 +1,43 @@
-import { useState, useEffect, useRef } from 'react';
-import { fetchAgents, fetchChannels, fetchMessages } from '../api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import useVisibilityInterval from '../hooks/useVisibilityInterval';
+import { createStartupRequestMeter } from '../lib/perf/requestMeter';
 
-const CHANNEL_REFRESH_MS = 10000;
-const AGENT_REFRESH_MS = 15000;
-const UNREAD_REFRESH_MS = 5000;
-const UNREAD_SAMPLE_LIMIT = 100;
+const CHANNEL_REFRESH_MS = 30_000;
+const AGENT_REFRESH_MS = 45_000;
+const STATUS_REFRESH_MS = 45_000;
+const ACTIVITY_REFRESH_MS = 30_000;
+const ACTIVITY_LIMIT = 200;
+const VISIBLE_UNREAD_LIMIT = 20;
+const SEEN_KEY_PREFIX = 'ai-office:seen-msg:global:';
 
-export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick, theme = 'dark', onToggleTheme }) {
+function readSeenMessageId(channelId) {
+  if (!channelId) return null;
+  try {
+    const raw = localStorage.getItem(`${SEEN_KEY_PREFIX}${channelId}`);
+    if (!raw) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSeenMessageId(channelId, messageId) {
+  if (!channelId || !Number.isFinite(messageId)) return;
+  try {
+    localStorage.setItem(`${SEEN_KEY_PREFIX}${channelId}`, String(Math.max(0, Math.trunc(messageId))));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export default function Sidebar({
+  currentChannel,
+  onSelectChannel,
+  onAgentClick,
+  theme = 'dark',
+  onToggleTheme,
+}) {
   const [channels, setChannels] = useState([]);
   const [agents, setAgents] = useState([]);
   const [showCreate, setShowCreate] = useState(false);
@@ -18,11 +49,30 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick,
     claude: false,
     openai: false,
   });
+  const [dmExpanded, setDmExpanded] = useState(false);
+  const [channelActivity, setChannelActivity] = useState({});
 
   const seenMessageIdsRef = useRef({});
-  const unreadInitRef = useRef(false);
   const previousUnreadRef = useRef({});
   const audioContextRef = useRef(null);
+  const requestMeterRef = useRef(null);
+  if (!requestMeterRef.current) {
+    requestMeterRef.current = createStartupRequestMeter('sidebar');
+  }
+
+  const channelsAbortRef = useRef(null);
+  const agentsAbortRef = useRef(null);
+  const statusAbortRef = useRef(null);
+  const activityAbortRef = useRef(null);
+
+  const channelsRefreshingRef = useRef(false);
+  const agentsRefreshingRef = useRef(false);
+  const statusRefreshingRef = useRef(false);
+  const activityRefreshingRef = useRef(false);
+
+  const trackRequest = useCallback((endpoint) => {
+    requestMeterRef.current?.track(endpoint);
+  }, []);
 
   const playNotificationDing = () => {
     if (typeof window === 'undefined') return;
@@ -57,62 +107,216 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick,
     }
   };
 
-  const loadChannels = () => {
-    fetchChannels().then(setChannels).catch(console.error);
-  };
+  const loadChannels = useCallback(async () => {
+    if (channelsRefreshingRef.current) return;
+    channelsRefreshingRef.current = true;
+    channelsAbortRef.current?.abort();
+    const controller = new AbortController();
+    channelsAbortRef.current = controller;
+    try {
+      trackRequest('/api/channels');
+      const resp = await fetch('/api/channels', { signal: controller.signal });
+      if (!resp.ok) throw new Error(`Failed to load channels (${resp.status})`);
+      const payload = await resp.json();
+      setChannels(Array.isArray(payload) ? payload : []);
+    } catch (err) {
+      if (err?.name !== 'AbortError') {
+        console.error('Failed to load channels:', err);
+      }
+    } finally {
+      if (channelsAbortRef.current === controller) {
+        channelsAbortRef.current = null;
+      }
+      channelsRefreshingRef.current = false;
+    }
+  }, [trackRequest]);
 
-  const loadAgents = () => {
-    fetchAgents().then(setAgents).catch(console.error);
-  };
+  const loadAgents = useCallback(async () => {
+    if (agentsRefreshingRef.current) return;
+    agentsRefreshingRef.current = true;
+    agentsAbortRef.current?.abort();
+    const controller = new AbortController();
+    agentsAbortRef.current = controller;
+    try {
+      trackRequest('/api/agents?active_only=true');
+      const resp = await fetch('/api/agents?active_only=true', { signal: controller.signal });
+      if (!resp.ok) throw new Error(`Failed to load agents (${resp.status})`);
+      const payload = await resp.json();
+      setAgents(Array.isArray(payload) ? payload : []);
+    } catch (err) {
+      if (err?.name !== 'AbortError') {
+        console.error('Failed to load agents:', err);
+      }
+    } finally {
+      if (agentsAbortRef.current === controller) {
+        agentsAbortRef.current = null;
+      }
+      agentsRefreshingRef.current = false;
+    }
+  }, [trackRequest]);
 
-  const loadBackendStatus = () => {
-    Promise.all([
-      fetch('/api/ollama/status').then(r => (r.ok ? r.json() : { available: false })),
-      fetch('/api/claude/status').then(r => (r.ok ? r.json() : { available: false })),
-      fetch('/api/openai/status').then(r => (r.ok ? r.json() : { available: false })),
-    ])
-      .then(([ollama, claude, openai]) => {
-        setBackendStatus({
-          ollama: Boolean(ollama?.available),
-          claude: Boolean(claude?.available),
-          openai: Boolean(openai?.available),
-        });
-      })
-      .catch(() => {
-        setBackendStatus({ ollama: false, claude: false, openai: false });
+  const loadBackendStatus = useCallback(async () => {
+    if (statusRefreshingRef.current) return;
+    statusRefreshingRef.current = true;
+    statusAbortRef.current?.abort();
+    const controller = new AbortController();
+    statusAbortRef.current = controller;
+    try {
+      const statuses = await Promise.all([
+        (async () => {
+          trackRequest('/api/ollama/status');
+          const r = await fetch('/api/ollama/status', { signal: controller.signal });
+          return r.ok ? r.json() : { available: false };
+        })(),
+        (async () => {
+          trackRequest('/api/claude/status');
+          const r = await fetch('/api/claude/status', { signal: controller.signal });
+          return r.ok ? r.json() : { available: false };
+        })(),
+        (async () => {
+          trackRequest('/api/openai/status');
+          const r = await fetch('/api/openai/status', { signal: controller.signal });
+          return r.ok ? r.json() : { available: false };
+        })(),
+      ]);
+      setBackendStatus({
+        ollama: Boolean(statuses[0]?.available),
+        claude: Boolean(statuses[1]?.available),
+        openai: Boolean(statuses[2]?.available),
       });
-  };
+    } catch (err) {
+      if (err?.name !== 'AbortError') {
+        setBackendStatus({ ollama: false, claude: false, openai: false });
+      }
+    } finally {
+      if (statusAbortRef.current === controller) {
+        statusAbortRef.current = null;
+      }
+      statusRefreshingRef.current = false;
+    }
+  }, [trackRequest]);
+
+  const loadChannelActivity = useCallback(async () => {
+    if (!channels.length || activityRefreshingRef.current) return;
+    activityRefreshingRef.current = true;
+    activityAbortRef.current?.abort();
+    const controller = new AbortController();
+    activityAbortRef.current = controller;
+    try {
+      trackRequest('/api/channels/activity');
+      const resp = await fetch(`/api/channels/activity?limit=${ACTIVITY_LIMIT}`, { signal: controller.signal });
+      if (!resp.ok) throw new Error(`Failed to load channel activity (${resp.status})`);
+      const payload = await resp.json();
+      const rows = Array.isArray(payload?.activity)
+        ? payload.activity
+        : Array.isArray(payload)
+          ? payload
+          : [];
+
+      const activityMap = {};
+      rows.forEach((entry) => {
+        const channelId = String(entry?.channel_id || '').trim();
+        if (!channelId) return;
+        const latestMessageId = Number(entry?.latest_message_id || 0);
+        activityMap[channelId] = {
+          ...entry,
+          latest_message_id: Number.isFinite(latestMessageId) ? latestMessageId : 0,
+        };
+      });
+      setChannelActivity(activityMap);
+
+      const visibleChannels = channels
+        .filter((ch) => ch?.type === 'group' || (dmExpanded && ch?.type === 'dm'))
+        .slice(0, VISIBLE_UNREAD_LIMIT);
+      const relevantIds = new Set(visibleChannels.map((ch) => ch.id));
+      if (currentChannel) relevantIds.add(currentChannel);
+
+      const nextUnread = {};
+      relevantIds.forEach((channelId) => {
+        const latestId = Number(activityMap[channelId]?.latest_message_id || 0);
+        if (!Number.isFinite(latestId)) return;
+
+        if (seenMessageIdsRef.current[channelId] == null) {
+          const persisted = readSeenMessageId(channelId);
+          if (persisted != null) {
+            seenMessageIdsRef.current[channelId] = persisted;
+          }
+        }
+
+        if (currentChannel === channelId) {
+          seenMessageIdsRef.current[channelId] = latestId;
+          writeSeenMessageId(channelId, latestId);
+          nextUnread[channelId] = 0;
+          return;
+        }
+
+        if (seenMessageIdsRef.current[channelId] == null) {
+          seenMessageIdsRef.current[channelId] = latestId;
+          writeSeenMessageId(channelId, latestId);
+          nextUnread[channelId] = 0;
+          return;
+        }
+
+        const seenId = Number(seenMessageIdsRef.current[channelId] || 0);
+        nextUnread[channelId] = latestId > seenId ? 1 : 0;
+      });
+
+      setUnreadCounts(nextUnread);
+    } catch (err) {
+      if (err?.name !== 'AbortError') {
+        console.error('Failed to load channel activity:', err);
+      }
+    } finally {
+      if (activityAbortRef.current === controller) {
+        activityAbortRef.current = null;
+      }
+      activityRefreshingRef.current = false;
+    }
+  }, [channels, currentChannel, dmExpanded, trackRequest]);
 
   useEffect(() => {
     loadChannels();
     loadAgents();
     loadBackendStatus();
-    const interval = setInterval(loadChannels, CHANNEL_REFRESH_MS);
-    const agentInterval = setInterval(loadAgents, AGENT_REFRESH_MS);
-    const statusInterval = setInterval(loadBackendStatus, 15000);
     return () => {
-      clearInterval(interval);
-      clearInterval(agentInterval);
-      clearInterval(statusInterval);
+      channelsAbortRef.current?.abort();
+      agentsAbortRef.current?.abort();
+      statusAbortRef.current?.abort();
+      activityAbortRef.current?.abort();
+      requestMeterRef.current?.stop('sidebar-unmount');
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {});
+      }
     };
-  }, []);
+  }, [loadAgents, loadBackendStatus, loadChannels]);
+
+  useVisibilityInterval(loadChannels, CHANNEL_REFRESH_MS, { enabled: true });
+  useVisibilityInterval(loadAgents, AGENT_REFRESH_MS, { enabled: true });
+  useVisibilityInterval(loadBackendStatus, STATUS_REFRESH_MS, { enabled: true });
+  useVisibilityInterval(loadChannelActivity, ACTIVITY_REFRESH_MS, { enabled: channels.length > 0 });
+
+  useEffect(() => {
+    loadChannelActivity();
+  }, [loadChannelActivity]);
 
   useEffect(() => {
     if (!currentChannel) return;
+    const latestForCurrent = Number(channelActivity[currentChannel]?.latest_message_id || 0);
+    if (!Number.isFinite(latestForCurrent) || latestForCurrent <= 0) return;
+    seenMessageIdsRef.current[currentChannel] = latestForCurrent;
+    writeSeenMessageId(currentChannel, latestForCurrent);
+    setUnreadCounts((prev) => {
+      if (!prev[currentChannel]) return prev;
+      return { ...prev, [currentChannel]: 0 };
+    });
+  }, [channelActivity, currentChannel]);
 
-    let cancelled = false;
-    fetchMessages(currentChannel, 1)
-      .then(messages => {
-        if (cancelled) return;
-        const latestId = messages.length ? messages[messages.length - 1].id : 0;
-        seenMessageIdsRef.current[currentChannel] = latestId;
-      })
-      .catch(() => {});
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentChannel]);
+  useEffect(() => {
+    const validIds = new Set(channels.map((ch) => ch.id));
+    Object.keys(seenMessageIdsRef.current).forEach((id) => {
+      if (!validIds.has(id)) delete seenMessageIdsRef.current[id];
+    });
+  }, [channels]);
 
   useEffect(() => {
     const handleAgentsUpdated = () => {
@@ -123,85 +327,7 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick,
     return () => {
       window.removeEventListener('agents-updated', handleAgentsUpdated);
     };
-  }, []);
-
-  useEffect(() => {
-    if (channels.length === 0) return;
-
-    const validIds = new Set(channels.map(ch => ch.id));
-    Object.keys(seenMessageIdsRef.current).forEach(id => {
-      if (!validIds.has(id)) delete seenMessageIdsRef.current[id];
-    });
-
-    let cancelled = false;
-
-    const syncUnread = async (bootstrap = false) => {
-      try {
-        const snapshots = await Promise.all(
-          channels.map(async (ch) => {
-            try {
-              const messages = await fetchMessages(ch.id, UNREAD_SAMPLE_LIMIT);
-              const latestId = messages.length ? messages[messages.length - 1].id : 0;
-              return { channelId: ch.id, latestId, messages };
-            } catch (err) {
-              console.error(`Failed to fetch messages for channel ${ch.id}:`, err);
-              const fallbackSeen = seenMessageIdsRef.current[ch.id] || 0;
-              return { channelId: ch.id, latestId: fallbackSeen, messages: [] };
-            }
-          })
-        );
-
-        if (cancelled) return;
-
-        setUnreadCounts(() => {
-          const next = {};
-
-          snapshots.forEach(({ channelId, latestId, messages }) => {
-            if (bootstrap && seenMessageIdsRef.current[channelId] == null) {
-              seenMessageIdsRef.current[channelId] = latestId;
-            }
-
-            if (channelId === currentChannel) {
-              seenMessageIdsRef.current[channelId] = latestId;
-              next[channelId] = 0;
-              return;
-            }
-
-            const seenId = seenMessageIdsRef.current[channelId];
-            if (seenId == null) {
-              seenMessageIdsRef.current[channelId] = latestId;
-              next[channelId] = 0;
-              return;
-            }
-
-            let unread = 0;
-            for (const msg of messages) {
-              if (msg.id > seenId) unread += 1;
-            }
-            next[channelId] = unread;
-          });
-
-          return next;
-        });
-      } catch (err) {
-        console.error('Failed to sync unread counts:', err);
-      }
-    };
-
-    const bootstrap = !unreadInitRef.current;
-    syncUnread(bootstrap).finally(() => {
-      unreadInitRef.current = true;
-    });
-
-    const interval = setInterval(() => {
-      syncUnread(false);
-    }, UNREAD_REFRESH_MS);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [channels, currentChannel]);
+  }, [loadAgents, loadBackendStatus]);
 
   useEffect(() => {
     let shouldPlay = false;
@@ -212,22 +338,13 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick,
         break;
       }
     }
-
     previousUnreadRef.current = { ...unreadCounts };
     if (shouldPlay) playNotificationDing();
-  }, [unreadCounts, currentChannel]);
-
-  useEffect(() => {
-    return () => {
-      if (audioContextRef.current) {
-        audioContextRef.current.close().catch(() => {});
-      }
-    };
-  }, []);
+  }, [currentChannel, unreadCounts]);
 
   const agentMap = {};
-  agents.forEach(a => {
-    agentMap[a.id] = a;
+  agents.forEach((agent) => {
+    agentMap[agent.id] = agent;
   });
 
   const createRoom = () => {
@@ -237,8 +354,8 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: newName.trim() }),
     })
-      .then(r => r.json())
-      .then(ch => {
+      .then((r) => r.json())
+      .then((ch) => {
         setNewName('');
         setShowCreate(false);
         loadChannels();
@@ -247,37 +364,30 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick,
   };
 
   const deleteRoom = (chId, deleteMessages) => {
-    fetch(`/api/channels/${chId}?delete_messages=${deleteMessages}`, {
-      method: 'DELETE',
-    }).then(() => {
+    fetch(`/api/channels/${chId}?delete_messages=${deleteMessages}`, { method: 'DELETE' }).then(() => {
       setDeleteConfirm(null);
       loadChannels();
       if (currentChannel === chId) onSelectChannel('main');
     });
   };
 
-  const groupChannels = channels.filter(c => c.type === 'group');
-  const dmChannels = channels.filter(c => c.type === 'dm');
-
   const handleSelectChannel = (channelId) => {
-    setUnreadCounts(prev => {
+    const latestMessageId = Number(channelActivity[channelId]?.latest_message_id || 0);
+    if (Number.isFinite(latestMessageId) && latestMessageId > 0) {
+      seenMessageIdsRef.current[channelId] = latestMessageId;
+      writeSeenMessageId(channelId, latestMessageId);
+    }
+    setUnreadCounts((prev) => {
       if (!prev[channelId]) return prev;
       return { ...prev, [channelId]: 0 };
     });
     onSelectChannel(channelId);
-
-    fetchMessages(channelId, 1)
-      .then((messages) => {
-        const latestId = messages.length ? messages[messages.length - 1].id : 0;
-        seenMessageIdsRef.current[channelId] = latestId;
-      })
-      .catch(() => {});
   };
 
   const renderUnreadBadge = (channelId) => {
     const count = unreadCounts[channelId] || 0;
     if (count <= 0) return null;
-    return <span className="unread-badge">{count > 99 ? '99+' : count}</span>;
+    return <span className="unread-badge">New</span>;
   };
 
   const isAgentOnline = (agent) => {
@@ -286,6 +396,9 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick,
     if (agent.backend === 'openai') return backendStatus.openai;
     return backendStatus.ollama;
   };
+
+  const groupChannels = channels.filter((c) => c.type === 'group');
+  const dmChannels = channels.filter((c) => c.type === 'dm');
 
   return (
     <div className="sidebar">
@@ -300,9 +413,14 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick,
       <div className="channel-section">
         <div className="section-header">
           <h3>Channels</h3>
-          <button className="add-room-btn" onClick={() => setShowCreate(!showCreate)} title="New room">
-            +
-          </button>
+          <div className="section-header-actions">
+            <button className="add-room-btn" onClick={() => { loadChannels(); loadChannelActivity(); }} title="Refresh channels">
+              ↻
+            </button>
+            <button className="add-room-btn" onClick={() => setShowCreate(!showCreate)} title="New room">
+              +
+            </button>
+          </div>
         </div>
 
         {showCreate && (
@@ -310,16 +428,16 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick,
             <input
               type="text"
               value={newName}
-              onChange={e => setNewName(e.target.value)}
+              onChange={(e) => setNewName(e.target.value)}
               placeholder="Room name..."
               autoFocus
-              onKeyDown={e => e.key === 'Enter' && createRoom()}
+              onKeyDown={(e) => e.key === 'Enter' && createRoom()}
             />
             <button onClick={createRoom}>Create</button>
           </div>
         )}
 
-        {groupChannels.map(ch => (
+        {groupChannels.map((ch) => (
           <div key={ch.id} className={`channel-row ${currentChannel === ch.id ? 'active' : ''}`}>
             <button className="channel-btn" onClick={() => handleSelectChannel(ch.id)} title={ch.name}>
               <span className="channel-label"># {ch.name}</span>
@@ -343,9 +461,9 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick,
 
       {deleteConfirm && (
         <div className="delete-confirm-overlay" onClick={() => setDeleteConfirm(null)}>
-          <div className="delete-confirm-box" onClick={e => e.stopPropagation()}>
+          <div className="delete-confirm-box" onClick={(e) => e.stopPropagation()}>
             <p>
-              Delete <strong>#{channels.find(c => c.id === deleteConfirm)?.name}</strong>?
+              Delete <strong>#{channels.find((c) => c.id === deleteConfirm)?.name}</strong>?
             </p>
             <button className="del-btn del-all" onClick={() => deleteRoom(deleteConfirm, true)}>
               Delete room + all messages
@@ -361,45 +479,55 @@ export default function Sidebar({ currentChannel, onSelectChannel, onAgentClick,
       )}
 
       <div className="channel-section">
-        <h3>Direct Messages</h3>
-        {dmChannels.map(ch => {
-          const agent = agentMap[ch.agent_id];
-          return (
-            <button
-              key={ch.id}
-              className={`channel-btn dm-btn ${currentChannel === ch.id ? 'active' : ''}`}
-              onClick={() => handleSelectChannel(ch.id)}
-            >
-              <span className="channel-main">
-                <span className="agent-dot" style={{ backgroundColor: agent?.color || '#6B7280' }} />
-                <span className="dm-label">
-                  {agent?.emoji || 'AI'} {ch.name.replace('DM: ', '')}
+        <div className="section-header">
+          <h3>Direct Messages</h3>
+          <button
+            className="add-room-btn"
+            onClick={() => setDmExpanded((prev) => !prev)}
+            title={dmExpanded ? 'Collapse direct messages' : 'Expand direct messages'}
+          >
+            {dmExpanded ? '−' : '+'}
+          </button>
+        </div>
+        {dmExpanded &&
+          dmChannels.map((ch) => {
+            const agent = agentMap[ch.agent_id];
+            return (
+              <button
+                key={ch.id}
+                className={`channel-btn dm-btn ${currentChannel === ch.id ? 'active' : ''}`}
+                onClick={() => handleSelectChannel(ch.id)}
+              >
+                <span className="channel-main">
+                  <span className="agent-dot" style={{ backgroundColor: agent?.color || '#6B7280' }} />
+                  <span className="dm-label">
+                    {agent?.emoji || 'AI'} {ch.name.replace('DM: ', '')}
+                  </span>
                 </span>
-              </span>
-              {renderUnreadBadge(ch.id)}
-            </button>
-          );
-        })}
+                {renderUnreadBadge(ch.id)}
+              </button>
+            );
+          })}
       </div>
 
       <div className="channel-section staff-section">
         <h3>Staff ({agents.length})</h3>
-        {agents.map(a => (
+        {agents.map((agent) => (
           <div
-            key={a.id}
+            key={agent.id}
             className="staff-item"
-            onClick={() => onAgentClick?.(a.id)}
+            onClick={() => onAgentClick?.(agent.id)}
             style={{ cursor: 'pointer' }}
-            title={`${a.display_name}'s profile`}
+            title={`${agent.display_name}'s profile`}
           >
-            <span className="agent-dot" style={{ backgroundColor: a.color }} />
-            <span className="staff-emoji">{a.emoji}</span>
-            <span className="staff-name">{a.display_name}</span>
-            <span className={`staff-presence ${isAgentOnline(a) ? 'online' : 'offline'}`}>
-              {isAgentOnline(a) ? 'Online' : 'Offline'}
+            <span className="agent-dot" style={{ backgroundColor: agent.color }} />
+            <span className="staff-emoji">{agent.emoji}</span>
+            <span className="staff-name">{agent.display_name}</span>
+            <span className={`staff-presence ${isAgentOnline(agent) ? 'online' : 'offline'}`}>
+              {isAgentOnline(agent) ? 'Online' : 'Offline'}
             </span>
-            <span className="staff-role">{a.role}</span>
-            {(a.backend === 'claude' || a.backend === 'openai') && <span className="staff-badge">API</span>}
+            <span className="staff-role">{agent.role}</span>
+            {(agent.backend === 'claude' || agent.backend === 'openai') && <span className="staff-badge">API</span>}
           </div>
         ))}
       </div>

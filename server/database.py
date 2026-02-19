@@ -880,6 +880,133 @@ async def get_channels() -> list[dict]:
         await db.close()
 
 
+async def get_channel_activity(limit: int = 200) -> list[dict]:
+    safe_limit = max(1, min(int(limit or 200), 1000))
+    db = await get_db()
+    try:
+        rows = await db.execute(
+            """
+            SELECT
+              m.channel AS channel_id,
+              m.id AS latest_message_id,
+              m.created_at AS latest_message_ts,
+              m.sender AS latest_sender,
+              SUBSTR(
+                REPLACE(REPLACE(COALESCE(m.content, ''), X'0D', ' '), X'0A', ' '),
+                1,
+                180
+              ) AS latest_preview
+            FROM messages m
+            JOIN (
+              SELECT channel, MAX(id) AS latest_id
+              FROM messages
+              GROUP BY channel
+            ) latest
+              ON latest.channel = m.channel
+             AND latest.latest_id = m.id
+            ORDER BY m.id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        )
+        return [dict(r) for r in await rows.fetchall()]
+    finally:
+        await db.close()
+
+
+async def get_dashboard_summary(limit_recent: int = 8) -> dict:
+    safe_recent = max(1, min(int(limit_recent or 8), 50))
+    db = await get_db()
+    try:
+        channels_row = await db.execute("SELECT COUNT(*) AS c FROM channels")
+        channels_count = int((await channels_row.fetchone())["c"] or 0)
+
+        agents_row = await db.execute("SELECT COUNT(*) AS c FROM agents WHERE active = 1")
+        agents_count = int((await agents_row.fetchone())["c"] or 0)
+
+        task_rows = await db.execute(
+            """
+            SELECT LOWER(COALESCE(status, 'backlog')) AS status, COUNT(*) AS c
+            FROM tasks
+            WHERE LOWER(COALESCE(status, '')) != 'done'
+            GROUP BY LOWER(COALESCE(status, 'backlog'))
+            """
+        )
+        status_counts = {"backlog": 0, "in_progress": 0, "review": 0, "blocked": 0}
+        tasks_open_count = 0
+        for row in await task_rows.fetchall():
+            status = (row["status"] or "backlog").strip().lower()
+            count = int(row["c"] or 0)
+            tasks_open_count += count
+            if status in status_counts:
+                status_counts[status] = count
+
+        decisions_row = await db.execute("SELECT COUNT(*) AS c FROM decisions")
+        decisions_count = int((await decisions_row.fetchone())["c"] or 0)
+
+        activity_rows = await db.execute(
+            """
+            SELECT
+              m.channel AS channel_id,
+              m.id AS latest_message_id,
+              m.created_at AS latest_message_ts,
+              m.sender AS latest_sender,
+              SUBSTR(
+                REPLACE(REPLACE(COALESCE(m.content, ''), X'0D', ' '), X'0A', ' '),
+                1,
+                180
+              ) AS latest_preview
+            FROM messages m
+            JOIN (
+              SELECT channel, MAX(id) AS latest_id
+              FROM messages
+              GROUP BY channel
+            ) latest
+              ON latest.channel = m.channel
+             AND latest.latest_id = m.id
+            ORDER BY m.id DESC
+            LIMIT ?
+            """,
+            (safe_recent,),
+        )
+        recent_activity = [dict(r) for r in await activity_rows.fetchall()]
+
+        provider_rows = await db.execute(
+            """
+            SELECT
+              pc.provider,
+              pc.default_model,
+              pc.key_ref,
+              CASE WHEN ps.key_ref IS NULL THEN 0 ELSE 1 END AS has_secret
+            FROM provider_configs pc
+            LEFT JOIN provider_secrets ps ON ps.key_ref = pc.key_ref
+            WHERE pc.provider IN ('openai', 'claude', 'ollama')
+            """
+        )
+        provider_status_summary: dict[str, dict] = {}
+        for row in await provider_rows.fetchall():
+            provider = (row["provider"] or "").strip().lower()
+            if not provider:
+                continue
+            provider_status_summary[provider] = {
+                "configured": bool(row["has_secret"]) or provider == "ollama",
+                "default_model": row["default_model"],
+                "key_ref": row["key_ref"],
+            }
+    finally:
+        await db.close()
+
+    return {
+        "channels_count": channels_count,
+        "agents_count": agents_count,
+        "tasks_open_count": tasks_open_count,
+        "task_status_counts": status_counts,
+        "decisions_count": decisions_count,
+        "provider_status_summary": provider_status_summary,
+        "recent_activity": recent_activity,
+    }
+
+
 async def create_channel(channel_id: str, name: str, ch_type: str = "group") -> dict:
     db = await get_db()
     try:

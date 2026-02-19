@@ -1,6 +1,7 @@
 export const THEME_MODE_KEY = 'ai-office:themeMode';
-export const THEME_SCHEME_KEY = 'ai-office:themeScheme';
+export const THEME_SCHEME_KEY = 'ai-office:colorScheme';
 export const LEGACY_THEME_MODE_KEY = 'ai-office-theme-mode';
+export const LEGACY_THEME_SCHEME_KEY = 'ai-office:themeScheme';
 export const LEGACY_THEME_KEY = 'ai-office-theme';
 
 export const THEME_SCHEMES = [
@@ -98,4 +99,3 @@ export function getThemeSchemeMeta(id) {
   const normalized = normalizeThemeScheme(id);
   return THEME_SCHEMES.find((item) => item.id === normalized) || THEME_SCHEMES[0];
 }
-

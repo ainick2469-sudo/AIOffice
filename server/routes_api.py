@@ -940,6 +940,20 @@ async def list_channels():
     return result
 
 
+@router.get("/channels/activity")
+async def list_channel_activity(limit: int = 200):
+    activity = await db.get_channel_activity(limit=limit)
+    return {
+        "activity": activity,
+        "count": len(activity),
+    }
+
+
+@router.get("/dashboard/summary")
+async def dashboard_summary(limit_recent: int = 8):
+    return await db.get_dashboard_summary(limit_recent=limit_recent)
+
+
 @router.post("/channels")
 async def create_channel_route(body: dict):
     """Create a new chat room."""

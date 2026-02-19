@@ -2878,3 +2878,25 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - Updated Settings > Appearance with a Theme Gallery grid, instant apply on click, and a `Cycle Theme` action.
 - Added one-click header cycle button (`🎨`) with tooltip and compact-menu parity.
 - Updated Settings summary to show current mode + scheme and passed scheme controls through Settings shell.
+## 2026-02-19 - Prompt #010 Stabilize App Shell (history + mode/scheme + full-window)
+- Repro: fresh launch on Home, pressing Back could route to Workspace due custom fallback routing; theme mode/scheme persistence used mixed keys and wrapper attributes; Workspace felt boxed because shell/canvas padding framed panes.
+- Root cause: `App.jsx` used in-memory nav fallback instead of marked history state, scheme storage used legacy key naming, and multiple `App.css` shell layers applied outer canvas padding.
+- Fix: introduced marked browser history state contract (`__aiOfficeNav`, `topTab`, `workspaceTab`, `draftId`, `navIndex`) with safe back behavior, switched to canonical theme keys (`ai-office:themeMode`, `ai-office:colorScheme`) with legacy read/write compatibility, kept theme attributes on `document.documentElement` only, and removed outer workspace canvas/shell padding so layout fills the window under the header.
+## 2026-02-19 - Startup freeze perf investigation
+- Repro path investigated: cold launch -> Home idle 10s. Prior behavior analysis showed high-frequency timers in `client/src/components/Sidebar.jsx` and `client/src/components/DashboardHome.jsx`.
+- Baseline request pressure (12-channel fixture, 10s window):
+  - Sidebar: ~29 requests (polling `/api/channels`, `/api/agents`, 3 provider status endpoints, plus per-channel `/api/messages/{channel}?limit=100` unread sync at t0 and t+5s).
+  - DashboardHome: ~19 requests (7 summary endpoints + per-channel `/api/conversation/{channel}` loop).
+  - Total startup pressure: ~48 requests / 10s before any user action.
+- Top spam endpoints before fix:
+  1. `/api/messages/{channel}?limit=100`
+  2. `/api/conversation/{channel}`
+  3. `/api/process/list/{channel}` (from adjacent legacy panels when mounted)
+  4. `/api/channels`
+  5. `/api/agents`
+- Fix summary:
+  - Added cheap summary APIs: `GET /api/channels/activity` and `GET /api/dashboard/summary`.
+  - Sidebar unread now uses activity snapshots + local seen message ids (`New` badge), no history downloads and no 5s unread storm.
+  - DashboardHome now loads one summary payload and lazy-loads heavy cards only on demand.
+  - Added `useVisibilityInterval` and abort/dedupe guards to stop hidden-tab polling and overlap.
+  - Added dev-only startup request meters for Home/Sidebar to validate first-10s request counts in browser console.
