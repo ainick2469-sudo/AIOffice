@@ -2836,3 +2836,10 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - Improved Review + Summary confidence surfaces: editable name, stack override, template summary, command preview, target path, and potential issue hints.
 - Wired Create step to project creation handler with destination hinting (Workspace/Spec/Preview), while preserving Discuss-first as an explicit secondary action.
 - Updated styles for calmer layout hierarchy, tighter spacing, and responsive summary behavior.
+## 2026-02-19 - Prompt #005 Preview UX Simplification
+- Preview UI overload: too many panels visible at once.
+- User doesn't know what to click first.
+- URL detection is hidden behind logs.
+- Refactored Preview into tabs (Preview, Logs, Advanced, Design) with a unified top bar and 1-click Start Preview command resolution.
+- Added manual URL override flow, reduced duplicate URL actions, and made iframe the primary surface while running.
+- Logs now request include_logs only when Logs tab is active and support pause/resume updates.

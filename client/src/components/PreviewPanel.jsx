@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import PreviewToolbar from './preview/PreviewToolbar';
+import PreviewTopBar from './preview/PreviewTopBar';
 import SetupAssistant from './preview/SetupAssistant';
 import LogViewer from './preview/LogViewer';
 import DesignModeToggle from './preview/DesignModeToggle';
@@ -41,23 +41,6 @@ function extractUrlFromLogs(logs) {
     }
   }
   return '';
-}
-
-function formatTime(epochSeconds) {
-  if (!epochSeconds) return '—';
-  const date = new Date(Number(epochSeconds) * 1000);
-  if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleTimeString();
-}
-
-function formatDuration(seconds) {
-  const total = Math.max(0, Number(seconds) || 0);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = Math.floor(total % 60);
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
 }
 
 async function readProjectFile(channel, path) {
@@ -106,6 +89,43 @@ function createDraftEditRequest({ selection, instruction, previewUrl, project, b
   return lines.join('\n');
 }
 
+function resolveDeviceWidth(devicePreset) {
+  if (devicePreset === 'mobile') return 390;
+  if (devicePreset === 'tablet') return 820;
+  return null;
+}
+
+function resolveStartCommand({ config, draftCmd, draftPort, assistantPresets }) {
+  const savedPreviewCmd = String(config?.preview_cmd || '').trim();
+  const runCmd = String(config?.run_cmd || '').trim();
+  const drafted = String(draftCmd || '').trim();
+  const topPreset = assistantPresets?.[0] || null;
+  const hasUserOverride = Boolean(drafted && drafted !== savedPreviewCmd && drafted !== runCmd);
+
+  let command = '';
+  let source = '';
+  let nextPort = normalizePort(config?.preview_port) || null;
+
+  if (savedPreviewCmd) {
+    command = savedPreviewCmd;
+    source = 'saved-config';
+  } else if (hasUserOverride) {
+    command = drafted;
+    source = 'draft-override';
+    nextPort = nextPort || normalizePort(draftPort);
+  } else if (topPreset?.command) {
+    command = String(topPreset.command).trim();
+    source = 'assistant-preset';
+    nextPort = nextPort || normalizePort(topPreset.port);
+  } else if (runCmd) {
+    command = runCmd;
+    source = 'run-cmd-fallback';
+    nextPort = nextPort || normalizePort(draftPort);
+  }
+
+  return { command, source, port: nextPort };
+}
+
 export default function PreviewPanel({
   channel = 'main',
   onDraftRequest = null,
@@ -122,13 +142,17 @@ export default function PreviewPanel({
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
-  const [logsOpen, setLogsOpen] = useState(true);
   const [logsSearch, setLogsSearch] = useState('');
+  const [logsPaused, setLogsPaused] = useState(false);
   const [assistantLoading, setAssistantLoading] = useState(true);
   const [assistantStackLabel, setAssistantStackLabel] = useState('Unknown');
   const [assistantNotes, setAssistantNotes] = useState([]);
   const [assistantPresets, setAssistantPresets] = useState([]);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState('preview');
+  const [manualUrlInput, setManualUrlInput] = useState('');
+  const [manualUrlOverride, setManualUrlOverride] = useState('');
+  const [manualUrlOpen, setManualUrlOpen] = useState(false);
+  const [showManualHint, setShowManualHint] = useState(false);
   const [designMode, setDesignMode] = useState(false);
   const [designUnavailableReason, setDesignUnavailableReason] = useState('');
   const [selection, setSelection] = useState(null);
@@ -143,7 +167,7 @@ export default function PreviewPanel({
     if (!value) return;
     window.setTimeout(() => {
       setNotice((prev) => (prev === value ? '' : prev));
-    }, 2200);
+    }, 2300);
   }, []);
 
   useEffect(() => {
@@ -186,8 +210,12 @@ export default function PreviewPanel({
 
   useEffect(() => {
     let cancelled = false;
+    const includeLogs = activeTab === 'logs';
+    if (includeLogs && logsPaused) return undefined;
+
     const tick = () => {
-      fetch(`/api/process/list/${encodeURIComponent(channel)}?include_logs=true`)
+      const suffix = includeLogs ? '?include_logs=true' : '';
+      fetch(`/api/process/list/${encodeURIComponent(channel)}${suffix}`)
         .then((resp) => (resp.ok ? resp.json() : { processes: [] }))
         .then((data) => {
           if (cancelled) return;
@@ -196,13 +224,14 @@ export default function PreviewPanel({
         })
         .catch(() => {});
     };
+
     tick();
-    const interval = setInterval(tick, 1500);
+    const interval = setInterval(tick, includeLogs ? 1200 : 1600);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [channel, activeProject]);
+  }, [activeProject, activeTab, channel, logsPaused]);
 
   useEffect(() => {
     let cancelled = false;
@@ -323,7 +352,7 @@ export default function PreviewPanel({
             command: 'npm run dev -- --host 127.0.0.1 --port 5173',
             port: 5173,
           });
-          notes.push('No framework detected yet. Pick a preset and customize command in Advanced mode.');
+          notes.push('No framework detected yet. Pick a preset and customize command in Advanced.');
         }
       } catch {
         stackLabel = 'Unknown';
@@ -335,11 +364,12 @@ export default function PreviewPanel({
       setAssistantPresets(dedupePresets(presets).slice(0, 3));
       setAssistantLoading(false);
     };
+
     detectAssistant();
     return () => {
       cancelled = true;
     };
-  }, [channel, activeProject, config?.preview_cmd, config?.run_cmd, config?.preview_port]);
+  }, [channel, config?.preview_cmd, config?.preview_port, config?.run_cmd]);
 
   const previewCandidates = useMemo(() => {
     return processes
@@ -349,7 +379,7 @@ export default function PreviewPanel({
   }, [processes, activeProject]);
 
   const selectedProcess = useMemo(() => {
-    const byId = previewCandidates.find((proc) => proc.id === selectedProcessId);
+    const byId = previewCandidates.find((proc) => String(proc.id) === String(selectedProcessId));
     if (byId) return byId;
     const preview = previewCandidates.find((proc) => proc.name === 'preview');
     if (preview) return preview;
@@ -363,26 +393,18 @@ export default function PreviewPanel({
 
   const filteredLogs = useMemo(() => {
     const term = String(logsSearch || '').trim().toLowerCase();
-    const rows = logs.slice(-600);
+    const rows = logs.slice(-700);
     if (!term) return rows;
     return rows.filter((line) => String(line || '').toLowerCase().includes(term));
   }, [logs, logsSearch]);
 
   const detectedPreviewUrl = useMemo(() => extractUrlFromLogs(logs), [logs]);
+  const selectedProcessPort = normalizePort(selectedProcess?.port);
+  const configPort = normalizePort(config?.preview_port);
+  const presetPort = normalizePort(assistantPresets?.[0]?.port);
+  const effectivePort = selectedProcessPort || configPort || presetPort || null;
 
-  useEffect(() => {
-    if (!autoScroll || !logsRef.current || !logsOpen) return;
-    logsRef.current.scrollTop = logsRef.current.scrollHeight;
-  }, [filteredLogs, autoScroll, logsOpen]);
-
-  const effectivePort = useMemo(() => {
-    const fromProcess = selectedProcess?.port ? Number(selectedProcess.port) : null;
-    const fromDraft = normalizePort(draftPort);
-    const fromConfig = normalizePort(config?.preview_port);
-    return fromProcess || fromDraft || fromConfig || null;
-  }, [selectedProcess, draftPort, config]);
-
-  const previewUrl = useMemo(() => {
+  const autoDetectedUrl = useMemo(() => {
     const fromLog = normalizeLocalUrl(detectedPreviewUrl);
     if (fromLog) return fromLog;
     if (effectivePort) return `http://127.0.0.1:${effectivePort}`;
@@ -393,22 +415,38 @@ export default function PreviewPanel({
   const statusLabel = isRunning ? 'Running' : selectedProcess?.status === 'exited' ? 'Error' : 'Stopped';
   const statusClass = isRunning ? 'running' : selectedProcess?.status === 'exited' ? 'error' : 'stopped';
   const selectedProcessKey = selectedProcess?.id ? String(selectedProcess.id) : '';
+  const iframeUrl = manualUrlOverride || autoDetectedUrl;
+  const deviceWidth = resolveDeviceWidth(devicePreset);
+
+  useEffect(() => {
+    if (!autoScroll || !logsRef.current || activeTab !== 'logs') return;
+    logsRef.current.scrollTop = logsRef.current.scrollHeight;
+  }, [filteredLogs, autoScroll, activeTab]);
+
+  useEffect(() => {
+    if (!isRunning) {
+      setManualUrlOverride('');
+      setManualUrlInput('');
+      setManualUrlOpen(false);
+      setShowManualHint(false);
+      return;
+    }
+    if (autoDetectedUrl || manualUrlOverride) {
+      setShowManualHint(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => setShowManualHint(true), 3000);
+    return () => window.clearTimeout(timeout);
+  }, [autoDetectedUrl, isRunning, manualUrlOverride]);
 
   useEffect(() => {
     onStateChange?.({
       running: isRunning,
-      url: previewUrl,
+      url: iframeUrl,
       port: effectivePort,
       processId: selectedProcessKey,
     });
-  }, [isRunning, previewUrl, effectivePort, selectedProcessKey, onStateChange]);
-
-  const uptime = useMemo(() => {
-    if (!selectedProcess?.started_at) return '—';
-    if (isRunning) return `since ${formatTime(selectedProcess.started_at)}`;
-    const end = Number(selectedProcess?.ended_at || selectedProcess.started_at);
-    return formatDuration(end - Number(selectedProcess.started_at));
-  }, [selectedProcess, isRunning]);
+  }, [effectivePort, iframeUrl, isRunning, onStateChange, selectedProcessKey]);
 
   const savePreviewConfig = useCallback(async () => {
     setError('');
@@ -426,16 +464,30 @@ export default function PreviewPanel({
       throw new Error(data?.detail || 'Failed to save preview config.');
     }
     setConfig(data?.config || null);
-    queueNotice('Preview config saved.');
+    queueNotice('Saved. Start Preview to use it.');
   }, [activeProject, draftCmd, draftPort, queueNotice]);
 
   const startPreview = useCallback(async () => {
     setError('');
     setNotice('');
-    const cmd = String(draftCmd || '').trim() || String(config?.run_cmd || '').trim();
-    if (!cmd) {
-      setError('Set a preview command first (or choose a preset), then click Start.');
+    setActiveTab('preview');
+
+    const { command, source, port } = resolveStartCommand({
+      config,
+      draftCmd,
+      draftPort,
+      assistantPresets,
+    });
+
+    if (!command) {
+      setError('No preview command configured. Go to Advanced and set a command.');
+      setActiveTab('advanced');
       return;
+    }
+
+    if (source === 'assistant-preset') {
+      setDraftCmd(command);
+      if (port) setDraftPort(String(port));
     }
 
     const resp = await fetch('/api/process/start', {
@@ -443,7 +495,7 @@ export default function PreviewPanel({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         channel,
-        command: cmd,
+        command,
         name: 'preview',
         project: activeProject,
         agent_id: 'user',
@@ -455,11 +507,11 @@ export default function PreviewPanel({
       setError(data?.detail || 'Failed to start preview process.');
       return;
     }
-    queueNotice('Preview started. Watch logs for the live URL.');
+    queueNotice('Preview started. Waiting for URL...');
     if (data?.process?.id) {
       setSelectedProcessId(String(data.process.id));
     }
-  }, [activeProject, channel, config?.run_cmd, draftCmd, queueNotice]);
+  }, [activeProject, assistantPresets, channel, config, draftCmd, draftPort, queueNotice]);
 
   const stopPreview = useCallback(async () => {
     if (!selectedProcessKey) return;
@@ -475,14 +527,17 @@ export default function PreviewPanel({
       return;
     }
     queueNotice('Preview stopped.');
-  }, [channel, selectedProcessKey, queueNotice]);
+  }, [channel, queueNotice, selectedProcessKey]);
 
   const restartPreview = useCallback(async () => {
-    await stopPreview();
+    if (isRunning && selectedProcessKey) {
+      await stopPreview();
+    }
     await startPreview();
-  }, [startPreview, stopPreview]);
+  }, [isRunning, selectedProcessKey, startPreview, stopPreview]);
 
   const copyToClipboard = useCallback(async (value, successNotice) => {
+    if (!String(value || '').trim()) return;
     try {
       await navigator.clipboard.writeText(value);
       queueNotice(successNotice);
@@ -492,20 +547,14 @@ export default function PreviewPanel({
   }, [queueNotice]);
 
   const copyPreviewUrl = () => {
-    if (!previewUrl) return;
-    copyToClipboard(previewUrl, 'Preview URL copied.');
+    if (!iframeUrl) return;
+    copyToClipboard(iframeUrl, 'Preview URL copied.');
   };
 
   const openExternal = () => {
-    if (!previewUrl) return;
-    window.open(previewUrl, '_blank', 'noreferrer');
+    if (!iframeUrl) return;
+    window.open(iframeUrl, '_blank', 'noreferrer');
   };
-
-  const frameWidth = useMemo(() => {
-    if (devicePreset === 'mobile') return 390;
-    if (devicePreset === 'tablet') return 820;
-    return null;
-  }, [devicePreset]);
 
   const applyPreset = (preset) => {
     setDraftCmd(String(preset?.command || '').trim());
@@ -514,10 +563,30 @@ export default function PreviewPanel({
     queueNotice(`Preset applied: ${preset?.title || 'Run preset'}`);
   };
 
+  const applyManualUrl = () => {
+    const normalized = normalizeLocalUrl(manualUrlInput);
+    if (!normalized) {
+      setError('Manual preview URL is invalid. Example: http://127.0.0.1:5173');
+      return;
+    }
+    setError('');
+    setManualUrlOverride(normalized);
+    setManualUrlInput(normalized);
+    setShowManualHint(false);
+    queueNotice('Manual URL override set.');
+  };
+
+  const clearManualUrl = () => {
+    setManualUrlOverride('');
+    setManualUrlInput('');
+    setManualUrlOpen(false);
+    queueNotice('Manual URL override cleared.');
+  };
+
   const injectPicker = useCallback(() => {
     const frame = iframeRef.current;
-    if (!frame || !previewUrl) {
-      return { ok: false, reason: 'Start preview first, then enable Design Mode.' };
+    if (!frame || !iframeUrl) {
+      return { ok: false, reason: 'Start Preview first to enable Design Mode.' };
     }
     try {
       const doc = frame.contentDocument || frame.contentWindow?.document;
@@ -537,11 +606,10 @@ export default function PreviewPanel({
     } catch {
       return {
         ok: false,
-        reason:
-          'This preview runs in an isolated origin. Open Preview externally, click what you want, then describe it here.',
+        reason: 'Design Mode is unavailable in this embedded preview origin. Open in Browser and describe changes manually.',
       };
     }
-  }, [previewUrl]);
+  }, [iframeUrl]);
 
   useEffect(() => {
     const onMessage = (event) => {
@@ -576,7 +644,7 @@ export default function PreviewPanel({
     const payload = createDraftEditRequest({
       selection,
       instruction: String(requestText || '').trim(),
-      previewUrl,
+      previewUrl: iframeUrl,
       project: activeProject,
       branch: activeBranch,
     });
@@ -592,7 +660,7 @@ export default function PreviewPanel({
     const payload = createDraftEditRequest({
       selection,
       instruction: String(requestText || '').trim(),
-      previewUrl,
+      previewUrl: iframeUrl,
       project: activeProject,
       branch: activeBranch,
     });
@@ -604,206 +672,244 @@ export default function PreviewPanel({
       <div className="panel-header preview-v3-header">
         <div>
           <h3>Preview</h3>
-          <p>Step 1 choose setup, Step 2 run preview, Step 3 inspect and draft edits.</p>
+          <p>Choose a preset (auto-picked), click Start Preview, and focus on the running app.</p>
         </div>
         <div className="preview-v3-meta">
           <span className="pill ui-chip">Project: {activeProject}</span>
           <span className="pill ui-chip">Branch: {activeBranch}</span>
-          <span className={`preview-v3-status ${statusClass}`}>{statusLabel}</span>
         </div>
       </div>
 
       <div className="panel-body preview-v3-body">
-        {beginnerMode && !isRunning && !previewUrl ? (
+        {beginnerMode && activeTab === 'preview' && !isRunning && !iframeUrl ? (
           <div className="beginner-empty-card">
-            <h4>Try this next: start preview in 3 steps</h4>
-            <p>Choose a preset, click Start Preview, then open the detected URL.</p>
+            <h4>Start Preview in one click</h4>
+            <p>AI Office auto-picks the best preset. Click Start Preview, then wait for your URL.</p>
             <div className="beginner-empty-actions">
-              <button
-                type="button"
-                className="ui-btn ui-btn-primary"
-                onClick={() => {
-                  if (assistantPresets[0]) {
-                    applyPreset(assistantPresets[0]);
-                  }
-                }}
-              >
-                Use recommended preset
+              <button type="button" className="ui-btn ui-btn-primary" onClick={startPreview}>
+                Start Preview
               </button>
-              <button
-                type="button"
-                className="ui-btn"
-                onClick={() => setAdvancedOpen((prev) => !prev)}
-              >
-                {advancedOpen ? 'Hide Advanced' : 'Show Advanced'}
+              <button type="button" className="ui-btn" onClick={() => setActiveTab('advanced')}>
+                Open Advanced
               </button>
             </div>
           </div>
         ) : null}
 
-        <PreviewToolbar
+        <PreviewTopBar
           statusLabel={statusLabel}
           statusClass={statusClass}
           isRunning={isRunning}
-          previewUrl={previewUrl}
+          previewUrl={iframeUrl}
+          autoScroll={autoScroll}
           onStart={startPreview}
-          onStop={stopPreview}
           onRestart={restartPreview}
-          onOpenExternal={openExternal}
+          onStop={stopPreview}
           onCopyUrl={copyPreviewUrl}
+          onOpenExternal={openExternal}
+          onToggleDevicePreset={setDevicePreset}
+          devicePreset={devicePreset}
+          onToggleAutoScroll={() => setAutoScroll((prev) => !prev)}
+          onOpenAdvanced={() => setActiveTab('advanced')}
         />
 
-        <section className="preview-v3-health-row">
-          <span className="pill ui-chip">PID: {selectedProcess?.pid || '—'}</span>
-          <span className="pill ui-chip">Port: {selectedProcess?.port || effectivePort || '—'}</span>
-          <span className="pill ui-chip">Uptime: {uptime}</span>
-          <span className="pill ui-chip">Last log: {formatTime(selectedProcess?.ended_at || selectedProcess?.started_at)}</span>
-        </section>
+        <div className="preview-tabs">
+          <button
+            type="button"
+            className={`preview-tab-btn ${activeTab === 'preview' ? 'active' : ''}`}
+            onClick={() => setActiveTab('preview')}
+          >
+            Preview
+          </button>
+          <button
+            type="button"
+            className={`preview-tab-btn ${activeTab === 'logs' ? 'active' : ''}`}
+            onClick={() => setActiveTab('logs')}
+          >
+            Logs
+          </button>
+          <button
+            type="button"
+            className={`preview-tab-btn ${activeTab === 'advanced' ? 'active' : ''}`}
+            onClick={() => setActiveTab('advanced')}
+          >
+            Advanced
+          </button>
+          <button
+            type="button"
+            className={`preview-tab-btn ${activeTab === 'design' ? 'active' : ''}`}
+            onClick={() => setActiveTab('design')}
+          >
+            Design
+          </button>
+        </div>
 
-        <SetupAssistant
-          beginnerMode={beginnerMode}
-          loading={assistantLoading}
-          stackLabel={assistantStackLabel}
-          presets={assistantPresets}
-          setupNotes={assistantNotes}
-          advancedOpen={advancedOpen}
-          onToggleAdvanced={() => setAdvancedOpen((prev) => !prev)}
-          onUsePreset={applyPreset}
-          draftCmd={draftCmd}
-          draftPort={draftPort}
-          onDraftCmdChange={setDraftCmd}
-          onDraftPortChange={setDraftPort}
-          processOptions={previewCandidates}
-          selectedProcessId={selectedProcess?.id || ''}
-          onSelectProcess={setSelectedProcessId}
-          onSaveConfig={() => savePreviewConfig().catch((err) => setError(err?.message || 'Failed to save config.'))}
-        />
-
-        <section className="preview-v3-section preview-v3-surface">
-          <div className="preview-v3-section-header">
-            <div>
-              <h4>Live Preview</h4>
-              <p>
-                {previewUrl
-                  ? 'Preview is live. Toggle Design Mode to select elements.'
-                  : 'No URL yet. Start preview and watch logs for startup output.'}
-              </p>
+        {activeTab === 'preview' ? (
+          <section className="preview-v3-tab-panel preview-main-panel">
+            <div className="preview-main-url-note">
+              {iframeUrl ? (
+                <span>Live URL detected and ready in the embedded frame.</span>
+              ) : isRunning ? (
+                <span>Waiting for server URL from process metadata or startup logs.</span>
+              ) : (
+                <span>No preview running. Click Start Preview to launch your app server.</span>
+              )}
             </div>
-            <div className="preview-v3-surface-actions">
-              <div className="preview-v3-device-toggle" role="group" aria-label="Preview size presets">
-                <button
-                  type="button"
-                  className={`ui-btn ${devicePreset === 'mobile' ? 'ui-btn-primary' : ''}`}
-                  onClick={() => setDevicePreset('mobile')}
-                >
-                  Mobile
+
+            {isRunning && !iframeUrl && showManualHint ? (
+              <div className="preview-manual-url-hint">
+                <button type="button" className="ui-btn" onClick={() => setManualUrlOpen((prev) => !prev)}>
+                  Can&apos;t detect URL?
                 </button>
-                <button
-                  type="button"
-                  className={`ui-btn ${devicePreset === 'tablet' ? 'ui-btn-primary' : ''}`}
-                  onClick={() => setDevicePreset('tablet')}
-                >
-                  Tablet
-                </button>
-                <button
-                  type="button"
-                  className={`ui-btn ${devicePreset === 'desktop' ? 'ui-btn-primary' : ''}`}
-                  onClick={() => setDevicePreset('desktop')}
-                >
-                  Desktop
+                {manualUrlOpen ? (
+                  <div className="preview-manual-url-editor">
+                    <input
+                      value={manualUrlInput}
+                      onChange={(event) => setManualUrlInput(event.target.value)}
+                      placeholder="http://127.0.0.1:5173"
+                    />
+                    <button type="button" className="ui-btn ui-btn-primary" onClick={applyManualUrl}>
+                      Set URL
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {manualUrlOverride ? (
+              <div className="preview-manual-url-active">
+                <span>Manual URL override is active.</span>
+                <button type="button" className="ui-btn" onClick={clearManualUrl}>
+                  Clear override
                 </button>
               </div>
-              <button
-                type="button"
-                className="ui-btn"
-                onClick={() => setFrameReloadNonce((prev) => prev + 1)}
-                disabled={!previewUrl}
-              >
-                Reload
-              </button>
-              <button
-                type="button"
-                className="ui-btn"
-                onClick={openExternal}
-                disabled={!previewUrl}
-              >
-                Open
-              </button>
-              <DesignModeToggle
-                enabled={designMode}
-                unavailable={!previewUrl}
-                onToggle={toggleDesignMode}
-              />
-            </div>
-          </div>
+            ) : null}
 
-          <div className="preview-v3-surface-grid">
-            <div className="preview-v3-frame-wrap">
+            <div className="preview-v3-frame-wrap large">
               <div
                 className={`preview-v3-frame-stage preset-${devicePreset}`}
-                style={frameWidth ? { maxWidth: `${frameWidth}px` } : undefined}
+                style={deviceWidth ? { maxWidth: `${deviceWidth}px` } : undefined}
               >
-              {previewUrl ? (
-                <iframe
-                  key={`${previewUrl}-${frameReloadNonce}-${devicePreset}`}
-                  ref={iframeRef}
-                  title="Preview"
-                  className="preview-v3-iframe"
-                  src={previewUrl}
-                  onLoad={() => {
-                    if (!designMode) return;
-                    const result = injectPicker();
-                    if (!result.ok) {
-                      setDesignUnavailableReason(result.reason);
-                    } else {
-                      setDesignUnavailableReason('');
-                    }
-                  }}
-                />
-              ) : (
-                <div className="preview-v3-empty-state">
-                  <strong>{beginnerMode ? 'Preview not running yet' : 'Waiting for server…'}</strong>
-                  <span>
-                    {beginnerMode
-                      ? 'Step 1: apply a run preset. Step 2: click Start Preview. Step 3: watch logs for the live URL.'
-                      : 'Set a command and port, click Start Preview, then check logs for startup info.'}
-                  </span>
-                </div>
-              )}
+                {iframeUrl ? (
+                  <iframe
+                    key={`${iframeUrl}-${frameReloadNonce}-${devicePreset}-${activeTab}`}
+                    ref={iframeRef}
+                    title="Preview"
+                    className="preview-v3-iframe"
+                    src={iframeUrl}
+                  />
+                ) : (
+                  <div className="preview-v3-empty-state">
+                    <strong>No preview running</strong>
+                    <span>Click Start Preview to run your app server and see it here.</span>
+                    <button type="button" className="ui-btn" onClick={() => setActiveTab('advanced')}>
+                      Advanced setup
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
+          </section>
+        ) : null}
 
-            <SelectionInspector
-              enabled={designMode}
-              unavailableReason={designUnavailableReason}
-              selection={selection}
-              previewUrl={previewUrl}
-              requestText={requestText}
-              onRequestTextChange={setRequestText}
-              onDraftRequest={draftEditRequest}
-              onCopyDraft={copyDraftRequest}
+        {activeTab === 'logs' ? (
+          <LogViewer
+            logsSearch={logsSearch}
+            onLogsSearchChange={setLogsSearch}
+            autoScroll={autoScroll}
+            onToggleAutoScroll={() => setAutoScroll((prev) => !prev)}
+            paused={logsPaused}
+            onTogglePaused={() => setLogsPaused((prev) => !prev)}
+            filteredLogs={filteredLogs}
+            logsRef={logsRef}
+          />
+        ) : null}
+
+        {activeTab === 'advanced' ? (
+          <section className="preview-v3-tab-panel">
+            <SetupAssistant
+              loading={assistantLoading}
+              stackLabel={assistantStackLabel}
+              presets={assistantPresets}
+              setupNotes={assistantNotes}
+              draftCmd={draftCmd}
+              draftPort={draftPort}
+              onDraftCmdChange={setDraftCmd}
+              onDraftPortChange={setDraftPort}
+              processOptions={previewCandidates}
+              selectedProcessId={selectedProcess?.id || ''}
+              onSelectProcess={setSelectedProcessId}
+              onSaveConfig={() => savePreviewConfig().catch((err) => setError(err?.message || 'Failed to save config.'))}
+              onUsePreset={applyPreset}
             />
-          </div>
-        </section>
+          </section>
+        ) : null}
 
-        <LogViewer
-          logsOpen={logsOpen}
-          onToggleLogs={() => setLogsOpen((prev) => !prev)}
-          logsSearch={logsSearch}
-          onLogsSearchChange={setLogsSearch}
-          autoScroll={autoScroll}
-          onToggleAutoScroll={() => setAutoScroll((prev) => !prev)}
-          filteredLogs={filteredLogs}
-          logsRef={logsRef}
-        />
+        {activeTab === 'design' ? (
+          <section className="preview-v3-tab-panel">
+            {!isRunning || !iframeUrl ? (
+              <div className="preview-v3-empty-state">
+                <strong>Start Preview first to enable Design Mode.</strong>
+                <span>Design tools become available after preview is running with a detectable URL.</span>
+                <button type="button" className="ui-btn ui-btn-primary" onClick={startPreview}>
+                  Start Preview
+                </button>
+              </div>
+            ) : (
+              <div className="preview-v3-surface-grid">
+                <div className="preview-v3-frame-wrap">
+                  <div
+                    className={`preview-v3-frame-stage preset-${devicePreset}`}
+                    style={deviceWidth ? { maxWidth: `${deviceWidth}px` } : undefined}
+                  >
+                    <iframe
+                      key={`${iframeUrl}-${frameReloadNonce}-${devicePreset}-${activeTab}`}
+                      ref={iframeRef}
+                      title="Preview Design"
+                      className="preview-v3-iframe"
+                      src={iframeUrl}
+                      onLoad={() => {
+                        if (!designMode) return;
+                        const result = injectPicker();
+                        if (!result.ok) {
+                          setDesignUnavailableReason(result.reason);
+                        } else {
+                          setDesignUnavailableReason('');
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <section className="preview-v3-section preview-v3-inspector">
+                  <DesignModeToggle
+                    enabled={designMode}
+                    unavailable={!isRunning || !iframeUrl}
+                    onToggle={toggleDesignMode}
+                  />
+                  <SelectionInspector
+                    enabled={designMode}
+                    unavailableReason={designUnavailableReason}
+                    selection={selection}
+                    previewUrl={iframeUrl}
+                    requestText={requestText}
+                    onRequestTextChange={setRequestText}
+                    onDraftRequest={draftEditRequest}
+                    onCopyDraft={copyDraftRequest}
+                  />
+                </section>
+              </div>
+            )}
+          </section>
+        ) : null}
 
         <details className="preview-v3-help">
           <summary>Help: command, port, logs, URL</summary>
           <div>
-            <p><strong>Command:</strong> the command AI Office uses to run your app server.</p>
-            <p><strong>Port:</strong> the local port your app serves on (for example 5173 or 3000).</p>
-            <p><strong>Logs:</strong> startup/output stream where server errors and URL hints appear first.</p>
-            <p><strong>URL:</strong> detected automatically from logs or process metadata, then used for embedding.</p>
+            <p><strong>Command:</strong> command used to run your app server.</p>
+            <p><strong>Port:</strong> local port your app serves on (for example 5173 or 3000).</p>
+            <p><strong>Logs:</strong> startup stream for URL hints, errors, and diagnostics.</p>
+            <p><strong>URL:</strong> auto-detected from process/logs, with manual override fallback.</p>
           </div>
         </details>
 
