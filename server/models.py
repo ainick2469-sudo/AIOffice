@@ -123,6 +123,15 @@ class ProviderTestOut(BaseModel):
     ok: bool
     provider: str
     model_hint: Optional[str] = None
+    model: Optional[str] = None
+    base_url: Optional[str] = None
+    key_source: Optional[str] = None
+    key_ref: Optional[str] = None
+    key_fingerprint_last4: Optional[str] = None
+    status: Optional[int] = None
+    request_id: Optional[str] = None
+    ratelimit: Optional[dict] = None
+    error_detail: Optional[dict] = None
     latency_ms: Optional[int] = None
     error: Optional[str] = None
     error_code: Optional[Literal["PROVIDER_UNREACHABLE", "AUTH_INVALID", "QUOTA_EXCEEDED", "MODEL_UNAVAILABLE", "UNKNOWN_ERROR"]] = None
@@ -180,6 +189,8 @@ class ProviderSettingsIn(BaseModel):
 class ProviderSettingsProviderOut(BaseModel):
     configured: bool = False
     key_masked: Optional[str] = None
+    key_fingerprint_last4: Optional[str] = None
+    key_source: Optional[str] = None
     model_default: Optional[str] = None
     base_url: Optional[str] = None
     key_ref: Optional[str] = None

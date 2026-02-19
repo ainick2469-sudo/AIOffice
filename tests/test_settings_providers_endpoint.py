@@ -27,7 +27,9 @@ def test_settings_providers_round_trip_masks_key():
     payload = resp.json()
     assert payload["openai"]["configured"] is True
     assert payload["openai"]["key_masked"]
+    assert payload["openai"]["key_source"] in {"settings", "settings-legacy", "vault", "env", "override", "none"}
     assert "7788" in payload["openai"]["key_masked"]
+    assert payload["openai"]["key_fingerprint_last4"] == "7788"
     assert "api_key" not in payload["openai"]
     assert payload["fallback_to_ollama"] is False
 

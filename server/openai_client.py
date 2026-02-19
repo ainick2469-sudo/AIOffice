@@ -4,9 +4,9 @@ import os
 import logging
 from typing import Optional
 import time
-import httpx
 from . import provider_config
 from . import openai_responses
+from . import openai_transport
 
 logger = logging.getLogger("ai-office.openai")
 _last_error: str = ""
@@ -75,6 +75,20 @@ def _extract_openai_error(payload: dict) -> str:
         details = [item for item in [msg, err_type, code] if item]
         return " | ".join(details)
     return str(payload.get("message") or "").strip()
+
+
+def _extract_openai_error_parts(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        return {"type": None, "code": None, "message": None}
+    err = payload.get("error")
+    if isinstance(err, dict):
+        return {
+            "type": str(err.get("type") or "").strip() or None,
+            "code": str(err.get("code") or "").strip() or None,
+            "message": str(err.get("message") or "").strip() or None,
+        }
+    message = str(payload.get("message") or "").strip()
+    return {"type": None, "code": None, "message": message or None}
 
 
 def _normalize_content(content):
@@ -263,72 +277,64 @@ async def chat(
     }
 
     url = f"{resolved_base_url.rstrip('/')}/chat/completions"
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(url, headers=headers, json=body)
-            if resp.status_code != 200:
-                detail = ""
-                try:
-                    detail = _extract_openai_error(resp.json())
-                except Exception:
-                    detail = str(resp.text or "").strip()[:280]
-                friendly = _friendly_http_error(resp.status_code, detail, use_model)
-                _set_last_error(friendly)
-                await _log_backend_error(
-                    channel=channel,
-                    project_name=project_name,
-                    model=use_model,
-                    status_code=resp.status_code,
-                    error=friendly,
-                    transport="chat_completions",
-                )
-                logger.error("OpenAI API error %s: %s", resp.status_code, resp.text[:300])
-                return None
-
-            data = resp.json()
-            usage = data.get("usage") or {}
-            try:
-                from . import database as db
-                await db.log_api_usage(
-                    provider="openai",
-                    model=use_model,
-                    prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
-                    completion_tokens=int(usage.get("completion_tokens", 0) or 0),
-                    total_tokens=int(usage.get("total_tokens", 0) or 0),
-                    estimated_cost=_estimate_cost(
-                        use_model,
-                        int(usage.get("prompt_tokens", 0) or 0),
-                        int(usage.get("completion_tokens", 0) or 0),
-                    ),
-                    channel=channel,
-                    project_name=project_name,
-                )
-            except Exception:
-                pass
-            choices = data.get("choices", [])
-            if not choices:
-                _set_last_error("OpenAI returned no choices.")
-                return None
-
-            content = choices[0].get("message", {}).get("content", "")
-            normalized = _normalize_content(content) or None
-            if not normalized:
-                _set_last_error("OpenAI returned an empty completion.")
-                return None
-            _set_last_error("")
-            return normalized
-    except Exception as exc:
-        _set_last_error(f"OpenAI request failed: {exc}")
+    attempt = await openai_transport.post_json_with_backoff(
+        url=url,
+        headers=headers,
+        body=body,
+        timeout_seconds=120,
+    )
+    if attempt.get("status_code") != 200:
+        payload = attempt.get("payload")
+        detail = _extract_openai_error(payload) if isinstance(payload, dict) else str(attempt.get("text") or "").strip()[:280]
+        friendly = _friendly_http_error(int(attempt.get("status_code") or 0), detail, use_model)
+        _set_last_error(friendly)
         await _log_backend_error(
             channel=channel,
             project_name=project_name,
             model=use_model,
-            status_code=None,
-            error=str(exc),
+            status_code=attempt.get("status_code"),
+            error=friendly,
             transport="chat_completions",
         )
-        logger.error("OpenAI API request failed: %s", exc)
+        logger.error("OpenAI API error %s: %s", attempt.get("status_code"), detail)
         return None
+
+    data = attempt.get("payload")
+    if not isinstance(data, dict):
+        _set_last_error("OpenAI returned invalid JSON.")
+        return None
+
+    usage = data.get("usage") or {}
+    try:
+        from . import database as db
+        await db.log_api_usage(
+            provider="openai",
+            model=use_model,
+            prompt_tokens=int(usage.get("prompt_tokens", 0) or 0),
+            completion_tokens=int(usage.get("completion_tokens", 0) or 0),
+            total_tokens=int(usage.get("total_tokens", 0) or 0),
+            estimated_cost=_estimate_cost(
+                use_model,
+                int(usage.get("prompt_tokens", 0) or 0),
+                int(usage.get("completion_tokens", 0) or 0),
+            ),
+            channel=channel,
+            project_name=project_name,
+        )
+    except Exception:
+        pass
+    choices = data.get("choices", [])
+    if not choices:
+        _set_last_error("OpenAI returned no choices.")
+        return None
+
+    content = choices[0].get("message", {}).get("content", "")
+    normalized = _normalize_content(content) or None
+    if not normalized:
+        _set_last_error("OpenAI returned an empty completion.")
+        return None
+    _set_last_error("")
+    return normalized
 
 
 async def probe_connection(
@@ -374,6 +380,7 @@ async def probe_connection(
         )
         latency_ms = int((time.perf_counter() - started) * 1000)
         if not result.get("ok"):
+            details = result.get("details") or {}
             return {
                 "ok": False,
                 "model_hint": model_hint,
@@ -381,8 +388,11 @@ async def probe_connection(
                 "error": result.get("error") or "OpenAI request failed.",
                 "details": {
                     "status_code": result.get("status_code"),
-                    "url": (result.get("details") or {}).get("url"),
-                    "response": (result.get("details") or {}).get("response"),
+                    "url": details.get("url"),
+                    "response": details.get("response"),
+                    "error": details.get("error"),
+                    "request_id": result.get("request_id"),
+                    "ratelimit": result.get("ratelimit") or {},
                 },
             }
         return {
@@ -390,7 +400,12 @@ async def probe_connection(
             "model_hint": model_hint,
             "latency_ms": latency_ms,
             "error": None,
-            "details": {"status_code": result.get("status_code"), "url": (result.get("details") or {}).get("url")},
+            "details": {
+                "status_code": result.get("status_code"),
+                "url": (result.get("details") or {}).get("url"),
+                "request_id": result.get("request_id"),
+                "ratelimit": result.get("ratelimit") or {},
+            },
         }
 
     body = {
@@ -405,52 +420,65 @@ async def probe_connection(
     }
     url = f"{resolved_base_url.rstrip('/')}/chat/completions"
 
-    try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            resp = await client.post(url, headers=headers, json=body)
-    except httpx.TimeoutException:
+    attempt = await openai_transport.post_json_with_backoff(
+        url=url,
+        headers=headers,
+        body=body,
+        timeout_seconds=timeout_seconds,
+    )
+    if attempt.get("status_code") == 408:
         return {
             "ok": False,
             "model_hint": model_hint,
             "latency_ms": int((time.perf_counter() - started) * 1000),
             "error": f"OpenAI timeout after {timeout_seconds}s.",
-            "details": {"url": url, "timeout_seconds": timeout_seconds},
+            "details": {"url": url, "timeout_seconds": timeout_seconds, "request_id": attempt.get("request_id")},
         }
-    except Exception as exc:
+    if attempt.get("error"):
         return {
             "ok": False,
             "model_hint": model_hint,
             "latency_ms": int((time.perf_counter() - started) * 1000),
-            "error": f"OpenAI request failed: {exc}",
+            "error": f"OpenAI request failed: {attempt.get('error')}",
             "details": {"url": url},
         }
 
     latency_ms = int((time.perf_counter() - started) * 1000)
-    if resp.status_code != 200:
+    if attempt.get("status_code") != 200:
         detail = ""
-        parsed = None
-        try:
-            parsed = resp.json()
+        parsed = attempt.get("payload")
+        if isinstance(parsed, dict):
             detail = _extract_openai_error(parsed)
-        except Exception:
-            detail = str(resp.text or "").strip()[:280]
+        else:
+            detail = str(attempt.get("text") or "").strip()[:280]
+        error_parts = _extract_openai_error_parts(parsed) if isinstance(parsed, dict) else {
+            "type": None,
+            "code": None,
+            "message": detail or None,
+        }
         return {
             "ok": False,
             "model_hint": model_hint,
             "latency_ms": latency_ms,
-            "error": _friendly_http_error(resp.status_code, detail, model_hint),
-            "details": {"status_code": resp.status_code, "url": url, "response": parsed or detail},
+            "error": _friendly_http_error(int(attempt.get("status_code") or 0), detail, model_hint),
+            "details": {
+                "status_code": attempt.get("status_code"),
+                "url": url,
+                "response": parsed or detail,
+                "error": error_parts,
+                "request_id": attempt.get("request_id"),
+                "ratelimit": attempt.get("ratelimit") or {},
+            },
         }
 
-    try:
-        payload = resp.json()
-    except Exception:
+    payload = attempt.get("payload")
+    if not isinstance(payload, dict):
         return {
             "ok": False,
             "model_hint": model_hint,
             "latency_ms": latency_ms,
             "error": "OpenAI returned invalid JSON.",
-            "details": {"status_code": resp.status_code, "url": url},
+            "details": {"status_code": attempt.get("status_code"), "url": url, "request_id": attempt.get("request_id")},
         }
 
     choices = payload.get("choices") or []
@@ -460,7 +488,7 @@ async def probe_connection(
             "model_hint": model_hint,
             "latency_ms": latency_ms,
             "error": "OpenAI returned no choices.",
-            "details": {"status_code": resp.status_code, "url": url},
+            "details": {"status_code": attempt.get("status_code"), "url": url, "request_id": attempt.get("request_id")},
         }
 
     content = _normalize_content(choices[0].get("message", {}).get("content", ""))
@@ -470,7 +498,7 @@ async def probe_connection(
             "model_hint": model_hint,
             "latency_ms": latency_ms,
             "error": "OpenAI returned empty completion content.",
-            "details": {"status_code": resp.status_code, "url": url},
+            "details": {"status_code": attempt.get("status_code"), "url": url, "request_id": attempt.get("request_id")},
         }
 
     return {
@@ -478,5 +506,10 @@ async def probe_connection(
         "model_hint": model_hint,
         "latency_ms": latency_ms,
         "error": None,
-        "details": {"status_code": resp.status_code, "url": url},
+        "details": {
+            "status_code": attempt.get("status_code"),
+            "url": url,
+            "request_id": attempt.get("request_id"),
+            "ratelimit": attempt.get("ratelimit") or {},
+        },
     }

@@ -70,6 +70,51 @@ def test_provider_test_endpoint_uses_provider_config(monkeypatch):
     assert payload["details"]["source"] == "test"
 
 
+def test_openai_direct_test_endpoint_returns_structured_fields(monkeypatch):
+    client = TestClient(app)
+
+    saved = client.post(
+        "/api/providers",
+        json={"provider": "openai", "key_ref": "openai_default", "api_key": "sk-provider-1299"},
+    )
+    assert saved.status_code == 200, saved.text
+
+    async def _fake_probe_connection(**_kwargs):
+        return {
+            "ok": False,
+            "model_hint": "gpt-5.2",
+            "latency_ms": 18,
+            "error": "OpenAI rate limit reached.",
+            "details": {
+                "status_code": 429,
+                "url": "https://api.openai.com/v1/responses",
+                "request_id": "req_test_123",
+                "ratelimit": {"retry-after": "4"},
+                "error": {
+                    "type": "insufficient_quota",
+                    "code": "rate_limit",
+                    "message": "billing limit reached",
+                },
+            },
+        }
+
+    monkeypatch.setattr("server.openai_adapter.probe_connection", _fake_probe_connection)
+
+    tested = client.post(
+        "/api/providers/openai/test",
+        json={"model": "gpt-5.2"},
+    )
+    assert tested.status_code == 200, tested.text
+    payload = tested.json()
+    assert payload["provider"] == "openai"
+    assert payload["ok"] is False
+    assert payload["status"] == 429
+    assert payload["request_id"] == "req_test_123"
+    assert payload["ratelimit"]["retry-after"] == "4"
+    assert payload["error_code"] == "QUOTA_EXCEEDED"
+    assert payload["error_detail"]["code"] == "rate_limit"
+
+
 def test_settings_models_catalog_returns_friendly_defaults():
     client = TestClient(app)
     resp = client.get("/api/settings/models")

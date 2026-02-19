@@ -10,14 +10,22 @@ body,
 
 html,
 body {
-  background: var(--bg0);
-  color: var(--text0);
+  background: var(--bg);
+  color: var(--text);
 }
 
 body {
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: var(--line-normal);
+}
+
+:root[data-mode='dark'] {
+  color-scheme: dark;
+}
+
+:root[data-mode='light'] {
+  color-scheme: light;
 }
 
 #root {
@@ -35,5 +43,17 @@ a:hover {
 
 :focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--focus);
+  box-shadow: 0 0 0 2px var(--focusRing);
+}
+
+button {
+  color: var(--btnText);
+}
+
+input,
+textarea,
+select {
+  background: var(--inputBg);
+  color: var(--inputText);
+  border-color: var(--inputBorder);
 }

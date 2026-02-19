@@ -4,8 +4,8 @@ html,
 body,
 #root,
 .app-v2 {
-  background: var(--bg0);
-  color: var(--textPrimary);
+  background: var(--bg);
+  color: var(--text);
   font-family: var(--font-sans);
 }
 
@@ -42,10 +42,10 @@ body,
 .task-move-btn,
 .add-room-btn {
   min-height: 34px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--btnBorder);
   border-radius: var(--radius-md);
-  background: var(--bg2);
-  color: var(--textSecondary);
+  background: var(--btnBg);
+  color: var(--btnText);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.01em;
@@ -65,9 +65,9 @@ body,
 .projects-sidebar-actions button:hover,
 .task-move-btn:hover,
 .add-room-btn:hover {
-  background: color-mix(in srgb, var(--bg2) 70%, var(--surface-2));
-  border-color: color-mix(in srgb, var(--border) 65%, var(--accent));
-  color: var(--textPrimary);
+  background: color-mix(in srgb, var(--btnBg) 68%, var(--surface2));
+  border-color: color-mix(in srgb, var(--btnBorder) 65%, var(--primary));
+  color: var(--text);
 }
 
 .btn:disabled,
@@ -90,15 +90,15 @@ body,
 .ui-btn-primary,
 .control-btn.gate-btn,
 .create-submit-btn {
-  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
-  background: var(--accentSoft);
-  color: var(--textPrimary);
+  border-color: color-mix(in srgb, var(--primary) 58%, var(--btnBorder));
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+  color: var(--primaryText);
 }
 
 .btn-danger,
 .ui-btn-destructive,
 .stop-btn {
-  border-color: color-mix(in srgb, var(--danger) 52%, var(--border));
+  border-color: color-mix(in srgb, var(--danger) 52%, var(--btnBorder));
   background: var(--dangerSoft);
   color: var(--danger);
 }
@@ -106,7 +106,7 @@ body,
 .btn-ghost,
 .ui-btn-ghost {
   background: transparent;
-  border-color: color-mix(in srgb, var(--border) 75%, transparent);
+  border-color: color-mix(in srgb, var(--btnBorder) 75%, transparent);
 }
 
 .input,
@@ -118,10 +118,10 @@ input[type='email'],
 input[type='number'],
 textarea,
 select {
-  border: 1px solid var(--border);
+  border: 1px solid var(--inputBorder);
   border-radius: var(--radius-md);
-  background: var(--bg2);
-  color: var(--textPrimary);
+  background: var(--inputBg);
+  color: var(--inputText);
   font-size: 13px;
   font-family: var(--font-sans);
   line-height: var(--line-normal);
@@ -142,8 +142,8 @@ textarea::placeholder {
 .status-badge {
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--bg2) 90%, transparent);
-  color: var(--textSecondary);
+  background: color-mix(in srgb, var(--surface2) 90%, transparent);
+  color: var(--text1);
   font-size: 11px;
   font-weight: 600;
 }
@@ -164,7 +164,7 @@ textarea::placeholder {
 .task-card,
 .task-modal,
 .thread-msg {
-  background: var(--bg1);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: none;
@@ -193,9 +193,9 @@ textarea::placeholder {
 .workspace-tab-btn.active,
 .settings-tabs button.active,
 .app-topbar-nav button.active {
-  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
-  background: var(--accentSoft);
-  color: var(--textPrimary);
+  border-color: color-mix(in srgb, var(--primary) 58%, var(--border));
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--text);
 }
 
 .agent-config-error,
@@ -203,13 +203,13 @@ textarea::placeholder {
 .app-error {
   border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--border));
   background: var(--dangerSoft);
-  color: color-mix(in srgb, var(--danger) 78%, var(--textPrimary));
+  color: color-mix(in srgb, var(--danger) 78%, var(--text));
 }
 
 .agent-config-notice {
   border: 1px solid color-mix(in srgb, var(--success) 46%, var(--border));
   background: var(--successSoft);
-  color: color-mix(in srgb, var(--success) 78%, var(--textPrimary));
+  color: color-mix(in srgb, var(--success) 78%, var(--text));
 }
 
 *:focus-visible {

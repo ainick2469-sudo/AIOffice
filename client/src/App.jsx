@@ -377,11 +377,13 @@ function readThemeScheme() {
   return 'midnight';
 }
 
-function applyRootThemeAttributes(resolvedTheme, scheme) {
+function applyRootThemeAttributes(resolvedTheme, scheme, mode = 'system') {
   if (typeof document === 'undefined') return;
   const normalizedTheme = resolvedTheme === 'light' ? 'light' : 'dark';
   const normalizedScheme = normalizeThemeScheme(scheme);
+  const normalizedMode = normalizeThemeMode(mode);
   const root = document.documentElement;
+  root.setAttribute('data-mode', normalizedMode);
   root.setAttribute('data-theme', normalizedTheme);
   root.setAttribute('data-scheme', normalizedScheme);
 }
@@ -389,7 +391,7 @@ function applyRootThemeAttributes(resolvedTheme, scheme) {
 const INITIAL_THEME_MODE = readThemeMode();
 const INITIAL_THEME_SCHEME = readThemeScheme();
 const INITIAL_THEME = resolveTheme(INITIAL_THEME_MODE, prefersLightScheme());
-applyRootThemeAttributes(INITIAL_THEME, INITIAL_THEME_SCHEME);
+applyRootThemeAttributes(INITIAL_THEME, INITIAL_THEME_SCHEME, INITIAL_THEME_MODE);
 
 export default function App() {
   const initialRoute = useMemo(() => {
@@ -509,7 +511,7 @@ export default function App() {
     const applyTheme = () => {
       const resolved = resolveTheme(themeMode, Boolean(media?.matches));
       setTheme(resolved);
-      applyRootThemeAttributes(resolved, themeScheme);
+      applyRootThemeAttributes(resolved, themeScheme, themeMode);
       try {
         localStorage.setItem(THEME_MODE_KEY, themeMode);
         localStorage.setItem(THEME_SCHEME_KEY, themeScheme);

@@ -400,6 +400,38 @@
   flex-wrap: wrap;
 }
 
+.settings-provider-meta {
+  font-size: 11px;
+  color: var(--textMuted);
+}
+
+.settings-provider-runtime {
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface2) 76%, transparent);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-provider-runtime strong {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.settings-provider-runtime-grid {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.settings-provider-runtime-grid span {
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .settings-provider-advanced {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

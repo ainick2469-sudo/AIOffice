@@ -8,15 +8,15 @@ body,
   width: 100%;
   height: 100%;
   margin: 0;
-  background: var(--bg0);
+  background: var(--bg);
 }
 
 body {
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: var(--line-normal);
-  background: var(--bg0);
-  color: var(--text0);
+  background: var(--bg);
+  color: var(--text);
   height: 100%;
   overflow: auto;
 }

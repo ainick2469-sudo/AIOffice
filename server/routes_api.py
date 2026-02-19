@@ -6,7 +6,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Request
+from fastapi import APIRouter, Body, HTTPException, Query, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from typing import Optional
 from . import database as db
@@ -198,6 +198,13 @@ def _map_provider_test_failure(
         "UNKNOWN_ERROR",
         f"{provider_title} test failed. Review diagnostics, then re-run Test Connection.",
     )
+
+
+def _key_fingerprint_last4(value: Optional[str]) -> Optional[str]:
+    key = str(value or "").strip()
+    if not key:
+        return None
+    return key[-4:] if len(key) >= 4 else key
 
 
 def _seed_spec_from_prompt(prompt: str, *, project_name: str, template: Optional[str] = None) -> tuple[str, str]:
@@ -711,8 +718,7 @@ async def set_provider_config(body: ProviderConfigIn):
     )
 
 
-@router.post("/providers/test", response_model=ProviderTestOut)
-async def test_provider_config(body: ProviderTestIn):
+async def _run_provider_test(body: ProviderTestIn) -> ProviderTestOut:
     provider = _normalize_provider(body.provider)
     if provider not in {"openai", "claude", "ollama"}:
         raise HTTPException(400, "provider must be one of: openai, claude, anthropic, ollama, codex")
@@ -739,7 +745,20 @@ async def test_provider_config(body: ProviderTestIn):
         return ProviderTestOut(
             ok=bool(available),
             provider=provider,
+            model=None,
             model_hint=None,
+            base_url="http://127.0.0.1:11434",
+            key_source="local",
+            key_ref=None,
+            key_fingerprint_last4=None,
+            status=None,
+            request_id=None,
+            ratelimit={},
+            error_detail=(
+                {"type": error_code, "code": error_code, "message": error_text}
+                if error_text
+                else None
+            ),
             latency_ms=latency_ms,
             error=error_text,
             error_code=error_code,
@@ -758,6 +777,8 @@ async def test_provider_config(body: ProviderTestIn):
     key_ref = (runtime.get("key_ref") or "").strip()
     api_key = (runtime.get("api_key") or "").strip()
     base_url = (runtime.get("base_url") or "").strip() or None
+    key_source = runtime.get("key_source")
+    key_last4 = runtime.get("key_fingerprint_last4") or _key_fingerprint_last4(api_key)
     model_hint = (
         runtime.get("model_default")
         or cfg.get("default_model")
@@ -776,7 +797,20 @@ async def test_provider_config(body: ProviderTestIn):
         result = ProviderTestOut(
             ok=False,
             provider=provider,
+            model=model_hint,
             model_hint=model_hint,
+            base_url=base_url,
+            key_source=key_source,
+            key_ref=key_ref or None,
+            key_fingerprint_last4=key_last4,
+            status=401,
+            request_id=None,
+            ratelimit={},
+            error_detail={
+                "type": "missing_api_key",
+                "code": "missing_api_key",
+                "message": error_text,
+            },
             latency_ms=0,
             error=error_text,
             error_code=error_code,
@@ -835,9 +869,22 @@ async def test_provider_config(body: ProviderTestIn):
         **probe_details,
         "provider": provider,
         "base_url": base_url,
-        "key_source": runtime.get("key_source"),
+        "key_source": key_source,
+        "key_ref": key_ref or None,
+        "key_fingerprint_last4": key_last4,
     }
     error_text = probe.get("error")
+    status_code = _extract_status_code(merged_details)
+    request_id = merged_details.get("request_id") if isinstance(merged_details.get("request_id"), str) else None
+    ratelimit = merged_details.get("ratelimit") if isinstance(merged_details.get("ratelimit"), dict) else {}
+    probe_error = merged_details.get("error") if isinstance(merged_details.get("error"), dict) else {}
+    error_detail = None
+    if error_text or probe_error:
+        error_detail = {
+            "type": probe_error.get("type") or None,
+            "code": probe_error.get("code") or None,
+            "message": probe_error.get("message") or error_text or None,
+        }
     error_code = None
     hint = None
     if not bool(probe.get("ok")):
@@ -850,7 +897,16 @@ async def test_provider_config(body: ProviderTestIn):
     result = ProviderTestOut(
         ok=bool(probe.get("ok")),
         provider=provider,
+        model=model_hint,
         model_hint=str(probe.get("model_hint") or model_hint),
+        base_url=base_url,
+        key_source=key_source,
+        key_ref=key_ref or None,
+        key_fingerprint_last4=key_last4,
+        status=status_code,
+        request_id=request_id,
+        ratelimit=ratelimit,
+        error_detail=error_detail,
         latency_ms=probe.get("latency_ms"),
         error=error_text,
         error_code=error_code,
@@ -861,6 +917,33 @@ async def test_provider_config(body: ProviderTestIn):
     await db.set_setting(f"{provider}.last_error", result.error or "")
     provider_config.clear_provider_cache(provider)
     return result
+
+
+@router.post("/providers/test", response_model=ProviderTestOut)
+async def test_provider_config(body: ProviderTestIn):
+    return await _run_provider_test(body)
+
+
+@router.post("/providers/openai/test", response_model=ProviderTestOut)
+async def test_openai_provider(body: dict = Body(default_factory=dict)):
+    probe = ProviderTestIn(
+        provider="openai",
+        model=(body.get("model") if isinstance(body, dict) else None),
+        key_ref=(body.get("key_ref") if isinstance(body, dict) else None),
+        base_url=(body.get("base_url") if isinstance(body, dict) else None),
+    )
+    return await _run_provider_test(probe)
+
+
+@router.post("/providers/claude/test", response_model=ProviderTestOut)
+async def test_claude_provider(body: dict = Body(default_factory=dict)):
+    probe = ProviderTestIn(
+        provider="claude",
+        model=(body.get("model") if isinstance(body, dict) else None),
+        key_ref=(body.get("key_ref") if isinstance(body, dict) else None),
+        base_url=(body.get("base_url") if isinstance(body, dict) else None),
+    )
+    return await _run_provider_test(probe)
 
 
 @router.get("/messages/{channel}")
@@ -2750,6 +2833,7 @@ async def claude_status():
         "via_credentials": cred_available,
         "key_ref": status.get("key_ref"),
         "key_masked": status.get("key_masked"),
+        "key_fingerprint_last4": status.get("key_fingerprint_last4"),
         "base_url": status.get("base_url"),
         "model_default": status.get("model_default"),
         "last_tested_at": status.get("last_tested_at"),
@@ -2848,6 +2932,7 @@ async def openai_status():
         "via_credentials": cred_available,
         "key_ref": status.get("key_ref"),
         "key_masked": status.get("key_masked"),
+        "key_fingerprint_last4": status.get("key_fingerprint_last4"),
         "base_url": status.get("base_url"),
         "model_default": status.get("model_default"),
         "reasoning_effort": status.get("reasoning_effort"),

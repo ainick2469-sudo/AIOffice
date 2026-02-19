@@ -53,6 +53,22 @@ body[data-theme='dark'] {
   --focus: rgba(95, 141, 255, 0.48);
   --disabledOpacity: 0.52;
 
+  /* Required global semantic token aliases */
+  --bg: var(--bg0);
+  --surface: var(--panel);
+  --surface2: var(--panel2);
+  --text: var(--text0);
+  --primary: var(--accent);
+  --primaryHover: var(--accent2);
+  --primaryText: var(--text0);
+  --focusRing: var(--focus);
+  --inputBg: var(--panel2);
+  --inputText: var(--text0);
+  --inputBorder: var(--border);
+  --btnBg: color-mix(in srgb, var(--surface2) 72%, transparent);
+  --btnText: var(--text1);
+  --btnBorder: var(--border);
+
   --accentSoft: color-mix(in srgb, var(--accent) 24%, transparent);
   --dangerSoft: color-mix(in srgb, var(--danger) 20%, transparent);
   --warningSoft: color-mix(in srgb, var(--warning) 22%, transparent);
@@ -122,6 +138,21 @@ body[data-theme='light'] {
   --shadow-3: 0 16px 42px rgba(15, 23, 42, 0.2);
   --shadow: var(--shadow-2);
   --focus: rgba(37, 99, 235, 0.34);
+
+  --bg: var(--bg0);
+  --surface: var(--panel);
+  --surface2: var(--panel2);
+  --text: var(--text0);
+  --primary: var(--accent);
+  --primaryHover: var(--accent2);
+  --primaryText: #f8fbff;
+  --focusRing: var(--focus);
+  --inputBg: var(--panel);
+  --inputText: var(--text0);
+  --inputBorder: var(--border);
+  --btnBg: color-mix(in srgb, var(--surface2) 72%, transparent);
+  --btnText: var(--text1);
+  --btnBorder: var(--border);
 
   --accentSoft: color-mix(in srgb, var(--accent) 16%, transparent);
   --dangerSoft: color-mix(in srgb, var(--danger) 12%, transparent);

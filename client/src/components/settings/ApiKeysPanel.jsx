@@ -99,6 +99,23 @@ function formatErrorSummary(result) {
   return bits.join(' — ') || 'Connection test failed.';
 }
 
+function providerTestEndpoint(provider) {
+  const normalized = String(provider || '').trim().toLowerCase();
+  if (normalized === 'openai' || normalized === 'claude') {
+    return `/api/providers/${normalized}/test`;
+  }
+  return '/api/providers/test';
+}
+
+function quotaHelpMessage(result) {
+  const code = String(result?.error_code || '').toUpperCase();
+  const detail = String(result?.error || '').toLowerCase();
+  if (code === 'QUOTA_EXCEEDED' || detail.includes('quota') || detail.includes('billing')) {
+    return 'This is account billing/usage limits (not a bad key). Check OpenAI Billing and project budgets.';
+  }
+  return '';
+}
+
 export default function ApiKeysPanel({
   modelCatalog,
   focusSignal,
@@ -287,7 +304,8 @@ export default function ApiKeysPanel({
     setTesting((prev) => ({ ...prev, [provider]: true }));
     setTestResult((prev) => ({ ...prev, [provider]: null }));
     try {
-      const response = await fetch('/api/providers/test', {
+      const endpoint = providerTestEndpoint(provider);
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -305,6 +323,8 @@ export default function ApiKeysPanel({
         last_test_at: new Date().toISOString(),
         latency_ms: payload?.latency_ms || null,
         ok: Boolean(payload?.ok),
+        request_id: payload?.request_id || null,
+        status: payload?.status || null,
         details: payload?.details || null,
         error_summary: formatErrorSummary(payload),
       });
@@ -486,6 +506,18 @@ export default function ApiKeysPanel({
                   <small>Last tested: {snapshot?.[providerId]?.last_tested_at || 'never'}</small>
                 </div>
 
+                <div className="settings-provider-runtime panel">
+                  <strong>Backend runtime config</strong>
+                  <div className="settings-provider-runtime-grid">
+                    <span>Provider: {prettyProvider(providerId)}</span>
+                    <span>Model: {selectedModel || '(default)'}</span>
+                    <span>Base URL: {draft?.[providerId]?.base_url || snapshot?.[providerId]?.base_url || meta.baseUrlPlaceholder}</span>
+                    <span>Key source: {snapshot?.[providerId]?.key_source || 'none'}</span>
+                    <span>Key ref: {snapshot?.[providerId]?.key_ref || `${providerId}_default`}</span>
+                    <span>Fingerprint: {snapshot?.[providerId]?.key_fingerprint_last4 || 'n/a'}</span>
+                  </div>
+                </div>
+
                 {lastError ? (
                   <div className="agent-config-error">
                     {lastError}
@@ -515,6 +547,15 @@ export default function ApiKeysPanel({
                     {result.ok
                       ? `Connected (${result.latency_ms || 0}ms)`
                       : [result.error_code, result.error].filter(Boolean).join(': ') || 'Connection failed'}
+                    {!result.ok && result?.request_id ? (
+                      <p style={{ marginTop: 8 }}>Request ID: {result.request_id}</p>
+                    ) : null}
+                    {!result.ok && result?.status ? (
+                      <p style={{ marginTop: 8 }}>HTTP status: {result.status}</p>
+                    ) : null}
+                    {!result.ok && quotaHelpMessage(result) ? (
+                      <p style={{ marginTop: 8 }}>{quotaHelpMessage(result)}</p>
+                    ) : null}
                     {!result.ok && result.hint ? <p style={{ marginTop: 8 }}>{result.hint}</p> : null}
                     {result?.details ? (
                       <details style={{ marginTop: 8 }}>

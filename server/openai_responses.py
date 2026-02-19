@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-import httpx
+from . import openai_transport
 
 
 def _normalize_base_url(base_url: Optional[str]) -> str:
@@ -133,40 +133,52 @@ async def responses_generate(
         "Content-Type": "application/json",
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            resp = await client.post(url, headers=headers, json=body)
-    except httpx.TimeoutException:
+    attempt = await openai_transport.post_json_with_backoff(
+        url=url,
+        headers=headers,
+        body=body,
+        timeout_seconds=timeout_seconds,
+    )
+    if attempt.get("status_code") == 408:
         return {
             "ok": False,
             "error": "OpenAI timeout.",
             "status_code": 408,
+            "request_id": attempt.get("request_id"),
+            "ratelimit": attempt.get("ratelimit") or {},
             "details": {"url": url, "timeout_seconds": timeout_seconds},
         }
-    except Exception as exc:
+    if attempt.get("error"):
         return {
             "ok": False,
-            "error": f"OpenAI request failed: {exc}",
-            "status_code": None,
+            "error": f"OpenAI request failed: {attempt.get('error')}",
+            "status_code": attempt.get("status_code"),
+            "request_id": attempt.get("request_id"),
+            "ratelimit": attempt.get("ratelimit") or {},
             "details": {"url": url},
         }
-
-    payload = None
-    try:
-        payload = resp.json()
-    except Exception:
-        payload = None
-
-    if resp.status_code != 200:
-        detail = _extract_error_detail(payload) if isinstance(payload, dict) else (resp.text or "").strip()[:300]
+    payload = attempt.get("payload")
+    status_code = attempt.get("status_code")
+    request_id = attempt.get("request_id")
+    ratelimit = attempt.get("ratelimit") or {}
+    if status_code != 200:
+        detail = _extract_error_detail(payload) if isinstance(payload, dict) else str(attempt.get("text") or "").strip()[:300]
+        err = payload.get("error") if isinstance(payload, dict) and isinstance(payload.get("error"), dict) else {}
         return {
             "ok": False,
-            "error": _friendly_openai_error(resp.status_code, detail, model),
-            "status_code": resp.status_code,
+            "error": _friendly_openai_error(int(status_code or 0), detail, model),
+            "status_code": status_code,
+            "request_id": request_id,
+            "ratelimit": ratelimit,
             "details": {
                 "url": url,
-                "response": payload if isinstance(payload, dict) else (resp.text or "")[:800],
+                "response": payload if isinstance(payload, dict) else str(attempt.get("text") or "")[:800],
                 "detail": detail,
+                "error": {
+                    "type": str(err.get("type") or "").strip() or None,
+                    "code": str(err.get("code") or "").strip() or None,
+                    "message": str(err.get("message") or "").strip() or detail or None,
+                },
             },
         }
 
@@ -174,7 +186,9 @@ async def responses_generate(
         return {
             "ok": False,
             "error": "OpenAI returned invalid JSON.",
-            "status_code": resp.status_code,
+            "status_code": status_code,
+            "request_id": request_id,
+            "ratelimit": ratelimit,
             "details": {"url": url},
         }
 
@@ -184,15 +198,18 @@ async def responses_generate(
         return {
             "ok": False,
             "error": f"OpenAI Responses returned no parseable text. Payload snippet: {snippet}",
-            "status_code": resp.status_code,
+            "status_code": status_code,
+            "request_id": request_id,
+            "ratelimit": ratelimit,
             "details": {"url": url},
         }
 
     return {
         "ok": True,
         "text": text,
-        "status_code": resp.status_code,
+        "status_code": status_code,
+        "request_id": request_id,
+        "ratelimit": ratelimit,
         "usage": payload.get("usage") or {},
         "details": {"url": url},
     }
-

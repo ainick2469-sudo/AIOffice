@@ -31,6 +31,13 @@ def _mask_key(value: str) -> Optional[str]:
     return f"{key[:3]}...{key[-4:]}"
 
 
+def _key_last4(value: str) -> Optional[str]:
+    key = (value or "").strip()
+    if not key:
+        return None
+    return key[-4:] if len(key) >= 4 else key
+
+
 def _is_placeholder_secret(value: str) -> bool:
     text = (value or "").strip()
     if not text:
@@ -221,6 +228,7 @@ async def _read_provider_runtime(
         "key_source": key_source,
         "key_ref": key_ref or None,
         "key_masked": _mask_key(api_key),
+        "key_fingerprint_last4": _key_last4(api_key),
         "base_url": base_url or None,
         "model_default": model_default or None,
         "reasoning_effort": reasoning_effort or None,
@@ -270,6 +278,7 @@ async def provider_status(provider: str, *, refresh: bool = False) -> dict:
         "provider": runtime["provider"],
         "configured": bool(runtime.get("configured")),
         "key_masked": runtime.get("key_masked"),
+        "key_fingerprint_last4": runtime.get("key_fingerprint_last4"),
         "key_ref": runtime.get("key_ref"),
         "base_url": runtime.get("base_url"),
         "model_default": runtime.get("model_default"),
@@ -287,9 +296,11 @@ async def provider_settings_snapshot() -> dict:
         "openai": {
             "configured": bool(openai.get("configured")),
             "key_masked": openai.get("key_masked"),
+            "key_fingerprint_last4": openai.get("key_fingerprint_last4"),
             "model_default": openai.get("model_default"),
             "base_url": openai.get("base_url"),
             "key_ref": openai.get("key_ref"),
+            "key_source": openai.get("key_source"),
             "reasoning_effort": openai.get("reasoning_effort"),
             "last_tested_at": openai.get("last_tested_at"),
             "last_error": openai.get("last_error"),
@@ -297,9 +308,11 @@ async def provider_settings_snapshot() -> dict:
         "claude": {
             "configured": bool(claude.get("configured")),
             "key_masked": claude.get("key_masked"),
+            "key_fingerprint_last4": claude.get("key_fingerprint_last4"),
             "model_default": claude.get("model_default"),
             "base_url": claude.get("base_url"),
             "key_ref": claude.get("key_ref"),
+            "key_source": claude.get("key_source"),
             "last_tested_at": claude.get("last_tested_at"),
             "last_error": claude.get("last_error"),
         },

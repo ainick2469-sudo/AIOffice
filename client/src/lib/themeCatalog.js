@@ -13,25 +13,32 @@ export const THEME_SCHEMES = [
     accent2: '#84a9ff',
   },
   {
-    id: 'slate',
-    label: 'Slate',
-    description: 'Neutral slate with teal accent.',
-    accent: '#38b8b2',
-    accent2: '#5cc8c2',
+    id: 'ocean',
+    label: 'Ocean',
+    description: 'Blue-teal accents with calm contrast.',
+    accent: '#2fa7d9',
+    accent2: '#5cc3ed',
   },
   {
-    id: 'nord',
-    label: 'Nord',
-    description: 'Icy blue-gray with frosty highlights.',
-    accent: '#82b4ff',
-    accent2: '#9fc5ff',
+    id: 'citrus',
+    label: 'Citrus',
+    description: 'Warm amber accent with energetic highlights.',
+    accent: '#d38a24',
+    accent2: '#ebb348',
   },
   {
-    id: 'ember',
-    label: 'Ember',
-    description: 'Charcoal base with warm orange accent.',
-    accent: '#ff8c4c',
-    accent2: '#ffab73',
+    id: 'rose',
+    label: 'Rose',
+    description: 'Dark surface with rose-magenta accent.',
+    accent: '#ef6da8',
+    accent2: '#f58abc',
+  },
+  {
+    id: 'mono',
+    label: 'Mono',
+    description: 'Minimal neutral palette with subtle steel accents.',
+    accent: '#7d93b3',
+    accent2: '#98abca',
   },
   {
     id: 'forest',
@@ -47,20 +54,6 @@ export const THEME_SCHEMES = [
     accent: '#9f7cff',
     accent2: '#bc9fff',
   },
-  {
-    id: 'rose',
-    label: 'Rose',
-    description: 'Dark surface with rose-magenta accent.',
-    accent: '#ef6da8',
-    accent2: '#f58abc',
-  },
-  {
-    id: 'sand',
-    label: 'Sand',
-    description: 'Warm neutral with amber accent.',
-    accent: '#c8872f',
-    accent2: '#dca14d',
-  },
 ];
 
 export const DEFAULT_THEME_SCHEME = 'midnight';
@@ -74,7 +67,14 @@ export function normalizeThemeMode(value) {
 }
 
 export function normalizeThemeScheme(value) {
-  const scheme = String(value || '').trim().toLowerCase();
+  const raw = String(value || '').trim().toLowerCase();
+  const aliases = {
+    slate: 'mono',
+    nord: 'ocean',
+    ember: 'citrus',
+    sand: 'citrus',
+  };
+  const scheme = aliases[raw] || raw;
   if (THEME_SCHEME_IDS.has(scheme)) return scheme;
   return DEFAULT_THEME_SCHEME;
 }
