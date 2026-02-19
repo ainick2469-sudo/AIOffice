@@ -6,14 +6,15 @@ html,
 body,
 #root {
   height: 100%;
+  background: var(--bg0);
 }
 
 body {
   font-family: var(--font-sans);
   font-size: 14px;
   line-height: var(--line-normal);
-  background: var(--bg-dark);
-  color: var(--text-primary);
+  background: var(--bg0);
+  color: var(--text0);
   height: 100%;
   overflow: auto;
 }
@@ -2751,44 +2752,6 @@ body {
   overflow: hidden;
 }
 
-.app-topbar-v2 {
-  height: 56px;
-  border-bottom: 1px solid var(--topbar-border);
-  background: var(--topbar-bg);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 14px;
-  gap: 12px;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
-}
-
-.app-topbar-nav {
-  display: flex;
-  gap: 8px;
-}
-
-.app-topbar-nav button {
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: 7px;
-  padding: 7px 12px;
-  cursor: pointer;
-}
-
-.app-topbar-nav button.active {
-  background: rgba(99, 102, 241, 0.22);
-  border-color: rgba(99, 102, 241, 0.48);
-  color: var(--text-primary);
-}
-
-.app-topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .projects-sidebar {
   width: 290px;
   min-width: 250px;
@@ -3517,38 +3480,6 @@ body {
     align-items: flex-start;
     padding: 10px;
   }
-}
-
-/* ── Calm Workspace + Dark Header Blend Overrides ─────────────── */
-.app-topbar-v2 {
-  border-bottom: 1px solid var(--divider);
-  background: var(--panel);
-  box-shadow: none;
-  backdrop-filter: blur(6px);
-}
-
-.app-topbar-nav button {
-  border-radius: 8px;
-  font-weight: 600;
-}
-
-.app-topbar-actions .pill {
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel2) 70%, transparent);
-  color: var(--text-secondary);
-}
-
-.projects-sidebar {
-  background: var(--panel);
-  border-right-color: var(--divider);
-}
-
-.projects-sidebar-list {
-  padding: 10px 8px;
-}
-
-.projects-sidebar-item {
-  background: color-mix(in srgb, var(--panel2) 74%, transparent);
 }
 
 .workspace-shell-header.calm {
@@ -5155,33 +5086,18 @@ body.splitpane-dragging-horizontal * {
 }
 
 /* ── Prompt #5: Global Theme + Header Blend Overhaul ─────────────── */
-body {
-  background: var(--bg0);
-  color: var(--textPrimary);
-}
-
-#root,
-.app,
-.app-v2,
-.app-main-v2 {
-  background: var(--bg0);
-}
 
 .app-topbar-v2 {
   height: 58px;
-  border-bottom: 1px solid var(--divider);
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--panel) 94%, var(--bg0)),
-    color-mix(in srgb, var(--bg1) 82%, var(--panel))
-  );
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--divider) 80%, transparent);
+  border-bottom: 1px solid var(--topbar-border);
+  background: var(--topbar-bg);
+  box-shadow: 0 1px 0 var(--topbar-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   padding: 0 var(--space-3);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(6px);
   position: relative;
   z-index: 10;
 }
@@ -5191,6 +5107,25 @@ body {
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+  flex: 1;
+}
+
+.app-drag-region {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1;
+}
+
+.pywebview-drag-region {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+.pywebview-no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 .app-brand-mark {
@@ -5209,36 +5144,37 @@ body {
   height: 10px;
   border-radius: 999px;
   background: radial-gradient(circle at 30% 30%, var(--accentHover), var(--accent));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .app-topbar-nav {
   display: inline-flex;
   gap: var(--space-1);
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .app-topbar-nav .ui-tab {
   min-height: 34px;
   padding: 6px 12px;
-  border: 1px solid transparent;
+  border: 1px solid var(--divider);
   border-radius: var(--radius-md);
-  background: transparent;
+  background: var(--panel);
   color: var(--textMuted);
   font-size: 12px;
   font-weight: 600;
 }
 
 .app-topbar-nav .ui-tab:hover {
-  background: color-mix(in srgb, var(--panel2) 72%, transparent);
-  border-color: color-mix(in srgb, var(--divider) 72%, transparent);
+  background: var(--panel2);
+  border-color: var(--border);
   color: var(--textPrimary);
 }
 
 .app-topbar-nav .ui-tab.active,
 .app-topbar-nav .ui-tab.ui-tab-active {
-  background: color-mix(in srgb, var(--accentSoft) 74%, var(--panel2));
-  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  background: var(--panel2);
+  border-color: var(--accent);
   color: var(--textPrimary);
 }
 
@@ -5265,7 +5201,7 @@ body {
   min-height: 34px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg2) 80%, transparent);
+  background: var(--bg2);
   color: var(--textSecondary);
   padding: 6px 10px;
   font-size: 12px;
@@ -5280,8 +5216,13 @@ body {
 
 .app-header-compact-menu > summary:hover {
   color: var(--textPrimary);
-  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
-  background: color-mix(in srgb, var(--panel2) 72%, transparent);
+  border-color: var(--accent);
+  background: var(--panel2);
+}
+
+.app-header-compact-menu[open] > summary {
+  border-color: var(--accent);
+  color: var(--textPrimary);
 }
 
 .app-header-compact-popover {
@@ -5291,7 +5232,7 @@ body {
   width: min(320px, 92vw);
   border: 1px solid var(--divider);
   border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  background: var(--panel);
   box-shadow: var(--shadow-2);
   padding: var(--space-2);
   display: grid;
@@ -5323,61 +5264,11 @@ body {
   min-width: 106px;
   height: 32px;
   padding: 4px 8px;
-  background: color-mix(in srgb, var(--bg2) 90%, transparent);
+  background: var(--bg2);
 }
 
 .app-theme-toggle {
   white-space: nowrap;
-}
-
-.app-header-compact-menu {
-  display: none;
-  position: relative;
-}
-
-.app-header-compact-menu > summary {
-  list-style: none;
-  border: 1px solid var(--divider);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--panel2) 86%, transparent);
-  color: var(--textSecondary);
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.app-header-compact-menu > summary::-webkit-details-marker {
-  display: none;
-}
-
-.app-header-compact-menu[open] > summary {
-  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
-  color: var(--textPrimary);
-}
-
-.app-header-compact-popover {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 8px);
-  width: min(280px, 78vw);
-  border: 1px solid var(--divider);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--panel) 96%, transparent);
-  box-shadow: var(--shadow);
-  padding: var(--space-2);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  z-index: 25;
-}
-
-.app-header-compact-row {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-2);
-  font-size: 12px;
-  color: var(--textSecondary);
 }
 
 .app-header-compact-row strong {
@@ -5391,6 +5282,100 @@ body {
 
 .app-layout-select-wrap.compact select {
   min-width: 128px;
+}
+
+.desktop-window-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: var(--space-1);
+}
+
+.desktop-window-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--textSecondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+
+.desktop-window-btn:hover {
+  background: var(--panel2);
+  color: var(--textPrimary);
+}
+
+.desktop-window-btn.close:hover {
+  background: var(--dangerSoft);
+  border-color: var(--danger);
+  color: var(--textPrimary);
+}
+
+@supports (color: color-mix(in srgb, white, black)) {
+  .app-topbar-v2 {
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--topbar-bg) 95%, var(--bg0)),
+      color-mix(in srgb, var(--bg1) 86%, var(--topbar-bg))
+    );
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--topbar-border) 82%, transparent);
+  }
+
+  .app-brand-dot {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+
+  .app-topbar-nav .ui-tab:hover {
+    background: color-mix(in srgb, var(--panel2) 72%, transparent);
+    border-color: color-mix(in srgb, var(--divider) 74%, transparent);
+  }
+
+  .app-topbar-nav .ui-tab.active,
+  .app-topbar-nav .ui-tab.ui-tab-active {
+    background: color-mix(in srgb, var(--accentSoft) 74%, var(--panel2));
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  }
+
+  .app-header-compact-menu > summary {
+    background: color-mix(in srgb, var(--bg2) 84%, transparent);
+  }
+
+  .app-header-compact-menu > summary:hover {
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+    background: color-mix(in srgb, var(--panel2) 72%, transparent);
+  }
+
+  .app-header-compact-menu[open] > summary {
+    border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+  }
+
+  .app-header-compact-popover {
+    background: color-mix(in srgb, var(--panel) 96%, transparent);
+  }
+
+  .app-layout-select-wrap select {
+    background: color-mix(in srgb, var(--bg2) 90%, transparent);
+  }
+
+  .desktop-window-btn {
+    background: color-mix(in srgb, var(--panel) 96%, transparent);
+    border-color: color-mix(in srgb, var(--divider) 82%, transparent);
+  }
+
+  .desktop-window-btn:hover {
+    background: color-mix(in srgb, var(--panel2) 84%, transparent);
+  }
+
+  .desktop-window-btn.close:hover {
+    background: color-mix(in srgb, var(--dangerSoft) 76%, var(--panel2));
+  }
 }
 
 .pill.is-active {
@@ -5856,10 +5841,17 @@ select {
   text-overflow: ellipsis;
   font-size: 12px;
   color: var(--textMuted);
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   padding: 4px 10px;
-  background: color-mix(in srgb, var(--bg2) 75%, transparent);
+  background: var(--bg2);
+}
+
+@supports (color: color-mix(in srgb, white, black)) {
+  .app-route-breadcrumb {
+    border-color: color-mix(in srgb, var(--border) 72%, transparent);
+    background: color-mix(in srgb, var(--bg2) 75%, transparent);
+  }
 }
 
 .layout-debug-panel {
@@ -6330,109 +6322,6 @@ select {
   font-size: 11px;
   line-height: 1.45;
   background: color-mix(in srgb, var(--panel) 86%, transparent);
-}
-
-.split-pane {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  display: flex;
-  position: relative;
-}
-
-.split-pane-vertical {
-  flex-direction: row;
-}
-
-.split-pane-horizontal {
-  flex-direction: column;
-}
-
-.split-pane-region {
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  display: flex;
-}
-
-.split-pane-region > * {
-  flex: 1;
-  min-height: 0;
-}
-
-.split-pane-divider {
-  position: relative;
-  z-index: 10;
-  flex: 0 0 10px;
-  cursor: col-resize;
-  background: transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.split-pane-horizontal .split-pane-divider {
-  width: 100%;
-  height: 10px;
-  cursor: row-resize;
-}
-
-.split-pane-divider::before {
-  content: '';
-  position: absolute;
-  top: 8px;
-  bottom: 8px;
-  width: 2px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--divider) 74%, transparent);
-  transition: background 0.15s ease;
-}
-
-.split-pane-horizontal .split-pane-divider::before {
-  left: 8px;
-  right: 8px;
-  top: auto;
-  bottom: auto;
-  height: 2px;
-  width: auto;
-}
-
-.split-pane-divider:hover::before {
-  background: color-mix(in srgb, var(--accent) 60%, var(--border));
-}
-
-.split-pane.dragging .split-pane-divider::before {
-  background: color-mix(in srgb, var(--accent) 78%, var(--border));
-}
-
-.split-pane-divider-tooltip {
-  position: absolute;
-  top: -28px;
-  right: 50%;
-  transform: translateX(50%);
-  border: 1px solid var(--divider);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
-  color: var(--textPrimary);
-  font-size: 11px;
-  padding: 3px 7px;
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-body.splitpane-dragging,
-body.is-resizing {
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-body.splitpane-dragging-vertical,
-body.is-resizing {
-  cursor: col-resize !important;
-}
-
-body.splitpane-dragging-horizontal {
-  cursor: row-resize !important;
 }
 
 @media (max-width: 1180px) {

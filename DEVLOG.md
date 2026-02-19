@@ -4,6 +4,20 @@
 
 ---
 
+## SESSION 39 - Header White Strip Root Cause + Frameless Desktop Chrome (2026-02-19)
+
+### Repro note (Prompt #001)
+- Repro steps: launch desktop app, switch to dark mode, compare in-app topbar styling with native window strip.
+- White surface source: native OS title bar from framed pywebview window (in-app header already tokenized and dark-themed).
+- Fix approach: move desktop window to frameless mode with custom in-app drag region + desktop window controls, and harden topbar CSS tokens/fallbacks.
+
+### Delivery
+- [x] `app.py`: frameless pywebview window, JS API bridge (`minimize`, `toggle_maximize`, `close`), compatibility fallback when `easy_drag` is unsupported.
+- [x] `client/src/components/DesktopWindowControls.jsx`: desktop-only topbar controls wired to `window.pywebview.api`.
+- [x] `client/src/App.jsx` + `client/src/App.css`: drag-region split, token-first topbar styling, color-mix fallbacks via `@supports`, consolidated duplicate topbar/split-pane CSS blocks.
+
+---
+
 ## SESSION 38 - Process Tool Tags (2026-02-17)
 
 ### Background process tool tags

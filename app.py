@@ -183,6 +183,72 @@ class TrayController:
         return image
 
 
+class DesktopWindowApi:
+    """JS bridge for frameless desktop window controls."""
+
+    def __init__(self):
+        self.window = None
+        self._maximized = False
+
+    def attach_window(self, window):
+        self.window = window
+
+    def _require_window(self):
+        if self.window is None:
+            return None
+        return self.window
+
+    def minimize(self):
+        window = self._require_window()
+        if window is None:
+            return {"ok": False, "error": "window_unavailable"}
+        try:
+            window.minimize()
+            return {"ok": True, "state": "minimized"}
+        except Exception as exc:
+            logger.exception("Desktop minimize failed.")
+            return {"ok": False, "error": str(exc)}
+
+    def toggle_maximize(self):
+        window = self._require_window()
+        if window is None:
+            return {"ok": False, "error": "window_unavailable"}
+
+        try:
+            state = str(getattr(window, "state", "")).lower()
+            is_maximized = "max" in state if state else self._maximized
+            if is_maximized and hasattr(window, "restore"):
+                window.restore()
+                self._maximized = False
+                return {"ok": True, "state": "restored"}
+
+            if hasattr(window, "maximize"):
+                window.maximize()
+                self._maximized = True
+                return {"ok": True, "state": "maximized"}
+
+            if hasattr(window, "toggle_fullscreen"):
+                window.toggle_fullscreen()
+                self._maximized = not self._maximized
+                return {"ok": True, "state": "fullscreen_toggled"}
+
+            return {"ok": False, "error": "maximize_not_supported"}
+        except Exception as exc:
+            logger.exception("Desktop maximize toggle failed.")
+            return {"ok": False, "error": str(exc)}
+
+    def close(self):
+        window = self._require_window()
+        if window is None:
+            return {"ok": False, "error": "window_unavailable"}
+        try:
+            window.destroy()
+            return {"ok": True, "state": "closed"}
+        except Exception as exc:
+            logger.exception("Desktop close failed.")
+            return {"ok": False, "error": str(exc)}
+
+
 def main():
     """Launch AI Office desktop app."""
     logger.info("Starting AI Office Desktop...")
@@ -206,17 +272,30 @@ def main():
         import webview
 
         tray = TrayController()
+        desktop_api = DesktopWindowApi()
         logger.info("Opening AI Office window...")
 
-        window = webview.create_window(
-            title="AI Office",
-            url="http://127.0.0.1:8000",
-            width=1400,
-            height=900,
-            min_size=(800, 600),
-            resizable=True,
-            text_select=True,
-        )
+        window_kwargs = {
+            "title": "AI Office",
+            "url": "http://127.0.0.1:8000",
+            "width": 1400,
+            "height": 900,
+            "min_size": (800, 600),
+            "resizable": True,
+            "text_select": True,
+            "frameless": True,
+            "easy_drag": False,
+            "js_api": desktop_api,
+        }
+
+        try:
+            window = webview.create_window(**window_kwargs)
+        except TypeError:
+            logger.warning("pywebview backend does not support easy_drag; retrying without it.")
+            window_kwargs.pop("easy_drag", None)
+            window = webview.create_window(**window_kwargs)
+
+        desktop_api.attach_window(window)
 
         tray.attach_window(window)
         tray.start()

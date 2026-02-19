@@ -4,6 +4,7 @@ import ProjectsSidebar from './components/ProjectsSidebar';
 import WorkspaceShell from './components/WorkspaceShell';
 import SettingsShell from './components/settings/SettingsShell';
 import CommandPalette from './components/CommandPalette';
+import DesktopWindowControls from './components/DesktopWindowControls';
 import {
   buildCreationDraft,
   loadCreationDraft,
@@ -1113,23 +1114,25 @@ export default function App() {
 
       <div className="app-main-v2">
         <header className="app-topbar-v2">
-          <div className="app-header-left">
-            <button className="refresh-btn ui-btn app-back-btn" onClick={goBack}>
+          <div className="app-header-left pywebview-no-drag">
+            <button className="refresh-btn ui-btn app-back-btn pywebview-no-drag" onClick={goBack}>
               Back
             </button>
-            <div className="app-brand-mark" aria-label="AI Office">
-              <span className="app-brand-dot" />
-              <span className="app-brand-text">AI Office</span>
+            <div className="app-drag-region pywebview-drag-region">
+              <div className="app-brand-mark" aria-label="AI Office">
+                <span className="app-brand-dot" />
+                <span className="app-brand-text">AI Office</span>
+              </div>
+              <span className="app-route-breadcrumb">{breadcrumbLabel}</span>
             </div>
-            <span className="app-route-breadcrumb">{breadcrumbLabel}</span>
-            <nav className="app-topbar-nav" aria-label="Primary">
-              <button className={`ui-tab ${topTab === 'home' || topTab === 'create' ? 'active ui-tab-active' : ''}`} onClick={openHomeTab}>Home</button>
-              <button className={`ui-tab ${topTab === 'workspace' ? 'active ui-tab-active' : ''}`} onClick={openWorkspaceTab}>Workspace</button>
-              <button className={`ui-tab ${topTab === 'settings' ? 'active ui-tab-active' : ''}`} onClick={() => navigateToTab('settings')}>Settings</button>
+            <nav className="app-topbar-nav pywebview-no-drag" aria-label="Primary">
+              <button className={`ui-tab pywebview-no-drag ${topTab === 'home' || topTab === 'create' ? 'active ui-tab-active' : ''}`} onClick={openHomeTab}>Home</button>
+              <button className={`ui-tab pywebview-no-drag ${topTab === 'workspace' ? 'active ui-tab-active' : ''}`} onClick={openWorkspaceTab}>Workspace</button>
+              <button className={`ui-tab pywebview-no-drag ${topTab === 'settings' ? 'active ui-tab-active' : ''}`} onClick={() => navigateToTab('settings')}>Settings</button>
             </nav>
           </div>
 
-          <div className="app-header-right">
+          <div className="app-header-right pywebview-no-drag">
             <div className="app-header-details">
               {topTab === 'workspace' && (
                 <>
@@ -1236,6 +1239,7 @@ export default function App() {
                 )}
               </div>
             </details>
+            <DesktopWindowControls className="pywebview-no-drag" />
           </div>
         </header>
 
