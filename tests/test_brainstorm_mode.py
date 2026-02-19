@@ -25,6 +25,10 @@ def test_brainstorm_mode_start_round_stop(monkeypatch):
         return "PASS"
 
     monkeypatch.setattr(engine.ollama_client, "generate", fake_generate)
+    async def fake_is_available():
+        return True
+
+    monkeypatch.setattr(engine.ollama_client, "is_available", fake_is_available)
     monkeypatch.setattr(engine, "PAUSE_BETWEEN_AGENTS", 0.01)
 
     channel = f"test-brainstorm-{int(time.time())}"

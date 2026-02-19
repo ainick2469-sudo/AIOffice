@@ -4,8 +4,8 @@ import { fetchAgents, updateAgent } from '../api';
 const BACKEND_OPTIONS = ['ollama', 'claude', 'openai'];
 const DEFAULT_MODELS = {
   ollama: 'qwen2.5:14b',
-  claude: 'claude-sonnet-4-20250514',
-  openai: 'gpt-4o-mini',
+  claude: 'claude-opus-4-6',
+  openai: 'gpt-5.2-codex',
 };
 
 function toDraft(agent) {
@@ -14,6 +14,8 @@ function toDraft(agent) {
     role: agent.role || '',
     backend: agent.backend || 'ollama',
     model: agent.model || '',
+    provider_key_ref: agent.provider_key_ref || '',
+    base_url: agent.base_url || '',
     permissions: agent.permissions || 'read',
     active: Boolean(agent.active),
     color: agent.color || '#6B7280',
@@ -34,6 +36,8 @@ export default function AgentConfig() {
   const [credMeta, setCredMeta] = useState(null);
   const [credKey, setCredKey] = useState('');
   const [credBaseUrl, setCredBaseUrl] = useState('');
+  const [credTestBusy, setCredTestBusy] = useState(false);
+  const [credTestResult, setCredTestResult] = useState(null);
   const [backendStatus, setBackendStatus] = useState({
     ollama: false,
     claude: false,
@@ -44,6 +48,16 @@ export default function AgentConfig() {
     () => agents.find(agent => agent.id === selectedId) || null,
     [agents, selectedId]
   );
+
+  const orderedAgents = useMemo(() => {
+    const list = [...agents];
+    list.sort((a, b) => {
+      if (a.id === 'codex') return -1;
+      if (b.id === 'codex') return 1;
+      return String(a.display_name || a.id).localeCompare(String(b.display_name || b.id));
+    });
+    return list;
+  }, [agents]);
 
   const applySelection = (list, preferredId = null) => {
     if (!Array.isArray(list) || list.length === 0) {
@@ -142,6 +156,7 @@ export default function AgentConfig() {
       setCredMeta(null);
       setCredKey('');
       setCredBaseUrl('');
+      setCredTestResult(null);
       return;
     }
     loadCredentialMeta(selectedId, draft.backend).catch(() => {});
@@ -208,6 +223,7 @@ export default function AgentConfig() {
   };
 
   const handleBackendChange = (nextBackend) => {
+    setCredTestResult(null);
     setDraft(prev => {
       if (!prev) return prev;
       const currentModel = (prev.model || '').trim();
@@ -226,6 +242,13 @@ export default function AgentConfig() {
         if (!currentModel || currentModel.startsWith('gpt-') || currentModel.startsWith('claude-')) {
           next.model = DEFAULT_MODELS.ollama;
         }
+      }
+      if (nextBackend === 'openai' && !(next.provider_key_ref || '').trim()) {
+        next.provider_key_ref = 'openai_default';
+      } else if (nextBackend === 'claude' && !(next.provider_key_ref || '').trim()) {
+        next.provider_key_ref = 'claude_default';
+      } else if (nextBackend === 'ollama') {
+        next.provider_key_ref = '';
       }
       return next;
     });
@@ -257,6 +280,38 @@ export default function AgentConfig() {
     }
   };
 
+  const handleTestCredentials = async () => {
+    if (!selectedId || !credentialsEnabled) return;
+    setCredTestBusy(true);
+    setError('');
+    setNotice('');
+    setCredTestResult(null);
+    try {
+      const resp = await fetch(`/api/agents/${encodeURIComponent(selectedId)}/credentials/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          backend: draft.backend,
+          model: (draft.model || '').trim() || null,
+        }),
+      });
+      const payload = resp.ok ? await resp.json() : null;
+      if (!resp.ok) {
+        throw new Error(payload?.detail || 'Connection test failed.');
+      }
+      setCredTestResult(payload);
+      if (payload?.ok) {
+        setNotice(`Connection OK (${payload.latency_ms || 0}ms)`);
+      } else {
+        setError(payload?.error || 'Connection test failed.');
+      }
+    } catch (err) {
+      setError(err?.message || 'Connection test failed.');
+    } finally {
+      setCredTestBusy(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!selectedId || !draft) return;
     setSaving(true);
@@ -269,6 +324,8 @@ export default function AgentConfig() {
         role: draft.role.trim(),
         backend: draft.backend,
         model: draft.model.trim(),
+        provider_key_ref: (draft.provider_key_ref || '').trim() || null,
+        base_url: (draft.base_url || '').trim() || null,
         permissions: draft.permissions.trim(),
         active: Boolean(draft.active),
         color: draft.color.trim(),
@@ -303,14 +360,14 @@ export default function AgentConfig() {
       <div className="panel-header">
         <h3>Agent Config</h3>
         <button
-          className="refresh-btn"
+          className="refresh-btn ui-btn"
           onClick={handleRepairCodexDefaults}
           disabled={loading || saving}
           title="Repair Codex defaults if it still matches the legacy local-model signature."
         >
           Repair Codex Defaults
         </button>
-        <button className="refresh-btn" onClick={handleRefresh} disabled={loading || saving}>
+        <button className="refresh-btn ui-btn" onClick={handleRefresh} disabled={loading || saving}>
           Refresh
         </button>
       </div>
@@ -318,14 +375,20 @@ export default function AgentConfig() {
       <div className="panel-body agent-config-layout">
         <aside className="agent-config-list">
           <div className="agent-config-list-title">Staff ({agents.length})</div>
-          {agents.map(agent => (
+          {orderedAgents.map(agent => (
             <button
               key={agent.id}
-              className={`agent-config-item ${selectedId === agent.id ? 'active' : ''}`}
+              className={`agent-config-item ${selectedId === agent.id ? 'active' : ''} ${agent.id === 'codex' ? 'agent-config-item-codex' : ''}`}
               onClick={() => handleSelect(agent.id)}
             >
               <span className="agent-dot" style={{ backgroundColor: agent.color || '#6B7280' }} />
               <span className="agent-config-item-name">{agent.display_name}</span>
+              {agent.id === 'codex' && <span className="agent-id-pill">Codex</span>}
+              {agent.id === 'codex' && (
+                <span className={`agent-id-pill ${backendStatus.openai ? 'ok' : 'warn'}`}>
+                  API {backendStatus.openai ? 'ready' : 'missing key'}
+                </span>
+              )}
               <span className={`agent-config-item-status ${agent.active ? 'on' : 'off'}`}>
                 {agent.active ? 'active' : 'inactive'}
               </span>
@@ -378,6 +441,27 @@ export default function AgentConfig() {
                 </div>
               </div>
 
+              <div className="agent-config-row two-col">
+                <div>
+                  <label>Provider Key Ref</label>
+                  <input
+                    value={draft.provider_key_ref || ''}
+                    placeholder={draft.backend === 'openai' ? 'openai_default' : (draft.backend === 'claude' ? 'claude_default' : 'n/a')}
+                    onChange={e => updateDraft('provider_key_ref', e.target.value)}
+                    disabled={draft.backend === 'ollama'}
+                  />
+                </div>
+                <div>
+                  <label>Base URL Override (advanced)</label>
+                  <input
+                    value={draft.base_url || ''}
+                    placeholder={draft.backend === 'openai' ? 'https://api.openai.com/v1' : (draft.backend === 'claude' ? 'https://api.anthropic.com/v1/messages' : 'optional')}
+                    onChange={e => updateDraft('base_url', e.target.value)}
+                    disabled={draft.backend === 'ollama'}
+                  />
+                </div>
+              </div>
+
               <div className="agent-config-row">
                 <label>Permissions</label>
                 <input
@@ -426,12 +510,35 @@ export default function AgentConfig() {
                   {draft.backend.toUpperCase()} {backendOnline ? 'online' : 'offline'}
                 </span>
                 {selectedAgent && <span className="agent-id-pill">id: {selectedAgent.id}</span>}
+                <span className="agent-id-pill">model: {(draft.model || '(unset)').trim() || '(unset)'}</span>
                 {credentialsEnabled && (
                   <span className="agent-id-pill">
                     key: {credMeta?.has_key ? `present (${credMeta?.last4 || 'last4?'})` : 'missing'}
                   </span>
                 )}
               </div>
+
+              <div className="agent-runtime-row">
+                <span><strong>Effective runtime</strong></span>
+                <span className="agent-id-pill">{draft.backend}/{(draft.model || '(unset)').trim() || '(unset)'}</span>
+                <span className="agent-id-pill">key_ref: {(draft.provider_key_ref || '(none)').trim() || '(none)'}</span>
+                <span className="agent-id-pill">
+                  credential: {credentialsEnabled ? (credMeta?.has_key ? 'present' : 'missing') : 'n/a'}
+                </span>
+                <span className={`agent-id-pill ${credTestResult?.ok ? 'ok' : credTestResult ? 'warn' : ''}`}>
+                  last test: {credTestResult ? (credTestResult.ok ? `ok (${credTestResult.latency_ms || 0}ms)` : (credTestResult.error || 'failed')) : 'not run'}
+                </span>
+              </div>
+              {draft.backend === 'openai' && !backendStatus.openai && (
+                <div className="agent-config-error">
+                  OpenAI key missing. Codex cannot run on OpenAI until you set a key in Settings -&gt; API Keys and run Test OpenAI.
+                </div>
+              )}
+              {draft.backend === 'claude' && !backendStatus.claude && (
+                <div className="agent-config-error">
+                  Claude key missing. Configure Anthropic key in Settings -&gt; API Keys before using this backend.
+                </div>
+              )}
 
               {credentialsEnabled && (
                 <div className="agent-config-form" style={{ marginTop: 12 }}>
@@ -454,7 +561,7 @@ export default function AgentConfig() {
                   </div>
                   <div className="agent-config-actions">
                     <button
-                      className="control-btn gate-btn"
+                      className="control-btn gate-btn ui-btn ui-btn-primary"
                       onClick={handleSaveCredentials}
                       disabled={credSaving || saving}
                       title="Save per-agent credentials"
@@ -462,14 +569,34 @@ export default function AgentConfig() {
                       {credSaving ? 'Saving...' : 'Save Credentials'}
                     </button>
                     <button
-                      className="control-btn"
+                      className="control-btn ui-btn"
                       onClick={handleClearCredentials}
                       disabled={credSaving || saving || !credMeta?.has_key}
                       title="Remove stored credentials for this backend"
                     >
                       Clear
                     </button>
+                    <button
+                      className="control-btn ui-btn"
+                      onClick={handleTestCredentials}
+                      disabled={credSaving || saving || credTestBusy}
+                      title="Test backend connection with the current credential binding"
+                    >
+                      {credTestBusy ? 'Testing...' : 'Test Connection'}
+                    </button>
                   </div>
+                  {credTestResult && (
+                    <div className={`agent-config-${credTestResult.ok ? 'notice' : 'error'}`}>
+                      {credTestResult.ok
+                        ? `Connection ok (${credTestResult.latency_ms || 0}ms)`
+                        : credTestResult.error || 'Connection failed'}
+                      {credTestResult?.details && (
+                        <pre className="approval-preview" style={{ marginTop: 8 }}>
+                          {JSON.stringify(credTestResult.details, null, 2)}
+                        </pre>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -477,7 +604,7 @@ export default function AgentConfig() {
               {notice && <div className="agent-config-notice">{notice}</div>}
 
               <div className="agent-config-actions">
-                <button className="control-btn gate-btn" onClick={handleSave} disabled={saving}>
+                <button className="control-btn gate-btn ui-btn ui-btn-primary" onClick={handleSave} disabled={saving}>
                   {saving ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>

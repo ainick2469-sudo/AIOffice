@@ -8,6 +8,10 @@ def is_available() -> bool:
     return openai_client.is_available()
 
 
+def get_last_error() -> str:
+    return openai_client.get_last_error()
+
+
 async def generate(
     prompt: str,
     system: str = "",
@@ -30,4 +34,18 @@ async def generate(
         base_url=base_url,
         channel=channel,
         project_name=project_name,
+    )
+
+
+async def probe_connection(
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    timeout_seconds: int = 15,
+) -> dict:
+    return await openai_client.probe_connection(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        timeout_seconds=timeout_seconds,
     )

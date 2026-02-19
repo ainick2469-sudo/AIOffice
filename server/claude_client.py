@@ -7,15 +7,20 @@ from __future__ import annotations
 
 import os
 import logging
+import time
 from typing import Optional
 
 import httpx
+from . import provider_config
 
 logger = logging.getLogger("ai-office.claude")
+_last_error: str = ""
 
-DEFAULT_MODEL = "claude-sonnet-4-20250514"
+DEFAULT_MODEL = "claude-opus-4-6"
 DEFAULT_API_URL = "https://api.anthropic.com/v1/messages"
 MODEL_RATES_PER_1K = {
+    "claude-opus-4-6": {"input": 0.0, "output": 0.0},
+    "claude-sonnet-4-6": {"input": 0.0, "output": 0.0},
     "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
     "claude-3-5-sonnet": {"input": 0.003, "output": 0.015},
 }
@@ -54,6 +59,26 @@ def is_available() -> bool:
     return bool(get_api_key())
 
 
+def _set_last_error(message: str = "") -> None:
+    global _last_error
+    _last_error = (message or "").strip()
+
+
+def get_last_error() -> str:
+    return _last_error
+
+
+def _extract_claude_error(payload: dict) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    err = payload.get("error")
+    if isinstance(err, dict):
+        msg = str(err.get("message") or "").strip()
+        err_type = str(err.get("type") or "").strip()
+        return " | ".join([item for item in [msg, err_type] if item])
+    return str(payload.get("message") or "").strip()
+
+
 def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     rates = MODEL_RATES_PER_1K.get(model or "", MODEL_RATES_PER_1K[DEFAULT_MODEL])
     return (input_tokens / 1000.0) * rates["input"] + (output_tokens / 1000.0) * rates["output"]
@@ -71,13 +96,21 @@ async def chat(
     project_name: Optional[str] = None,
 ) -> Optional[str]:
     """Call Claude API. Returns response text or None on error."""
-    resolved_key = (api_key or "").strip() or get_api_key()
+    _set_last_error("")
+    runtime = await provider_config.resolve_provider_runtime(
+        "claude",
+        api_key_override=api_key,
+        base_url_override=base_url,
+        model_override=model,
+    )
+    resolved_key = (runtime.get("api_key") or "").strip()
     if not resolved_key:
-        logger.error("No ANTHROPIC_API_KEY configured")
+        _set_last_error("No Anthropic API key configured.")
+        logger.error("No Claude key configured in settings, provider vault, or environment")
         return None
 
-    use_model = model or DEFAULT_MODEL
-    api_url = (base_url or "").strip() or get_api_url()
+    use_model = (runtime.get("model_default") or "").strip() or DEFAULT_MODEL
+    api_url = (runtime.get("base_url") or "").strip() or get_api_url()
 
     # Convert messages format: Anthropic API expects role: user/assistant
     api_messages = []
@@ -121,6 +154,12 @@ async def chat(
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(api_url, json=body, headers=headers)
             if resp.status_code != 200:
+                detail = ""
+                try:
+                    detail = _extract_claude_error(resp.json())
+                except Exception:
+                    detail = str(resp.text or "").strip()[:280]
+                _set_last_error(f"Claude HTTP {resp.status_code}: {detail or 'Unknown API error'}")
                 logger.error("Claude API error %s: %s", resp.status_code, resp.text[:300])
                 return None
 
@@ -145,7 +184,123 @@ async def chat(
                 pass
             content_blocks = data.get("content", [])
             text_parts = [b["text"] for b in content_blocks if b.get("type") == "text"]
-            return "\n".join(text_parts) if text_parts else None
+            if not text_parts:
+                _set_last_error("Claude returned no text content.")
+                return None
+            _set_last_error("")
+            return "\n".join(text_parts)
     except Exception as exc:
+        _set_last_error(f"Claude request failed: {exc}")
         logger.error("Claude API request failed: %s", exc)
         return None
+
+
+async def probe_connection(
+    *,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    timeout_seconds: int = 15,
+) -> dict:
+    started = time.perf_counter()
+    runtime = await provider_config.resolve_provider_runtime(
+        "claude",
+        api_key_override=api_key,
+        base_url_override=base_url,
+        model_override=model,
+        refresh=True,
+    )
+    resolved_key = (runtime.get("api_key") or "").strip()
+    model_hint = (runtime.get("model_default") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    api_url = (runtime.get("base_url") or "").strip() or get_api_url()
+    if not resolved_key:
+        return {
+            "ok": False,
+            "model_hint": model_hint,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "error": "No Anthropic API key configured.",
+            "details": {
+                "hint": "Set key in Settings -> API Keys, then run Test Claude.",
+                "key_source": runtime.get("key_source"),
+            },
+        }
+
+    body = {
+        "model": model_hint,
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "Reply with pong."}],
+        "temperature": 0,
+    }
+    headers = {
+        "x-api-key": resolved_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            resp = await client.post(api_url, json=body, headers=headers)
+    except httpx.TimeoutException:
+        return {
+            "ok": False,
+            "model_hint": model_hint,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "error": f"Claude timeout after {timeout_seconds}s.",
+            "details": {"url": api_url, "timeout_seconds": timeout_seconds},
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "model_hint": model_hint,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "error": f"Claude request failed: {exc}",
+            "details": {"url": api_url},
+        }
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    if resp.status_code != 200:
+        detail = ""
+        parsed = None
+        try:
+            parsed = resp.json()
+            detail = _extract_claude_error(parsed)
+        except Exception:
+            detail = str(resp.text or "").strip()[:280]
+        return {
+            "ok": False,
+            "model_hint": model_hint,
+            "latency_ms": latency_ms,
+            "error": f"Claude HTTP {resp.status_code}: {detail or 'Unknown API error'}",
+            "details": {"status_code": resp.status_code, "url": api_url, "response": parsed or detail},
+        }
+
+    try:
+        payload = resp.json()
+    except Exception:
+        return {
+            "ok": False,
+            "model_hint": model_hint,
+            "latency_ms": latency_ms,
+            "error": "Claude returned invalid JSON.",
+            "details": {"status_code": resp.status_code, "url": api_url},
+        }
+
+    content_blocks = payload.get("content") or []
+    text_parts = [b.get("text", "") for b in content_blocks if b.get("type") == "text"]
+    content = "\n".join([part for part in text_parts if part]).strip()
+    if not content:
+        return {
+            "ok": False,
+            "model_hint": model_hint,
+            "latency_ms": latency_ms,
+            "error": "Claude returned no text content.",
+            "details": {"status_code": resp.status_code, "url": api_url},
+        }
+
+    return {
+        "ok": True,
+        "model_hint": model_hint,
+        "latency_ms": latency_ms,
+        "error": None,
+        "details": {"status_code": resp.status_code, "url": api_url},
+    }

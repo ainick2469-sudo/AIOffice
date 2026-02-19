@@ -15,8 +15,20 @@ export async function fetchMessages(channel, limit = 50) {
   return res.json();
 }
 
-export async function fetchTasks(status = null) {
-  const url = status ? `${BASE}/tasks?status=${status}` : `${BASE}/tasks`;
+export async function fetchTasks(filters = {}) {
+  const params = new URLSearchParams();
+  const status = filters?.status ?? null;
+  const channel = filters?.channel ?? null;
+  const projectName = filters?.project_name ?? null;
+  const branch = filters?.branch ?? null;
+
+  if (status) params.set('status', status);
+  if (channel) params.set('channel', channel);
+  if (projectName) params.set('project_name', projectName);
+  if (branch) params.set('branch', branch);
+
+  const qs = params.toString();
+  const url = qs ? `${BASE}/tasks?${qs}` : `${BASE}/tasks`;
   const res = await fetch(url);
   return res.json();
 }

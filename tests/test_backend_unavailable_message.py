@@ -13,6 +13,10 @@ def test_backend_unavailable_returns_helpful_message(monkeypatch):
         asyncio.run(db.clear_agent_credential("codex", "openai"))
     except Exception:
         pass
+    try:
+        asyncio.run(db.clear_provider_secret("openai_default"))
+    except Exception:
+        pass
 
     agent = asyncio.run(db.get_agent("codex"))
     assert agent
@@ -20,5 +24,4 @@ def test_backend_unavailable_returns_helpful_message(monkeypatch):
 
     out = asyncio.run(agent_engine._generate(agent, "main", is_followup=False))
     assert isinstance(out, str)
-    assert "OPENAI_API_KEY" in out or "Agents tab" in out
-
+    assert "Open Settings -> API Keys" in out or "OPENAI_API_KEY" in out

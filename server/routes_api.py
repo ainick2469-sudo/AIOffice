@@ -3,18 +3,29 @@
 import json
 import re
 import os
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from typing import Optional
 from . import database as db
+from . import provider_config
 from .models import (
     ApprovalResponseIn,
     AutonomyModeIn,
     AgentOut,
     AgentCredentialIn,
     AgentCredentialMetaOut,
+    AgentCredentialTestIn,
+    AgentCredentialTestOut,
+    ProviderConfigIn,
+    ProviderConfigOut,
+    ProviderTestIn,
+    ProviderTestOut,
+    ProviderSettingsIn,
+    ProviderSettingsOut,
+    ProviderSettingsProviderOut,
     AgentUpdateIn,
     AppBuilderStartIn,
     BranchSwitchIn,
@@ -27,6 +38,8 @@ from .models import (
     ProcessStartIn,
     ProcessStopIn,
     ProjectActiveOut,
+    ProjectUIStateIn,
+    ProjectUIStateOut,
     ProjectCreateFromPromptIn,
     DebugBundleIn,
     MemoryEraseIn,
@@ -88,6 +101,29 @@ def _slugify_project_name(text: str) -> str:
     slug = re.sub(r"^[^a-z0-9]+", "", slug).strip("-")
     slug = slug[:50].strip("-")
     return slug
+
+
+def _normalize_provider(value: str) -> str:
+    provider = (value or "").strip().lower()
+    if provider == "codex":
+        return "openai"
+    return provider
+
+
+def _validate_provider_key(provider: str, api_key: str) -> Optional[str]:
+    key = (api_key or "").strip()
+    if not key:
+        return "API key cannot be empty."
+    upper = key.upper()
+    if upper.startswith("REPLACE_WITH_") or upper in {"YOUR_KEY", "YOUR_API_KEY", "CHANGE_ME"}:
+        return "API key placeholder detected. Paste a real provider key."
+    if provider == "openai":
+        if not (key.startswith("sk-") or key.startswith("rk-")):
+            return "OpenAI key should usually start with `sk-`."
+    if provider == "claude":
+        if not key.startswith("sk-ant-"):
+            return "Anthropic key should usually start with `sk-ant-`."
+    return None
 
 
 def _seed_spec_from_prompt(prompt: str, *, project_name: str, template: Optional[str] = None) -> tuple[str, str]:
@@ -173,13 +209,25 @@ async def update_agent(agent_id: str, body: AgentUpdateIn):
     if not updates:
         raise HTTPException(400, "No updates provided")
 
-    for key in ("display_name", "role", "model", "permissions", "color", "emoji", "system_prompt"):
+    for key in ("display_name", "role", "model", "provider_key_ref", "base_url", "permissions", "color", "emoji", "system_prompt"):
         if key in updates and isinstance(updates[key], str):
             updates[key] = updates[key].strip()
+            if key in {"provider_key_ref", "base_url"} and not updates[key]:
+                updates[key] = None
 
     for required in ("display_name", "role", "model", "permissions", "color", "emoji"):
         if required in updates and not updates[required]:
             raise HTTPException(400, f"{required} cannot be empty")
+
+    if "backend" in updates:
+        backend_value = (updates.get("backend") or "").strip().lower()
+        if backend_value not in {"ollama", "openai", "claude"}:
+            raise HTTPException(400, "backend must be one of: ollama, openai, claude")
+
+    if "backend" in updates and not (updates.get("model") or ""):
+        agent = await db.get_agent(agent_id)
+        if not agent or not str(agent.get("model") or "").strip():
+            raise HTTPException(400, "model is required when setting backend")
 
     updated = await db.update_agent(agent_id, updates)
     if not updated:
@@ -217,6 +265,70 @@ async def delete_agent_credentials(agent_id: str, backend: str = Query(..., min_
     return {"ok": True, "deleted": ok}
 
 
+@router.post("/agents/{agent_id}/credentials/test", response_model=AgentCredentialTestOut)
+async def test_agent_credentials(agent_id: str, body: AgentCredentialTestIn):
+    backend = (body.backend or "").strip().lower()
+    if backend not in {"openai", "claude"}:
+        raise HTTPException(400, "backend must be openai or claude")
+
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+
+    default_model = "gpt-5.2-codex" if backend == "openai" else "claude-opus-4-6"
+    model_hint = (body.model or agent.get("model") or default_model).strip() or default_model
+    api_key = await db.get_agent_api_key(agent_id, backend)
+    meta = await db.get_agent_credential_meta(agent_id, backend)
+    provider_cfg = await db.get_provider_config(backend)
+    key_ref = (agent.get("provider_key_ref") or "").strip() or (provider_cfg.get("key_ref") or "").strip()
+    if not api_key and key_ref:
+        api_key = await db.get_provider_secret(key_ref)
+    base_url = (
+        (agent.get("base_url") or "").strip()
+        or (meta.get("base_url") or "").strip()
+        or (provider_cfg.get("base_url") or "").strip()
+        or None
+    )
+
+    try:
+        if backend == "openai":
+            from . import openai_adapter
+
+            probe = await openai_adapter.probe_connection(
+                model=model_hint,
+                api_key=api_key,
+                base_url=base_url,
+                timeout_seconds=15,
+            )
+        else:
+            from . import claude_adapter
+
+            probe = await claude_adapter.probe_connection(
+                model=model_hint,
+                api_key=api_key,
+                base_url=base_url,
+                timeout_seconds=15,
+            )
+    except Exception as exc:
+        return AgentCredentialTestOut(
+            ok=False,
+            backend=backend,
+            model_hint=model_hint,
+            latency_ms=None,
+            error=str(exc),
+            details={"agent_id": agent_id, "backend": backend},
+        )
+
+    return AgentCredentialTestOut(
+        ok=bool(probe.get("ok")),
+        backend=backend,
+        model_hint=str(probe.get("model_hint") or model_hint),
+        latency_ms=probe.get("latency_ms"),
+        error=probe.get("error"),
+        details=probe.get("details") or {"agent_id": agent_id, "backend": backend},
+    )
+
+
 @router.post("/agents/repair")
 async def repair_agent_defaults():
     """Repair safe defaults for known agents without surprising user-customized configs."""
@@ -228,13 +340,318 @@ async def repair_agent_defaults():
     changed = False
     updated = agent
 
-    # Only repair Codex if it matches the old default signature (pre-vault).
-    if (agent.get("backend") == "ollama") and (agent.get("model") == "qwen2.5:14b"):
-        updated = await db.update_agent("codex", {"backend": "openai", "model": "gpt-4o-mini"}) or agent
+    backend = (agent.get("backend") or "").strip().lower()
+    model = (agent.get("model") or "").strip().lower()
+    legacy_models = {"qwen2.5:14b", "qwen2.5:32b", "qwen2.5:7b", "qwen3:14b", "qwen3:32b"}
+
+    # Only repair known legacy codex signatures.
+    if backend == "ollama" and model in legacy_models:
+        updated = await db.update_agent(
+            "codex",
+            {"backend": "openai", "model": "gpt-5.2-codex", "provider_key_ref": "openai_default"},
+        ) or agent
         changed = True
 
     after = {"id": "codex", "backend": updated.get("backend"), "model": updated.get("model")}
     return {"ok": True, "changed": changed, "before": before, "after": after}
+
+
+@router.post("/agents/sync-registry")
+async def sync_agents_registry(force: bool = Query(default=False)):
+    result = await db.sync_agents_from_registry(force=force)
+    return result
+
+
+async def _provider_settings_out() -> ProviderSettingsOut:
+    snapshot = await provider_config.provider_settings_snapshot()
+    fallback_raw = (await db.get_setting("providers.fallback_to_ollama") or "").strip().lower()
+    fallback_enabled = fallback_raw in {"1", "true", "yes", "on"}
+    return ProviderSettingsOut(
+        openai=ProviderSettingsProviderOut(**snapshot.get("openai", {})),
+        claude=ProviderSettingsProviderOut(**snapshot.get("claude", {})),
+        fallback_to_ollama=fallback_enabled,
+    )
+
+
+@router.get("/settings/providers", response_model=ProviderSettingsOut)
+async def get_settings_providers():
+    return await _provider_settings_out()
+
+
+@router.post("/settings/providers", response_model=ProviderSettingsOut)
+async def set_settings_providers(body: ProviderSettingsIn):
+    payload = body.model_dump(exclude_unset=True)
+    touched: list[str] = []
+    provider_rows = {
+        "openai": payload.get("openai"),
+        "claude": payload.get("claude"),
+    }
+
+    for provider, raw in provider_rows.items():
+        if not isinstance(raw, dict):
+            continue
+
+        cfg = await db.get_provider_config(provider)
+        key_ref = (cfg.get("key_ref") or f"{provider}_default").strip()
+        base_url = (cfg.get("base_url") or "").strip() or None
+        default_model = (cfg.get("default_model") or "").strip() or None
+
+        if "base_url" in raw:
+            base_url = (raw.get("base_url") or "").strip() or None
+            await db.set_setting(f"{provider}.base_url", base_url or "")
+        if "model_default" in raw:
+            default_model = (raw.get("model_default") or "").strip() or None
+            await db.set_setting(f"{provider}.model_default", default_model or "")
+        if provider == "openai" and "reasoning_effort" in raw:
+            reasoning_effort = (raw.get("reasoning_effort") or "").strip().lower()
+            if reasoning_effort not in {"", "low", "medium", "high"}:
+                raise HTTPException(400, "openai.reasoning_effort must be low, medium, or high")
+            await db.set_setting("openai.reasoning_effort", reasoning_effort or "high")
+        if "api_key" in raw:
+            api_key = (raw.get("api_key") or "").strip()
+            if api_key:
+                key_err = _validate_provider_key(provider, api_key)
+                if key_err:
+                    raise HTTPException(400, key_err)
+                from .secrets_vault import encrypt_secret
+
+                await db.set_setting(f"{provider}.api_key_enc", encrypt_secret(api_key))
+                await db.set_setting(f"{provider}.api_key", "")
+                await db.upsert_provider_secret(key_ref, api_key)
+            else:
+                await db.set_setting(f"{provider}.api_key_enc", "")
+                await db.set_setting(f"{provider}.api_key", "")
+                if key_ref:
+                    await db.clear_provider_secret(key_ref)
+        await db.upsert_provider_config(
+            provider,
+            key_ref=key_ref,
+            base_url=base_url,
+            default_model=default_model,
+        )
+        provider_config.clear_provider_cache(provider)
+        touched.append(provider)
+        await db.log_console_event(
+            channel="main",
+            project_name=None,
+            event_type="provider_config_updated",
+            source="routes_api",
+            message=f"{provider} settings updated",
+            data={
+                "provider": provider,
+                "key_ref": key_ref,
+                "base_url": base_url,
+                "model": default_model,
+                "reasoning_effort": (
+                    (raw.get("reasoning_effort") or "").strip().lower()
+                    if isinstance(raw, dict) and provider == "openai"
+                    else None
+                ),
+            },
+        )
+
+    if "fallback_to_ollama" in payload:
+        enabled = bool(payload.get("fallback_to_ollama"))
+        await db.set_setting("providers.fallback_to_ollama", "true" if enabled else "false")
+        await db.log_console_event(
+            channel="main",
+            project_name=None,
+            event_type="provider_config_updated",
+            source="routes_api",
+            message="providers.fallback_to_ollama updated",
+            data={"fallback_to_ollama": enabled},
+        )
+
+    if touched:
+        provider_config.clear_provider_cache()
+    return await _provider_settings_out()
+
+
+@router.get("/providers")
+async def list_providers():
+    rows = await db.list_provider_configs()
+    return {"providers": rows}
+
+
+@router.post("/providers", response_model=ProviderConfigOut)
+async def set_provider_config(body: ProviderConfigIn):
+    provider = _normalize_provider(body.provider)
+    if provider not in {"openai", "claude", "ollama"}:
+        raise HTTPException(400, "provider must be one of: openai, claude, ollama, codex")
+
+    existing = await db.get_provider_config(provider)
+    key_ref = (body.key_ref or "").strip() or (existing.get("key_ref") or "")
+    if not key_ref and provider in {"openai", "claude"}:
+        key_ref = f"{provider}_default"
+
+    cfg = await db.upsert_provider_config(
+        provider,
+        key_ref=key_ref or None,
+        base_url=(body.base_url or "").strip() or None,
+        default_model=(body.default_model or "").strip() or None,
+    )
+    if (body.api_key or "").strip():
+        key_err = _validate_provider_key(provider, body.api_key)
+        if key_err:
+            raise HTTPException(400, key_err)
+        if not key_ref:
+            raise HTTPException(400, "key_ref is required when api_key is provided")
+        await db.upsert_provider_secret(key_ref, body.api_key)
+        from .secrets_vault import encrypt_secret
+
+        await db.set_setting(f"{provider}.api_key_enc", encrypt_secret(body.api_key))
+        await db.set_setting(f"{provider}.api_key", "")
+    if body.base_url is not None:
+        await db.set_setting(f"{provider}.base_url", (body.base_url or "").strip())
+    if body.default_model is not None:
+        await db.set_setting(f"{provider}.model_default", (body.default_model or "").strip())
+    provider_config.clear_provider_cache(provider)
+    await db.log_console_event(
+        channel="main",
+        project_name=None,
+        event_type="provider_config_updated",
+        source="routes_api",
+        message=f"{provider} provider config updated",
+        data={
+            "provider": provider,
+            "key_ref": key_ref or None,
+            "base_url": (body.base_url or "").strip() or None,
+            "default_model": (body.default_model or "").strip() or None,
+        },
+    )
+
+    secret_meta = await db.get_provider_secret_meta(cfg.get("key_ref"))
+    return ProviderConfigOut(
+        provider=cfg.get("provider") or provider,
+        key_ref=cfg.get("key_ref"),
+        has_key=bool(secret_meta.get("has_key")),
+        last4=secret_meta.get("last4"),
+        base_url=cfg.get("base_url"),
+        default_model=cfg.get("default_model"),
+        updated_at=cfg.get("updated_at"),
+        key_updated_at=secret_meta.get("updated_at"),
+    )
+
+
+@router.post("/providers/test", response_model=ProviderTestOut)
+async def test_provider_config(body: ProviderTestIn):
+    provider = _normalize_provider(body.provider)
+    if provider not in {"openai", "claude", "ollama"}:
+        raise HTTPException(400, "provider must be one of: openai, claude, ollama, codex")
+
+    if provider == "ollama":
+        from . import ollama_client
+
+        started = time.perf_counter()
+        available = await ollama_client.is_available()
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        details = {"endpoint": "http://127.0.0.1:11434"}
+        if available:
+            try:
+                models = await ollama_client.list_models()
+                details["models_count"] = len(models)
+                details["models"] = models[:10]
+            except Exception as exc:
+                details["models_error"] = str(exc)
+        return ProviderTestOut(
+            ok=bool(available),
+            provider=provider,
+            model_hint=None,
+            latency_ms=latency_ms,
+            error=None if available else "Ollama is not reachable on http://127.0.0.1:11434. Start Ollama and retry.",
+            details=details,
+        )
+
+    cfg = await db.get_provider_config(provider)
+    runtime = await provider_config.resolve_provider_runtime(
+        provider,
+        key_ref_override=(body.key_ref or "").strip() or None,
+        base_url_override=(body.base_url or "").strip() or None,
+        model_override=(body.model or "").strip() or None,
+        refresh=True,
+    )
+    key_ref = (runtime.get("key_ref") or "").strip()
+    api_key = (runtime.get("api_key") or "").strip()
+    base_url = (runtime.get("base_url") or "").strip() or None
+    if provider == "openai":
+        model_hint = (runtime.get("model_default") or cfg.get("default_model") or "gpt-5.2").strip() or "gpt-5.2"
+    else:
+        model_hint = (
+            runtime.get("model_default") or cfg.get("default_model") or "claude-opus-4-6"
+        ).strip() or "claude-opus-4-6"
+
+    if not api_key:
+        result = ProviderTestOut(
+            ok=False,
+            provider=provider,
+            model_hint=model_hint,
+            latency_ms=0,
+            error=f"No key found for provider `{provider}`. Save a key in Settings -> API Keys first.",
+            details={
+                "provider": provider,
+                "key_ref": key_ref or None,
+                "key_source": runtime.get("key_source"),
+                "hint": "Open Settings -> API Keys, paste key, click Save, then Test Connection.",
+            },
+        )
+        await db.set_setting(f"{provider}.last_tested_at", datetime.now(timezone.utc).isoformat())
+        await db.set_setting(f"{provider}.last_error", result.error or "")
+        return result
+
+    try:
+        if provider == "openai":
+            from . import openai_adapter
+
+            probe = await openai_adapter.probe_connection(
+                model=model_hint,
+                api_key=api_key or None,
+                base_url=base_url,
+                timeout_seconds=15,
+            )
+        else:
+            from . import claude_adapter
+
+            probe = await claude_adapter.probe_connection(
+                model=model_hint,
+                api_key=api_key or None,
+                base_url=base_url,
+                timeout_seconds=15,
+            )
+    except Exception as exc:
+        result = ProviderTestOut(
+            ok=False,
+            provider=provider,
+            model_hint=model_hint,
+            latency_ms=None,
+            error=str(exc),
+            details={
+                "provider": provider,
+                "base_url": base_url,
+                "key_source": runtime.get("key_source"),
+                "hint": "Check network/firewall, base URL, and key validity.",
+            },
+        )
+        await db.set_setting(f"{provider}.last_tested_at", datetime.now(timezone.utc).isoformat())
+        await db.set_setting(f"{provider}.last_error", result.error or "")
+        return result
+
+    result = ProviderTestOut(
+        ok=bool(probe.get("ok")),
+        provider=provider,
+        model_hint=str(probe.get("model_hint") or model_hint),
+        latency_ms=probe.get("latency_ms"),
+        error=probe.get("error"),
+        details={
+            **(probe.get("details") or {}),
+            "provider": provider,
+            "base_url": base_url,
+            "key_source": runtime.get("key_source"),
+        },
+    )
+    await db.set_setting(f"{provider}.last_tested_at", datetime.now(timezone.utc).isoformat())
+    await db.set_setting(f"{provider}.last_error", result.error or "")
+    provider_config.clear_provider_cache(provider)
+    return result
 
 
 @router.get("/messages/{channel}")
@@ -361,7 +778,8 @@ async def create_project_route(body: ProjectCreateIn):
         project = await pm.create_project(body.name, template=body.template)
         from . import build_runner
         detected = await build_runner.detect_and_store_config(project["name"])
-        return {"ok": True, "project": project, "detected_config": detected}
+        channel_id = f"proj-{project['name']}"
+        return {"ok": True, "project": project, "channel_id": channel_id, "detected_config": detected}
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -371,14 +789,18 @@ async def list_projects_route():
     from . import project_manager as pm
 
     projects = await pm.list_projects()
+    metadata_by_project = await db.list_project_metadata()
     # Enrich with best-effort stack detection from build config.
     from . import build_runner
 
     enriched = []
     for project in projects:
         name = (project.get("name") or "").strip()
-        display_key = f"project_display_name:{name}" if name else ""
-        display_name = await db.get_setting(display_key) if display_key else None
+        meta = metadata_by_project.get(name.lower(), {}) if name else {}
+        display_name = (meta.get("display_name") or "").strip() or None
+        if not display_name and name:
+            display_key = f"project_display_name:{name}"
+            display_name = await db.get_setting(display_key)
         config = build_runner.get_build_config(name) if name else {}
         detected = config.get("detected") if isinstance(config, dict) else {}
         if not isinstance(detected, dict):
@@ -387,10 +809,13 @@ async def list_projects_route():
         enriched.append(
             {
                 **project,
-                "display_name": (display_name or "").strip() or None,
+                "display_name": display_name,
                 "channel_id": f"proj-{name}" if name else None,
                 "detected_kinds": kinds,
                 "detected_kind": kinds[0] if kinds else None,
+                "last_opened_at": meta.get("last_opened_at"),
+                "preview_focus_mode": bool(meta.get("preview_focus_mode", 0)),
+                "layout_preset": meta.get("layout_preset") or "split",
             }
         )
     return {"projects": enriched, "projects_root": str(pm.WORKSPACE_ROOT)}
@@ -412,7 +837,49 @@ async def set_project_display_name(name: str, body: dict):
 
     key = f"project_display_name:{project}"
     await db.set_setting(key, display_name)
-    return {"ok": True, "project": project, "display_name": display_name}
+    meta = await db.upsert_project_metadata(project, display_name=display_name)
+    return {"ok": True, "project": project, "display_name": display_name, "metadata": meta}
+
+
+@router.get("/projects/{name}/ui-state", response_model=ProjectUIStateOut)
+async def get_project_ui_state(name: str):
+    from . import project_manager as pm
+
+    project = (name or "").strip().lower()
+    if not project or not pm.validate_project_name(project):
+        raise HTTPException(400, "Invalid project name.")
+
+    meta = await db.get_project_metadata(project)
+    return ProjectUIStateOut(
+        project_name=project,
+        preview_focus_mode=bool(meta.get("preview_focus_mode", 0)),
+        layout_preset=(meta.get("layout_preset") or "split"),
+        pane_layout=meta.get("pane_layout") or {},
+        last_opened_at=meta.get("last_opened_at"),
+    )
+
+
+@router.put("/projects/{name}/ui-state", response_model=ProjectUIStateOut)
+async def set_project_ui_state(name: str, body: ProjectUIStateIn):
+    from . import project_manager as pm
+
+    project = (name or "").strip().lower()
+    if not project or not pm.validate_project_name(project):
+        raise HTTPException(400, "Invalid project name.")
+
+    meta = await db.set_project_ui_state(
+        project,
+        preview_focus_mode=body.preview_focus_mode,
+        layout_preset=body.layout_preset,
+        pane_layout=body.pane_layout,
+    )
+    return ProjectUIStateOut(
+        project_name=project,
+        preview_focus_mode=bool(meta.get("preview_focus_mode", 0)),
+        layout_preset=(meta.get("layout_preset") or "split"),
+        pane_layout=meta.get("pane_layout") or {},
+        last_opened_at=meta.get("last_opened_at"),
+    )
 
 
 @router.post("/projects/create_from_prompt")
@@ -491,6 +958,7 @@ async def create_project_from_prompt(body: ProjectCreateFromPromptIn):
         "ok": True,
         "project": created,
         "channel": channel_id,
+        "channel_id": channel_id,
         "active": active,
         "spec_status": state.get("status") or "draft",
         "spec_version": state.get("spec_version"),
@@ -702,6 +1170,7 @@ async def import_project(
         ok=True,
         project=name,
         channel=channel_id,
+        channel_id=channel_id,
         path=str(repo_root),
         extracted_files=extracted_files,
         brief_path=str(brief_path),
@@ -1337,7 +1806,7 @@ async def health():
 
 @router.get("/health/startup")
 async def startup_health():
-    from . import claude_adapter, openai_adapter, ollama_client
+    from . import ollama_client
     from .project_manager import WORKSPACE_ROOT
 
     db_ok = False
@@ -1357,12 +1826,12 @@ async def startup_health():
 
     projects_root_ok = WORKSPACE_ROOT.exists() and WORKSPACE_ROOT.is_dir()
     frontend_dist_ok = (PROJECT_ROOT / "client-dist" / "index.html").exists()
-    openai_vault = await db.has_any_backend_key("openai")
-    claude_vault = await db.has_any_backend_key("claude")
+    openai_status_cfg = await provider_config.provider_status("openai", refresh=True)
+    claude_status_cfg = await provider_config.provider_status("claude", refresh=True)
     backends = {
         "ollama": bool(await ollama_client.is_available()),
-        "claude": bool(claude_adapter.is_available()) or claude_vault,
-        "openai": bool(openai_adapter.is_available()) or openai_vault,
+        "claude": bool(claude_status_cfg.get("configured")),
+        "openai": bool(openai_status_cfg.get("configured")),
     }
 
     warnings = []
@@ -1387,34 +1856,6 @@ async def startup_health():
         "overall_healthy": overall_healthy,
         "checks": checks,
         "warnings": warnings,
-    }
-
-
-@router.get("/openai/status")
-async def openai_status():
-    from . import openai_adapter
-
-    env_available = bool(openai_adapter.is_available())
-    vault_available = await db.has_any_backend_key("openai")
-    return {
-        "backend": "openai",
-        "available": env_available or vault_available,
-        "env": env_available,
-        "vault": vault_available,
-    }
-
-
-@router.get("/claude/status")
-async def claude_status():
-    from . import claude_adapter
-
-    env_available = bool(claude_adapter.is_available())
-    vault_available = await db.has_any_backend_key("claude")
-    return {
-        "backend": "claude",
-        "available": env_available or vault_available,
-        "env": env_available,
-        "vault": vault_available,
     }
 
 
@@ -1990,8 +2431,21 @@ async def file_upload(file: UploadFile = File(...)):
 
 @router.get("/claude/status")
 async def claude_status():
-    from .claude_adapter import is_available
-    return {"available": is_available()}
+    status = await provider_config.provider_status("claude", refresh=True)
+    cred_available = bool(await db.has_any_backend_key("claude"))
+    available = bool(status.get("configured")) or cred_available
+    return {
+        "backend": "claude",
+        "available": available,
+        "key_source": status.get("key_source"),
+        "via_credentials": cred_available,
+        "key_ref": status.get("key_ref"),
+        "key_masked": status.get("key_masked"),
+        "base_url": status.get("base_url"),
+        "model_default": status.get("model_default"),
+        "last_tested_at": status.get("last_tested_at"),
+        "last_error": status.get("last_error"),
+    }
 
 
 @router.get("/ollama/status")
@@ -2075,8 +2529,22 @@ async def ollama_pull_models(body: OllamaPullIn):
 
 @router.get("/openai/status")
 async def openai_status():
-    from .openai_adapter import is_available
-    return {"available": is_available()}
+    status = await provider_config.provider_status("openai", refresh=True)
+    cred_available = bool(await db.has_any_backend_key("openai"))
+    available = bool(status.get("configured")) or cred_available
+    return {
+        "backend": "openai",
+        "available": available,
+        "key_source": status.get("key_source"),
+        "via_credentials": cred_available,
+        "key_ref": status.get("key_ref"),
+        "key_masked": status.get("key_masked"),
+        "base_url": status.get("base_url"),
+        "model_default": status.get("model_default"),
+        "reasoning_effort": status.get("reasoning_effort"),
+        "last_tested_at": status.get("last_tested_at"),
+        "last_error": status.get("last_error"),
+    }
 
 @router.get("/messages/search")
 async def search_messages(q: str, channel: str = None, limit: int = 50):

@@ -19,6 +19,7 @@ class MessageOut(BaseModel):
     content: str
     msg_type: str = "message"
     parent_id: Optional[int] = None
+    meta: Optional[dict] = None
     pinned: bool = False
     created_at: str
 
@@ -30,6 +31,8 @@ class AgentOut(BaseModel):
     skills: str  # JSON string
     backend: str
     model: str
+    provider_key_ref: Optional[str] = None
+    base_url: Optional[str] = None
     permissions: str
     active: bool
     color: str
@@ -44,6 +47,8 @@ class AgentUpdateIn(BaseModel):
     role: Optional[str] = None
     backend: Optional[Literal["ollama", "claude", "openai"]] = None
     model: Optional[str] = None
+    provider_key_ref: Optional[str] = Field(default=None, max_length=120)
+    base_url: Optional[str] = Field(default=None, max_length=500)
     permissions: Optional[str] = None
     active: Optional[bool] = None
     color: Optional[str] = None
@@ -66,6 +71,95 @@ class AgentCredentialMetaOut(BaseModel):
     last4: Optional[str] = None
     base_url: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class AgentCredentialTestIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    backend: Literal["openai", "claude"]
+    model: Optional[str] = Field(default=None, max_length=200)
+
+
+class AgentCredentialTestOut(BaseModel):
+    ok: bool
+    backend: Literal["openai", "claude"]
+    model_hint: str
+    latency_ms: Optional[int] = None
+    error: Optional[str] = None
+    details: Optional[dict] = None
+
+
+class ProviderConfigIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    provider: Literal["openai", "claude", "ollama", "codex"]
+    key_ref: Optional[str] = Field(default=None, max_length=120)
+    api_key: Optional[str] = Field(default=None, max_length=500)
+    base_url: Optional[str] = Field(default=None, max_length=500)
+    default_model: Optional[str] = Field(default=None, max_length=200)
+
+
+class ProviderConfigOut(BaseModel):
+    provider: str
+    key_ref: Optional[str] = None
+    has_key: bool = False
+    last4: Optional[str] = None
+    base_url: Optional[str] = None
+    default_model: Optional[str] = None
+    updated_at: Optional[str] = None
+    key_updated_at: Optional[str] = None
+
+
+class ProviderTestIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    provider: Literal["openai", "claude", "ollama", "codex"]
+    model: Optional[str] = Field(default=None, max_length=200)
+    key_ref: Optional[str] = Field(default=None, max_length=120)
+    base_url: Optional[str] = Field(default=None, max_length=500)
+
+
+class ProviderTestOut(BaseModel):
+    ok: bool
+    provider: str
+    model_hint: Optional[str] = None
+    latency_ms: Optional[int] = None
+    error: Optional[str] = None
+    details: Optional[dict] = None
+
+
+class ProviderSettingsUpdateIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    api_key: Optional[str] = Field(default=None, max_length=500)
+    model_default: Optional[str] = Field(default=None, max_length=200)
+    base_url: Optional[str] = Field(default=None, max_length=500)
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None
+
+
+class ProviderSettingsIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    openai: Optional[ProviderSettingsUpdateIn] = None
+    claude: Optional[ProviderSettingsUpdateIn] = None
+    fallback_to_ollama: Optional[bool] = None
+
+
+class ProviderSettingsProviderOut(BaseModel):
+    configured: bool = False
+    key_masked: Optional[str] = None
+    model_default: Optional[str] = None
+    base_url: Optional[str] = None
+    key_ref: Optional[str] = None
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None
+    last_tested_at: Optional[str] = None
+    last_error: Optional[str] = None
+
+
+class ProviderSettingsOut(BaseModel):
+    openai: ProviderSettingsProviderOut
+    claude: ProviderSettingsProviderOut
+    fallback_to_ollama: bool = False
 
 
 class TaskIn(BaseModel):
@@ -203,6 +297,20 @@ class BuildConfigIn(BaseModel):
     run_cmd: Optional[str] = None
     preview_cmd: Optional[str] = None
     preview_port: Optional[int] = Field(default=None, ge=1, le=65535)
+
+
+class ProjectUIStateIn(BaseModel):
+    preview_focus_mode: bool = False
+    layout_preset: Literal["split", "chat-preview", "chat-files", "full-ide", "focus"] = "split"
+    pane_layout: Optional[dict[str, list[float]]] = None
+
+
+class ProjectUIStateOut(BaseModel):
+    project_name: str
+    preview_focus_mode: bool = False
+    layout_preset: Literal["split", "chat-preview", "chat-files", "full-ide", "focus"] = "split"
+    pane_layout: Optional[dict[str, list[float]]] = None
+    last_opened_at: Optional[str] = None
 
 
 class ExecuteCodeIn(BaseModel):
@@ -422,6 +530,7 @@ class ProjectImportOut(BaseModel):
     ok: bool = True
     project: str
     channel: str
+    channel_id: Optional[str] = None
     path: str
     extracted_files: int
     brief_path: Optional[str] = None

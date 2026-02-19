@@ -1,0 +1,132 @@
+/* AI Office design tokens and theme maps */
+
+:root,
+:root[data-theme='dark'],
+body[data-theme='dark'] {
+  color-scheme: dark;
+
+  --font-sans: 'Plus Jakarta Sans', 'Inter', 'Segoe UI', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+
+  --line-tight: 1.25;
+  --line-normal: 1.45;
+  --line-relaxed: 1.65;
+
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+
+  --shadow-0: none;
+  --shadow-1: 0 1px 2px rgba(2, 6, 23, 0.35);
+  --shadow-2: 0 8px 24px rgba(2, 6, 23, 0.35);
+  --shadow-3: 0 16px 40px rgba(2, 6, 23, 0.45);
+
+  --bg-0: #0e1219;
+  --bg-1: #101622;
+  --surface-0: #151d2b;
+  --surface-1: #1b2638;
+  --surface-2: #25344d;
+  --surface-overlay: rgba(11, 18, 31, 0.82);
+
+  --border-0: #2a3750;
+  --border-1: #364a6b;
+  --focus-ring: rgba(91, 140, 255, 0.45);
+
+  --text-0: #e8eefc;
+  --text-1: #c5d2e8;
+  --muted: #8ea0bf;
+
+  --accent: #5b8cff;
+  --accent-hover: #7aa1ff;
+  --accent-soft: rgba(91, 140, 255, 0.2);
+
+  --success: #31c48d;
+  --warning: #f4b04f;
+  --danger: #f87171;
+  --info: #22c7f2;
+  --success-soft: rgba(49, 196, 141, 0.16);
+  --warning-soft: rgba(244, 176, 79, 0.18);
+  --danger-soft: rgba(248, 113, 113, 0.18);
+
+  --scrollbar-thumb: #334560;
+  --scrollbar-track: transparent;
+
+  /* Back-compat aliases used by existing styles */
+  --bg-dark: var(--bg-0);
+  --bg-sidebar: var(--surface-0);
+  --bg-chat: var(--bg-1);
+  --topbar-bg: var(--surface-0);
+  --topbar-border: var(--border-0);
+  --bg-input: var(--surface-1);
+  --bg-msg: var(--surface-1);
+  --bg-msg-user: #253757;
+  --text-primary: var(--text-0);
+  --text-secondary: var(--text-1);
+  --text-muted: var(--muted);
+  --border: var(--border-0);
+  --online: var(--success);
+  --offline: var(--danger);
+}
+
+:root[data-theme='light'],
+body[data-theme='light'] {
+  color-scheme: light;
+
+  --bg-0: #edf2fa;
+  --bg-1: #f4f7fd;
+  --surface-0: #ffffff;
+  --surface-1: #eef3fb;
+  --surface-2: #e3ebf8;
+  --surface-overlay: rgba(248, 251, 255, 0.9);
+
+  --border-0: #c8d6eb;
+  --border-1: #b7c9e4;
+  --focus-ring: rgba(37, 99, 235, 0.36);
+
+  --text-0: #0f172a;
+  --text-1: #334155;
+  --muted: #5b6b84;
+
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: rgba(37, 99, 235, 0.14);
+
+  --success: #15803d;
+  --warning: #b45309;
+  --danger: #b91c1c;
+  --info: #0369a1;
+  --success-soft: rgba(21, 128, 61, 0.12);
+  --warning-soft: rgba(180, 83, 9, 0.12);
+  --danger-soft: rgba(185, 28, 28, 0.1);
+
+  --scrollbar-thumb: #b8c6dd;
+  --scrollbar-track: transparent;
+
+  --bg-dark: var(--bg-0);
+  --bg-sidebar: var(--surface-0);
+  --bg-chat: var(--bg-1);
+  --topbar-bg: var(--surface-0);
+  --topbar-border: var(--border-0);
+  --bg-input: var(--surface-0);
+  --bg-msg: var(--surface-0);
+  --bg-msg-user: #dbeafe;
+  --text-primary: var(--text-0);
+  --text-secondary: var(--text-1);
+  --text-muted: var(--muted);
+  --border: var(--border-0);
+  --online: var(--success);
+  --offline: var(--danger);
+}

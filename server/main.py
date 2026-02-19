@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +27,32 @@ logging.basicConfig(
 logger = logging.getLogger("ai-office")
 
 
+def _env_key_safety_warnings() -> list[str]:
+    env_path = APP_ROOT / ".env"
+    warnings: list[str] = []
+    if not env_path.exists():
+        warnings.append(".env not found; configure API keys in Settings -> API Keys.")
+        return warnings
+
+    try:
+        content = env_path.read_text(encoding="utf-8")
+    except Exception:
+        return warnings
+
+    if "REPLACE_WITH_ROTATED_KEY" in content:
+        warnings.append(".env contains placeholder API keys. Set keys in Settings -> API Keys.")
+
+    key_line_pattern = re.compile(r"^(OPENAI_API_KEY|ANTHROPIC_API_KEY)\s*=\s*(.+)$", re.MULTILINE)
+    for match in key_line_pattern.finditer(content):
+        name = match.group(1)
+        value = match.group(2).strip().strip('"').strip("'")
+        if not value or value.startswith("REPLACE_WITH_"):
+            continue
+        if re.search(r"(sk-|rk-)", value):
+            warnings.append(f"{name} appears to contain a real key in .env. Rotate it and use Settings -> API Keys.")
+    return warnings
+
+
 # ── Lifespan ───────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -33,6 +60,22 @@ async def lifespan(app: FastAPI):
     ensure_runtime_dirs()
     await init_db()
     logger.info("✅ Database initialized")
+    for warning in _env_key_safety_warnings():
+        logger.warning("⚠️  %s", warning)
+        try:
+            from . import database as db
+
+            await db.log_console_event(
+                channel="main",
+                project_name=None,
+                event_type="security_warning",
+                source="startup",
+                severity="warning",
+                message=warning,
+                data={"scope": "env"},
+            )
+        except Exception:
+            pass
     try:
         from . import process_manager
 
@@ -49,7 +92,7 @@ async def lifespan(app: FastAPI):
     if await ollama_client.is_available():
         logger.info("✅ Ollama connected")
     else:
-        logger.warning("⚠️  Ollama not reachable — agents will not respond")
+        logger.warning("⚠️  Ollama not reachable — local-model agents may be unavailable")
     yield
     from . import process_manager
     shutdown = await process_manager.shutdown_all_processes()
