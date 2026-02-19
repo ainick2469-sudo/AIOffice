@@ -5,13 +5,13 @@ import TaskBoard from './TaskBoard';
 import SpecPanel from './SpecPanel';
 import PreviewPanel from './PreviewPanel';
 import GitPanel from './GitPanel';
-import LayoutPresetToggle from './LayoutPresetToggle';
 import SplitPane from './layout/SplitPane';
 import ActivityBar from './ActivityBar';
 import DiscussView from './DiscussView';
 import DraftDiscussView from './discuss/DraftDiscussView';
 import GuidedStepper from './beginner/GuidedStepper';
 import HelpPopover from './beginner/HelpPopover';
+import WorkspaceToolbar from './WorkspaceToolbar';
 import { useBeginnerMode } from './beginner/BeginnerModeContext';
 import useBodyScrollLock from '../hooks/useBodyScrollLock';
 import useEscapeKey from '../hooks/useEscapeKey';
@@ -248,6 +248,7 @@ export default function WorkspaceShell({
   const [officeModeOverrides, setOfficeModeOverrides] = useState({});
   const [secondaryPinnedOverrides, setSecondaryPinnedOverrides] = useState({});
   const [coachDismissedOverrides, setCoachDismissedOverrides] = useState({});
+  const [beginnerGuideCollapsedOverrides, setBeginnerGuideCollapsedOverrides] = useState({});
   const [refreshVersions, setRefreshVersions] = useState({});
   const [primarySecondaryRatio, setPrimarySecondaryRatio] = useState(DEFAULT_PRIMARY_SECONDARY_RATIO);
 
@@ -259,6 +260,10 @@ export default function WorkspaceShell({
   const secondaryPinnedStorageKey = useMemo(() => workspaceStorageKey(projectLabel, 'secondaryPinned'), [projectLabel]);
   const focusModeStorageKey = useMemo(() => workspaceStorageKey(projectLabel, 'focusMode'), [projectLabel]);
   const coachDismissedStorageKey = useMemo(() => workspaceStorageKey(projectLabel, 'coachDismissed'), [projectLabel]);
+  const beginnerGuideCollapsedStorageKey = useMemo(
+    () => workspaceStorageKey(projectLabel, 'beginnerGuideCollapsed'),
+    [projectLabel]
+  );
 
   const persistedOfficeMode = useMemo(
     () => normalizeOfficeMode(readStorage(officeStorageKey, ''), projectLabel),
@@ -311,6 +316,15 @@ export default function WorkspaceShell({
     setCoachDismissedOverrides((prev) => ({ ...prev, [coachDismissedStorageKey]: normalized }));
     writeStorage(coachDismissedStorageKey, normalized ? 'true' : 'false');
   }, [coachDismissedStorageKey]);
+
+  const beginnerGuideCollapsed = beginnerGuideCollapsedOverrides[beginnerGuideCollapsedStorageKey]
+    ?? readBooleanStorage(beginnerGuideCollapsedStorageKey, beginnerMode ? Boolean(coachDismissed) : true);
+
+  const setBeginnerGuideCollapsed = useCallback((nextValue) => {
+    const normalized = Boolean(nextValue);
+    setBeginnerGuideCollapsedOverrides((prev) => ({ ...prev, [beginnerGuideCollapsedStorageKey]: normalized }));
+    writeStorage(beginnerGuideCollapsedStorageKey, normalized ? 'true' : 'false');
+  }, [beginnerGuideCollapsedStorageKey]);
 
   const selectedBuildLayout = normalizeBuildLayoutMode(layoutPreset);
   const hasPinnedSecondary = Boolean(
@@ -582,77 +596,32 @@ export default function WorkspaceShell({
     </ViewPane>
   );
 
-  const showCoach = officeMode === 'build' && !coachDismissed;
+  const showBeginnerGuide = officeMode === 'build' && beginnerMode && !beginnerGuideCollapsed;
+  const showBeginnerGuideCollapsed = officeMode === 'build' && beginnerMode && beginnerGuideCollapsed;
+  const showQuickStartExpanded = officeMode === 'build' && !beginnerMode && !beginnerGuideCollapsed;
+  const showQuickStartCollapsed = officeMode === 'build' && !beginnerMode && beginnerGuideCollapsed;
 
   return (
     <div className={`workspace-shell workspace-office-shell ${previewFocus ? 'workspace-focus-mode' : ''}`}>
-      <header className="workspace-shell-header compact office-shell-header">
-        <div className="workspace-shell-meta">
-          <span className="workspace-breadcrumb">{projectLabel}</span>
-          <span className="workspace-breadcrumb-sep">→</span>
-          <span className="workspace-breadcrumb mode">{officeMode.toUpperCase()}</span>
-          {officeMode === 'build' ? (
-            <span className="workspace-breadcrumb-subtle">Primary: {paneMeta(activeView).title}</span>
-          ) : null}
-        </div>
-        <div className="workspace-shell-controls">
-          <div className="office-mode-switch" role="tablist" aria-label="Workspace modes">
-            <button
-              type="button"
-              className={`mode-chip ${officeMode === 'discuss' ? 'active' : ''}`}
-              onClick={() => setOfficeMode('discuss')}
-            >
-              Discuss
-            </button>
-            <button
-              type="button"
-              className={`mode-chip ${officeMode === 'build' ? 'active' : ''}`}
-              onClick={() => setOfficeMode('build')}
-              disabled={hasCreationDraft}
-              title={hasCreationDraft ? 'Create the project first to enter Build mode.' : ''}
-            >
-              Build
-            </button>
-          </div>
-
-          <button
-            type="button"
-            className={`control-btn ui-btn beginner-toggle-chip ${beginnerMode ? 'ui-btn-primary' : ''}`}
-            onClick={toggleBeginnerMode}
-          >
-            {beginnerMode ? 'Beginner Mode On' : 'Beginner Mode Off'}
-          </button>
-
-          {officeMode === 'build' && (
-            <>
-              <LayoutPresetToggle
-                value={selectedBuildLayout}
-                options={BUILD_LAYOUT_OPTIONS}
-                onChange={(nextMode) => onLayoutPresetChange?.(normalizeBuildLayoutMode(nextMode))}
-                onReset={resetLayout}
-              />
-              <button type="button" className="control-btn ui-btn" onClick={onToggleProjectSidebar}>
-                {projectSidebarCollapsed ? 'Show Projects' : 'Hide Projects'}
-              </button>
-              <button type="button" className={`control-btn ui-btn ${previewFocus ? 'ui-btn-primary' : ''}`} onClick={onToggleFocusMode}>
-                {previewFocus ? 'Exit Focus Mode' : 'Focus Mode'}
-              </button>
-              <button type="button" className="control-btn ui-btn ui-btn-primary" onClick={runBuildLoop}>
-                Run Build Loop
-              </button>
-            </>
-          )}
-
-          {officeMode === 'discuss' && !hasCreationDraft && (
-            <button type="button" className="control-btn ui-btn ui-btn-primary" onClick={() => setShowHandoffModal(true)}>
-              Start Building
-            </button>
-          )}
-          {officeMode === 'discuss' && hasCreationDraft && (
-            <span className="convo-status active">Draft Discuss active</span>
-          )}
-        </div>
-      </header>
+      <WorkspaceToolbar
+        projectName={projectLabel}
+        branch={branch}
+        officeMode={officeMode}
+        hasCreationDraft={hasCreationDraft}
+        layoutPreset={selectedBuildLayout}
+        layoutOptions={BUILD_LAYOUT_OPTIONS}
+        projectSidebarCollapsed={projectSidebarCollapsed}
+        previewFocus={previewFocus}
+        beginnerMode={beginnerMode}
+        onSetOfficeMode={setOfficeMode}
+        onRequestBuildStart={() => setShowHandoffModal(true)}
+        onToggleProjectSidebar={onToggleProjectSidebar}
+        onToggleFocusMode={onToggleFocusMode}
+        onToggleBeginnerMode={toggleBeginnerMode}
+        onLayoutPresetChange={(nextMode) => onLayoutPresetChange?.(normalizeBuildLayoutMode(nextMode))}
+        onResetLayout={resetLayout}
+        onRunBuildLoop={runBuildLoop}
+      />
 
       <div className="workspace-mode-explainer">
         {hasCreationDraft
@@ -660,7 +629,45 @@ export default function WorkspaceShell({
           : MODE_DETAILS[officeMode]}
       </div>
 
-      {showCoach ? (
+      {showQuickStartCollapsed ? (
+        <div className="workspace-quickstart-bar compact">
+          <span>Quick Start: Discuss → Build → Preview</span>
+          <button type="button" className="ui-btn" onClick={() => setBeginnerGuideCollapsed(false)}>
+            Expand
+          </button>
+        </div>
+      ) : null}
+
+      {showQuickStartExpanded ? (
+        <div className="workspace-quickstart-bar">
+          <div>
+            <strong>Quick Start</strong>
+            <p>Discuss the scope, switch to Build, then validate with Preview.</p>
+          </div>
+          <div className="workspace-coachmark-actions">
+            <button type="button" className="ui-btn" onClick={() => { setOfficeMode('discuss'); setView('chat'); }}>
+              Open Discuss
+            </button>
+            <button type="button" className="ui-btn ui-btn-primary" onClick={() => setShowHandoffModal(true)} disabled={hasCreationDraft}>
+              Open Build
+            </button>
+            <button type="button" className="ui-btn" onClick={() => setBeginnerGuideCollapsed(true)}>
+              Collapse
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {showBeginnerGuideCollapsed ? (
+        <div className="workspace-quickstart-bar compact">
+          <span>Beginner guide is collapsed for this project.</span>
+          <button type="button" className="ui-btn" onClick={() => setBeginnerGuideCollapsed(false)}>
+            Show Guide
+          </button>
+        </div>
+      ) : null}
+
+      {showBeginnerGuide ? (
         <div className="workspace-coachmark">
           <div>
             <strong>Workspace quick start</strong>
@@ -668,7 +675,17 @@ export default function WorkspaceShell({
           </div>
           <div className="workspace-coachmark-actions">
             <button type="button" className="ui-btn" onClick={resetLayout}>Reset Layout</button>
-            <button type="button" className="ui-btn ui-btn-primary" onClick={() => setCoachDismissed(true)}>Got it</button>
+            <button type="button" className="ui-btn" onClick={() => setBeginnerGuideCollapsed(true)}>Collapse</button>
+            <button
+              type="button"
+              className="ui-btn ui-btn-primary"
+              onClick={() => {
+                setCoachDismissed(true);
+                setBeginnerGuideCollapsed(true);
+              }}
+            >
+              Got it
+            </button>
           </div>
         </div>
       ) : null}

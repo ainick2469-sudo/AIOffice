@@ -5,6 +5,7 @@ import MessageContent from './MessageContent';
 import StatusPanel from './StatusPanel';
 import ContextStrip from './chat/ContextStrip';
 import MessageActionsMenu from './chat/MessageActionsMenu';
+import MoreMenu from './ui/MoreMenu';
 import {
   clearChatDraft,
   loadChatDraft,
@@ -183,6 +184,7 @@ export default function ChatRoom({
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [chatNotice, setChatNotice] = useState('');
+  const [statusErrorOpen, setStatusErrorOpen] = useState(false);
   const [statusPanelOpen, setStatusPanelOpen] = useState(() => {
     try {
       const saved = localStorage.getItem('ai-office-status-panel-open');
@@ -344,6 +346,7 @@ export default function ChatRoom({
     setSpecActionModal({ open: false, message: null, sectionKey: 'ux_notes' });
     setShowJumpToLatest(false);
     setUnreadCount(0);
+    setStatusErrorOpen(false);
   }, [channel]);
 
   // Poll conversation status
@@ -1285,23 +1288,6 @@ export default function ChatRoom({
     );
 
   const isActive = convoStatus?.active;
-  const warRoomActive = collabMode?.active && collabMode?.mode === 'warroom';
-  const warRoomIssue = collabMode?.issue || collabMode?.topic || 'incident';
-  const warRoomElapsed = warRoomActive
-    ? formatElapsed(Math.floor(clockMs / 1000) - Number(collabMode?.started_at || 0))
-    : '';
-  const sprintActive = collabMode?.active && collabMode?.mode === 'sprint';
-  const sprintGoal = collabMode?.goal || collabMode?.topic || 'current goal';
-  const sprintRemaining = sprintActive
-    ? Math.max(0, Number(collabMode?.ends_at || 0) - Math.floor(clockMs / 1000))
-    : 0;
-  const sprintLabel = `SPRINT - ${formatElapsed(sprintRemaining)} remaining - Goal: ${sprintGoal}`;
-  const approvalMode = (permissionPolicy?.ui_mode || (permissionPolicy?.mode || 'ask').toUpperCase()).toUpperCase();
-  const approvalExpiry = permissionPolicy?.expires_at ? ` until ${new Date(permissionPolicy.expires_at).toLocaleTimeString()}` : '';
-  const specStatus = String(specState?.status || 'none').toUpperCase();
-  const specChipClass = String(specState?.status || '').toLowerCase() === 'approved'
-    ? 'active'
-    : (String(specState?.status || '').toLowerCase() === 'draft' ? 'warn' : '');
   const approvalCountdownSeconds = activeApproval?.expires_at
     ? Math.max(0, Math.floor((new Date(activeApproval.expires_at).getTime() - clockMs) / 1000))
     : null;
@@ -1312,6 +1298,41 @@ export default function ChatRoom({
       .join('\n')
     : 'No running processes';
   const breadcrumbMode = String(workspaceMode || 'build').replace('-', ' ');
+  const providerIssue = useMemo(() => {
+    const recent = [...messages].reverse().slice(0, 40);
+    for (const message of recent) {
+      const sender = String(message?.sender || '').toLowerCase();
+      const msgType = String(message?.msg_type || '').toLowerCase();
+      if (sender !== 'system' && msgType !== 'system') continue;
+      const text = String(message?.content || '').trim();
+      if (!text) continue;
+      const lowered = text.toLowerCase();
+      if (
+        lowered.includes('not reachable')
+        || lowered.includes('request failed')
+        || lowered.includes('provider')
+        || lowered.includes('openai')
+        || lowered.includes('ollama')
+        || lowered.includes('anthropic')
+        || lowered.includes('quota')
+        || lowered.includes('invalid')
+        || lowered.includes('timeout')
+      ) {
+        return summarize(text, 180);
+      }
+    }
+    return '';
+  }, [messages]);
+  const statusIssueText = !connected
+    ? 'Realtime link is reconnecting. If this stays disconnected, verify provider settings and local network.'
+    : providerIssue;
+  const hasStatusIssue = Boolean(statusIssueText);
+
+  useEffect(() => {
+    if (!hasStatusIssue) {
+      setStatusErrorOpen(false);
+    }
+  }, [hasStatusIssue]);
 
   return (
     <div className={`chat-room ${compact ? 'chat-room-compact' : ''}`}>
@@ -1321,43 +1342,28 @@ export default function ChatRoom({
             {activeProject?.project || 'ai-office'} → {breadcrumbMode} → Chat
           </div>
           <h2>{channelLabel}</h2>
-          <span className={`status-dot ${connected ? 'online' : 'offline'}`} />
-          <span className="status-text">{connected ? 'Connected' : 'Reconnecting...'}</span>
-          <span className="convo-status">
-            Project: {activeProject?.project || 'ai-office'} @ {activeProject?.branch || 'main'}
-          </span>
-          {!compact && (
-            <>
-              <span className={`convo-status ${collabMode?.active ? 'active' : ''} ${warRoomActive ? 'warroom' : ''} ${sprintActive ? 'sprint' : ''}`}>
-                {warRoomActive
-                  ? `WAR ROOM — ${warRoomIssue} — ${warRoomElapsed}`
-                  : sprintActive
-                    ? sprintLabel
-                  : `Mode: ${collabMode?.mode || 'chat'}`}
-              </span>
-              <span className={`convo-status ${specChipClass}`}>
-                Spec: {specStatus}
-              </span>
-              <span className={`convo-status ${autonomyMode === 'SAFE' ? '' : 'active'}`}>
-                Autonomy: {autonomyMode}
-              </span>
-              <span className={`convo-status ${approvalMode === 'AUTO' ? 'active' : ''}`}>
-                Approval: {approvalMode}{approvalExpiry}
-              </span>
-            </>
-          )}
-          <span
-            className={`convo-status ${approvalQueue.length > 0 ? 'active' : ''}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => setApprovalListOpen(prev => !prev)}
-            title={approvalQueue.length > 0 ? 'Click to view pending approvals' : 'No pending approvals'}
-          >
-            Pending: {approvalQueue.length}
-          </span>
-          <span className={`convo-status ${processState.running > 0 ? 'active' : ''}`} title={processSummaryTitle}>
-            Processes: {processState.running} running
-          </span>
+          <div className="chat-status-line">
+            <span className={`status-dot ${connected ? 'online' : 'offline'}`} />
+            <span className="status-text">{connected ? 'Connected' : 'Disconnected'}</span>
+            {hasStatusIssue ? (
+              <button
+                type="button"
+                className="chat-error-pill"
+                onClick={() => setStatusErrorOpen((prev) => !prev)}
+              >
+                {connected ? 'Provider issue' : 'Connection issue'}
+              </button>
+            ) : null}
+          </div>
+          {statusErrorOpen && hasStatusIssue ? (
+            <div className="chat-error-popover">
+              <strong>Issue details</strong>
+              <p>{statusIssueText}</p>
+              <button type="button" className="msg-action-btn" onClick={() => copyToClipboard(statusIssueText)}>
+                Copy details
+              </button>
+            </div>
+          ) : null}
         </div>
         <div className="chat-header-right">
           {typeof onBackToWorkspace === 'function' && (
@@ -1365,58 +1371,62 @@ export default function ChatRoom({
               Back to Workspace
             </button>
           )}
-          {!compact && (
-            <>
-              <button className="stop-btn" onClick={refreshProcesses}>
-                Refresh Proc
-              </button>
-              <button className="stop-btn" onClick={() => setStatusPanelOpen(prev => !prev)}>
-                {statusPanelOpen ? 'Hide Status' : 'Show Status'}
-              </button>
-              <button className="stop-btn" onClick={runKillSwitch}>
-                Kill Switch
-              </button>
-            </>
-          )}
+          <button className="stop-btn" onClick={refreshProcesses} title={processSummaryTitle}>
+            Refresh
+          </button>
           <button className="stop-btn" onClick={clearChat}>
             Clear Chat
           </button>
-          {!compact && String(specState?.status || '').toLowerCase() === 'draft' && (
-            <button className="stop-btn" onClick={approveSpec}>
-              Approve Spec
-            </button>
-          )}
-          {!compact && isActive && (
-            <>
-              <span className="convo-status active">
-                Active ({convoStatus.message_count} msgs)
-              </span>
-              <button className="stop-btn" onClick={stopConversation}>
-                Stop
-              </button>
-            </>
-          )}
-          {!compact && workStatus?.running && (
-            <>
-              <span className="convo-status active">
-                Working... ({workStatus.processed || 0})
-              </span>
-              <button className="stop-btn" onClick={stopWork}>
-                Stop Work
-              </button>
-            </>
-          )}
-          {!compact && runningProcesses.slice(0, 2).map((proc) => (
-            <button
-              key={proc.id}
-              className="stop-btn"
-              onClick={() => stopHeaderProcess(proc.id)}
-              disabled={processActionBusy}
-              title={proc.command}
-            >
-              Stop {proc.name}
-            </button>
-          ))}
+          {!compact ? (
+            <MoreMenu label="Chat actions">
+              <div className="chat-more-actions">
+                <button
+                  type="button"
+                  className="ui-btn"
+                  onClick={() => setStatusPanelOpen(prev => !prev)}
+                >
+                  {statusPanelOpen ? 'Hide Status Panel' : 'Show Status Panel'}
+                </button>
+                <button
+                  type="button"
+                  className={`ui-btn ${approvalQueue.length > 0 ? 'ui-btn-primary' : ''}`}
+                  onClick={() => setApprovalListOpen(prev => !prev)}
+                >
+                  Pending Approvals: {approvalQueue.length}
+                </button>
+                <button type="button" className="ui-btn" onClick={runKillSwitch}>
+                  Kill Switch
+                </button>
+                {String(specState?.status || '').toLowerCase() === 'draft' ? (
+                  <button type="button" className="ui-btn" onClick={approveSpec}>
+                    Approve Spec
+                  </button>
+                ) : null}
+                {isActive ? (
+                  <button type="button" className="ui-btn" onClick={stopConversation}>
+                    Stop Conversation
+                  </button>
+                ) : null}
+                {workStatus?.running ? (
+                  <button type="button" className="ui-btn" onClick={stopWork}>
+                    Stop Work ({workStatus.processed || 0})
+                  </button>
+                ) : null}
+                {runningProcesses.map((proc) => (
+                  <button
+                    key={proc.id}
+                    type="button"
+                    className="ui-btn"
+                    onClick={() => stopHeaderProcess(proc.id)}
+                    disabled={processActionBusy}
+                    title={proc.command}
+                  >
+                    Stop {proc.name}
+                  </button>
+                ))}
+              </div>
+            </MoreMenu>
+          ) : null}
         </div>
       </div>
 

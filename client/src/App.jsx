@@ -14,7 +14,6 @@ import {
 import useEscapeKey from './hooks/useEscapeKey';
 import useBodyScrollLock, { getBodyScrollLockSnapshot } from './hooks/useBodyScrollLock';
 import { clearAllBodyScrollLocks } from './hooks/scrollLockManager';
-import { useBeginnerMode } from './components/beginner/BeginnerModeContext';
 import './styles/tokens.css';
 import './styles/theme.css';
 import './styles/components.css';
@@ -249,7 +248,6 @@ function collectScrollSnapshot() {
 }
 
 export default function App() {
-  const { enabled: beginnerMode, toggleEnabled: toggleBeginnerMode } = useBeginnerMode();
   const initialRoute = useMemo(
     () => parseAppPathname(typeof window !== 'undefined' ? window.location.pathname : '/'),
     []
@@ -1134,39 +1132,9 @@ export default function App() {
 
           <div className="app-header-right pywebview-no-drag">
             <div className="app-header-details">
-              {topTab === 'workspace' && (
-                <>
-                  <span className="pill ui-chip">Project: {activeProject}</span>
-                  <span className="pill ui-chip">Branch: {active.branch || 'main'}</span>
-                  <label className="app-layout-select-wrap">
-                    <span>Layout</span>
-                    <select
-                      className="ui-input"
-                      value={previewFocus ? 'focus' : layoutPreset}
-                      onChange={(event) => handleHeaderLayoutChange(event.target.value)}
-                    >
-                      <option value="split">Split</option>
-                      <option value="full-ide">Full IDE</option>
-                      <option value="focus">Focus</option>
-                    </select>
-                  </label>
-                  <span className={`pill ui-chip ${previewFocus ? 'is-active' : ''}`}>
-                    {previewFocus ? 'Preview Focus ON' : 'Preview Focus OFF'}
-                  </span>
-                  <span className={`pill ui-chip ${beginnerMode ? 'is-active' : ''}`}>
-                    Beginner: {beginnerMode ? 'ON' : 'OFF'}
-                  </span>
-                  <button className="refresh-btn ui-btn" onClick={handlePreviewFocusToggle}>
-                    {previewFocus ? 'Exit Preview Mode' : 'Preview Mode'}
-                  </button>
-                  <button
-                    className={`refresh-btn ui-btn beginner-toggle-chip ${beginnerMode ? 'ui-btn-primary' : ''}`}
-                    onClick={toggleBeginnerMode}
-                  >
-                    {beginnerMode ? 'Beginner Mode On' : 'Beginner Mode Off'}
-                  </button>
-                </>
-              )}
+              <span className="pill ui-chip app-global-status">
+                {topTab === 'workspace' ? 'Workspace' : topTab === 'settings' ? 'Settings' : 'Ready'}
+              </span>
               <button
                 className="refresh-btn ui-btn app-theme-toggle"
                 onClick={cycleThemeMode}
@@ -1189,35 +1157,9 @@ export default function App() {
             </div>
 
             <details className="app-header-compact-menu">
-              <summary>Context</summary>
+              <summary>More</summary>
               <div className="app-header-compact-popover">
-                {topTab === 'workspace' ? (
-                  <>
-                    <div className="app-header-compact-row"><strong>Project</strong><span>{activeProject}</span></div>
-                    <div className="app-header-compact-row"><strong>Branch</strong><span>{active.branch || 'main'}</span></div>
-                    <label className="app-layout-select-wrap compact">
-                      <span>Layout</span>
-                      <select
-                        className="ui-input"
-                        value={previewFocus ? 'focus' : layoutPreset}
-                        onChange={(event) => handleHeaderLayoutChange(event.target.value)}
-                      >
-                        <option value="split">Split</option>
-                        <option value="full-ide">Full IDE</option>
-                        <option value="focus">Focus</option>
-                      </select>
-                    </label>
-                    <button className="refresh-btn ui-btn" onClick={handlePreviewFocusToggle}>
-                      {previewFocus ? 'Exit Preview Mode' : 'Preview Mode'}
-                    </button>
-                    <button
-                      className={`refresh-btn ui-btn beginner-toggle-chip ${beginnerMode ? 'ui-btn-primary' : ''}`}
-                      onClick={toggleBeginnerMode}
-                    >
-                      {beginnerMode ? 'Beginner Mode On' : 'Beginner Mode Off'}
-                    </button>
-                  </>
-                ) : null}
+                <div className="app-header-compact-row"><strong>View</strong><span>{topTab}</span></div>
                 <button
                   className="refresh-btn ui-btn app-theme-toggle"
                   onClick={cycleThemeMode}
