@@ -228,6 +228,13 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS creation_drafts (
+    draft_id TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS project_metadata (
     project_name TEXT PRIMARY KEY,
     display_name TEXT,
@@ -481,6 +488,14 @@ async def _run_migrations(db: aiosqlite.Connection):
         """CREATE TABLE IF NOT EXISTS provider_secrets (
                key_ref TEXT PRIMARY KEY,
                api_key_enc TEXT NOT NULL,
+               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+           )"""
+    )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS creation_drafts (
+               draft_id TEXT PRIMARY KEY,
+               payload_json TEXT NOT NULL,
+               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
            )"""
     )
@@ -2119,6 +2134,137 @@ async def set_setting(key: str, value: str):
         await db.commit()
     finally:
         await db.close()
+
+
+def _normalize_creation_draft_id(value: Optional[str]) -> str:
+    raw = (value or "").strip().lower()
+    cleaned = re.sub(r"[^a-z0-9-]+", "-", raw)
+    cleaned = re.sub(r"-{2,}", "-", cleaned).strip("-")
+    cleaned = cleaned[:120].strip("-")
+    return cleaned
+
+
+def _normalize_creation_phase(value: Optional[str]) -> str:
+    phase = (value or "DISCUSS").strip().upper()
+    if phase not in {"DISCUSS", "SPEC", "READY_TO_BUILD", "BUILDING"}:
+        return "DISCUSS"
+    return phase
+
+
+def _normalize_creation_payload(payload: Optional[dict]) -> dict:
+    base = payload if isinstance(payload, dict) else {}
+    seed_prompt = str(base.get("seed_prompt") or base.get("seedPrompt") or base.get("text") or "").strip()
+    template_id = (str(base.get("template_id") or base.get("templateId") or "").strip() or None)
+    project_name = (str(base.get("project_name") or base.get("projectName") or base.get("suggestedName") or "").strip() or None)
+    stack_hint = (str(base.get("stack_hint") or base.get("stackHint") or base.get("suggestedStack") or "").strip() or None)
+    brainstorm_messages = base.get("brainstorm_messages") or base.get("brainstormMessages") or []
+    if not isinstance(brainstorm_messages, list):
+        brainstorm_messages = []
+    spec_draft = str(base.get("spec_draft") or base.get("specDraft") or base.get("specDraftMd") or "").strip()
+    phase = _normalize_creation_phase(base.get("phase"))
+    extra_payload = base.get("payload") if isinstance(base.get("payload"), dict) else {}
+    return {
+        "seed_prompt": seed_prompt,
+        "template_id": template_id,
+        "project_name": project_name,
+        "stack_hint": stack_hint,
+        "brainstorm_messages": brainstorm_messages,
+        "spec_draft": spec_draft,
+        "phase": phase,
+        "payload": extra_payload,
+    }
+
+
+async def upsert_creation_draft(
+    draft_id: str,
+    payload: dict,
+    *,
+    created_at: Optional[str] = None,
+) -> dict:
+    normalized_id = _normalize_creation_draft_id(draft_id)
+    if not normalized_id:
+        raise ValueError("draft_id is required")
+    normalized_payload = _normalize_creation_payload(payload)
+    now_iso = _utc_now_iso()
+    created_value = created_at or now_iso
+    encoded = json.dumps(
+        {
+            "draft_id": normalized_id,
+            "created_at": created_value,
+            "updated_at": now_iso,
+            **normalized_payload,
+        }
+    )
+
+    db = await get_db()
+    try:
+        await db.execute(
+            """
+            INSERT INTO creation_drafts (draft_id, payload_json, created_at, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(draft_id) DO UPDATE SET
+              payload_json = excluded.payload_json,
+              updated_at = CURRENT_TIMESTAMP
+            """,
+            (normalized_id, encoded, created_value),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return await get_creation_draft(normalized_id)
+
+
+async def get_creation_draft(draft_id: str) -> Optional[dict]:
+    normalized_id = _normalize_creation_draft_id(draft_id)
+    if not normalized_id:
+        return None
+    db = await get_db()
+    try:
+        row = await db.execute("SELECT draft_id, payload_json, created_at, updated_at FROM creation_drafts WHERE draft_id = ?", (normalized_id,))
+        item = await row.fetchone()
+    finally:
+        await db.close()
+    if not item:
+        return None
+    data = dict(item)
+    payload = _json_loads(data.get("payload_json"), {})
+    normalized_payload = _normalize_creation_payload(payload)
+    created_at = str(payload.get("created_at") or data.get("created_at") or _utc_now_iso())
+    updated_at = str(payload.get("updated_at") or data.get("updated_at") or created_at)
+    return {
+        "draft_id": normalized_id,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        **normalized_payload,
+    }
+
+
+async def list_creation_drafts(limit: int = 25) -> list[dict]:
+    size = max(1, min(int(limit or 25), 200))
+    db = await get_db()
+    try:
+        rows = await db.execute(
+            "SELECT draft_id, payload_json, created_at, updated_at FROM creation_drafts ORDER BY updated_at DESC LIMIT ?",
+            (size,),
+        )
+        items = [dict(r) for r in await rows.fetchall()]
+    finally:
+        await db.close()
+    results = []
+    for item in items:
+        payload = _json_loads(item.get("payload_json"), {})
+        normalized_payload = _normalize_creation_payload(payload)
+        created_at = str(payload.get("created_at") or item.get("created_at") or _utc_now_iso())
+        updated_at = str(payload.get("updated_at") or item.get("updated_at") or created_at)
+        results.append(
+            {
+                "draft_id": str(item.get("draft_id") or ""),
+                "created_at": created_at,
+                "updated_at": updated_at,
+                **normalized_payload,
+            }
+        )
+    return results
 
 
 async def get_project_autonomy_mode(project_name: str) -> str:

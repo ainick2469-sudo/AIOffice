@@ -94,6 +94,7 @@ export default function DraftDiscussView({
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [promptDraft, setPromptDraft] = useState(String(draft?.text || ''));
   const [creating, setCreating] = useState(false);
+  const [ideasLoading, setIdeasLoading] = useState(false);
   const [error, setError] = useState('');
   const clarifyingBullets = useMemo(() => buildClarifyingBullets(draft), [draft]);
 
@@ -155,6 +156,77 @@ export default function DraftDiscussView({
       'Provide options, tradeoffs, scope recommendation, and 3 clarifying questions.',
     ].join('\n');
     setQueuedMessage({ id: `brainstorm-${Date.now()}`, text });
+    const existing = Array.isArray(draft?.brainstormMessages) ? draft.brainstormMessages : [];
+    onDraftChange?.({
+      brainstormMessages: [
+        ...existing,
+        {
+          id: `brainstorm-${Date.now()}`,
+          role: 'system',
+          content: text,
+          createdAt: new Date().toISOString(),
+          source: 'more_ideas',
+        },
+      ],
+    });
+  };
+
+  const generateIdeas = async () => {
+    if (ideasLoading) return;
+    setIdeasLoading(true);
+    setError('');
+    const payload = {
+      seed_prompt: String(draft?.seedPrompt || draft?.rawRequest || draft?.text || ''),
+      template_id: draft?.templateId || null,
+      project_name: draft?.projectName || draft?.suggestedName || null,
+      stack_hint: draft?.stackHint || draft?.suggestedStack || null,
+    };
+    try {
+      const resp = await fetch('/api/creation/brainstorm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = resp.ok ? await resp.json() : null;
+      if (!resp.ok) {
+        throw new Error(data?.detail || data?.error || 'Unable to generate ideas.');
+      }
+      const summarised = {
+        goals: String(data?.scope || draft?.summary?.goals || ''),
+        risks: Array.isArray(data?.risks) ? data.risks.join(' ') : String(draft?.summary?.risks || ''),
+        questions: Array.isArray(data?.clarifying_questions) ? data.clarifying_questions.join(' ') : String(draft?.summary?.questions || ''),
+        nextSteps: Array.isArray(data?.next_steps) ? data.next_steps.join(' ') : String(draft?.summary?.nextSteps || ''),
+      };
+      const messageText = [
+        'Brainstorm summary',
+        `Scope: ${data?.scope || 'TBD'}`,
+        `Assumptions: ${(data?.assumptions || []).join(' | ') || 'None'}`,
+        `Risks: ${(data?.risks || []).join(' | ') || 'None'}`,
+        `Questions: ${(data?.clarifying_questions || []).join(' | ') || 'None'}`,
+      ].join('\n');
+      setQueuedMessage({ id: `ideas-${Date.now()}`, text: messageText });
+      const existing = Array.isArray(draft?.brainstormMessages) ? draft.brainstormMessages : [];
+      onDraftChange?.({
+        summary: summarised,
+        suggestedStack: data?.suggested_stack || draft?.suggestedStack,
+        stackHint: data?.suggested_stack || draft?.stackHint,
+        brainstormMessages: [
+          ...existing,
+          {
+            id: `ideas-${Date.now()}`,
+            role: 'assistant',
+            content: messageText,
+            structured: data,
+            createdAt: new Date().toISOString(),
+            source: 'generate_ideas',
+          },
+        ],
+      });
+    } catch (err) {
+      setError(err?.message || 'Unable to generate ideas.');
+    } finally {
+      setIdeasLoading(false);
+    }
   };
 
   const savePromptEdit = () => {
@@ -233,8 +305,11 @@ export default function DraftDiscussView({
               ))}
             </ul>
           </section>
-          <button type="button" className="ui-btn ui-btn-primary" onClick={runPrimaryAction} disabled={creating}>
-            {creating ? 'Working...' : primaryActionLabel}
+        <button type="button" className="ui-btn ui-btn-primary" onClick={runPrimaryAction} disabled={creating}>
+          {creating ? 'Working...' : primaryActionLabel}
+        </button>
+          <button type="button" className="ui-btn ui-btn-primary" onClick={generateIdeas} disabled={ideasLoading}>
+            {ideasLoading ? 'Generating…' : 'Generate ideas'}
           </button>
           <button type="button" className="ui-btn" onClick={runBrainstorm}>
             More Ideas

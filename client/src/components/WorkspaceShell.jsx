@@ -250,7 +250,6 @@ export default function WorkspaceShell({
   const [refreshVersions, setRefreshVersions] = useState({});
 
   const projectLabel = projectName || 'ai-office';
-  const branchLabel = branch || 'main';
   const hasCreationDraft = Boolean(creationDraft?.text);
   const projectStorageId = useMemo(() => paneStorageProjectId(projectLabel), [projectLabel]);
   const officeStorageKey = useMemo(() => officeModeKey(projectLabel), [projectLabel]);

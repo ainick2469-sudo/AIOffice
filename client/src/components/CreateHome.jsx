@@ -8,12 +8,14 @@ export default function CreateHome({
   projects = [],
   onOpenProject,
   onStartDraftDiscussion,
+  onResumeDraft,
   creationDraft = null,
   onCreationDraftChange = null,
   onCreateProjectFromDraft = null,
   onDiscardCreationDraft = null,
   onProjectDeleted,
   onProjectRenamed,
+  createOnly = false,
 }) {
   const [summaryProject, setSummaryProject] = useState(null);
 
@@ -68,6 +70,27 @@ export default function CreateHome({
 
   return (
     <div className="create-home create-home-v3">
+      {!createOnly && creationDraft?.text ? (
+        <section className="panel create-resume-draft">
+          <div>
+            <h3>Resume Draft</h3>
+            <p>Your last creation draft is ready. Continue Discuss → Spec → Build without losing progress.</p>
+          </div>
+          <div className="create-resume-actions">
+            <button
+              type="button"
+              className="ui-btn ui-btn-primary"
+              onClick={() => onResumeDraft?.(creationDraft?.draftId || creationDraft?.id || '')}
+            >
+              Resume Draft
+            </button>
+            <button type="button" className="ui-btn" onClick={() => onDiscardCreationDraft?.()}>
+              Clear Draft
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       {creationDraft?.text && creationDraft?.pipelineStep !== 'describe' ? (
         <CreationPipeline
           draft={creationDraft}
@@ -87,13 +110,15 @@ export default function CreateHome({
         />
       )}
 
-      <RecentProjects
-        projects={recentProjects}
-        onOpenProject={onOpenProject}
-        onRenameProject={renameProject}
-        onDeleteProject={deleteProject}
-        onOpenSummary={(project) => setSummaryProject(project)}
-      />
+      {!createOnly ? (
+        <RecentProjects
+          projects={recentProjects}
+          onOpenProject={onOpenProject}
+          onRenameProject={renameProject}
+          onDeleteProject={deleteProject}
+          onOpenSummary={(project) => setSummaryProject(project)}
+        />
+      ) : null}
     </div>
   );
 }

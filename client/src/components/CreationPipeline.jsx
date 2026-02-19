@@ -16,6 +16,12 @@ import {
 const PLAN_APPROVAL_MIN_COMPLETENESS = 70;
 const PIPELINE_STEPS = ['discuss', 'plan', 'build'];
 
+function stepToPhase(step, readyToBuild = false) {
+  if (step === 'build') return readyToBuild ? 'READY_TO_BUILD' : 'BUILDING';
+  if (step === 'plan') return readyToBuild ? 'READY_TO_BUILD' : 'SPEC';
+  return 'DISCUSS';
+}
+
 function normalizeStep(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (PIPELINE_STEPS.includes(raw)) return raw;
@@ -143,6 +149,7 @@ export default function CreationPipeline({
   const [error, setError] = useState('');
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardAnswers, setWizardAnswers] = useState({});
+  const [specAutofillState, setSpecAutofillState] = useState('idle');
   const sectionRefs = useRef({});
   const initializedIdRef = useRef('');
 
@@ -152,6 +159,7 @@ export default function CreationPipeline({
   const [ideaBankMd, setIdeaBankMd] = useState('');
 
   const step = normalizeStep(draft?.pipelineStep);
+  const readyToBuild = String(draft?.phase || '').trim().toUpperCase() === 'READY_TO_BUILD';
   const specMarkdown = useMemo(() => buildSpecMarkdown(sectionValues), [sectionValues]);
   const completeness = useMemo(() => computeCompleteness(sectionValues), [sectionValues]);
 
@@ -183,23 +191,78 @@ export default function CreationPipeline({
     setWizardOpen(false);
     setWizardAnswers({});
     setError('');
+    setSpecAutofillState('idle');
+
+    let cancelled = false;
+    const maybeAutofill = async () => {
+      const seedPrompt = String(draft?.rawRequest || draft?.seedPrompt || draft?.text || '').trim();
+      if (!seedPrompt || fromDraftSpec) return;
+      setSpecAutofillState('loading');
+      try {
+        const resp = await fetch('/api/creation/spec', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            seed_prompt: seedPrompt,
+            template_id: draft?.templateId || null,
+            project_name: draft?.projectName || draft?.suggestedName || null,
+            stack_hint: draft?.stackHint || draft?.suggestedStack || null,
+            brainstorm: {
+              scope: draft?.summary?.goals || '',
+              risks: String(draft?.summary?.risks || '')
+                .split(/[;|\n]+/)
+                .map((item) => item.trim())
+                .filter(Boolean),
+              clarifying_questions: String(draft?.summary?.questions || '')
+                .split(/[;|\n]+/)
+                .map((item) => item.trim())
+                .filter(Boolean),
+              next_steps: String(draft?.summary?.nextSteps || '')
+                .split(/[;|\n]+/)
+                .map((item) => item.trim())
+                .filter(Boolean),
+              suggested_stack: draft?.stackHint || draft?.suggestedStack || 'auto-detect',
+            },
+          }),
+        });
+        const payload = resp.ok ? await resp.json() : null;
+        if (!resp.ok || !payload?.spec_markdown) {
+          throw new Error(payload?.detail || payload?.error || 'Unable to auto-generate spec.');
+        }
+        if (cancelled) return;
+        setSectionValues(parseSpecMarkdown(String(payload.spec_markdown)));
+        setSpecAutofillState('ready');
+      } catch {
+        if (!cancelled) {
+          setSpecAutofillState('error');
+        }
+      }
+    };
+    maybeAutofill();
+    return () => {
+      cancelled = true;
+    };
   }, [draft, ratioKey]);
 
   useEffect(() => {
-    if (step !== 'plan') return;
+    if (step !== 'plan' && step !== 'build') return;
     onDraftChange?.({
-      pipelineStep: 'plan',
+      pipelineStep: step,
+      phase: stepToPhase(step, readyToBuild),
       specDraftMd: specMarkdown,
+      specDraft: specMarkdown,
       ideaBankMd,
       lastEditedAt: new Date().toISOString(),
       rawRequest: String(draft?.rawRequest || draft?.text || ''),
     });
-  }, [step, specMarkdown, ideaBankMd, draft?.rawRequest, draft?.text, onDraftChange]);
+  }, [step, readyToBuild, specMarkdown, ideaBankMd, draft?.rawRequest, draft?.text, onDraftChange]);
 
-  const setStep = (nextStep) => {
+  const setStep = (nextStep, options = {}) => {
     const normalized = normalizeStep(nextStep);
+    const nextReady = Boolean(options?.readyToBuild);
     onDraftChange?.({
       pipelineStep: normalized,
+      phase: stepToPhase(normalized, nextReady),
       lastEditedAt: new Date().toISOString(),
     });
   };
@@ -219,13 +282,17 @@ export default function CreationPipeline({
     });
   };
 
-  const approveAndCreate = async () => {
-    if (creating) return;
+  const approveSpec = () => {
     if (!isPlanReady) {
       setError(`Approval blocked: spec completeness is ${completeness.percent}%.`);
       return;
     }
+    setError('');
+    setStep('build', { readyToBuild: true });
+  };
 
+  const startBuild = async () => {
+    if (creating) return;
     setCreating(true);
     setError('');
     try {
@@ -233,7 +300,9 @@ export default function CreationPipeline({
         ...draft,
         rawRequest: String(draft?.rawRequest || draft?.text || ''),
         specDraftMd: specMarkdown,
+        specDraft: specMarkdown,
         ideaBankMd,
+        phase: 'BUILDING',
         pipelineStep: 'build',
         lastEditedAt: new Date().toISOString(),
       };
@@ -241,7 +310,7 @@ export default function CreationPipeline({
       await onApproveAndCreate?.(payload);
     } catch (err) {
       setError(err?.message || 'Failed to create project from approved plan.');
-      setStep('plan');
+      setStep('plan', { readyToBuild: false });
     } finally {
       setCreating(false);
     }
@@ -285,7 +354,9 @@ export default function CreationPipeline({
         <span className="creation-step-copy">
           {step === 'discuss' && 'Discussing your idea (Step 1/3)'}
           {step === 'plan' && 'Confirming spec before project creation (Step 2/3)'}
-          {step === 'build' && 'Creating project workspace (Step 3/3)'}
+          {step === 'build' && (readyToBuild
+            ? 'Spec approved. Start Build when ready (Step 3/3)'
+            : 'Starting project workspace (Step 3/3)')}
         </span>
       </div>
 
@@ -317,10 +388,9 @@ export default function CreationPipeline({
               <button
                 type="button"
                 className="ui-btn ui-btn-primary"
-                onClick={approveAndCreate}
-                disabled={creating}
+                onClick={approveSpec}
               >
-                {creating ? 'Creating Project…' : 'Approve & Create Project'}
+                Approve Spec
               </button>
             </div>
           </div>
@@ -329,6 +399,9 @@ export default function CreationPipeline({
 
           <section className="creation-checklist">
             <h4>Ready to build checklist</h4>
+            {specAutofillState === 'loading' ? (
+              <p className="creation-checklist-note">Generating a structured spec draft from your prompt...</p>
+            ) : null}
             <div className="creation-checklist-grid">
               {readyChecklist.map((item) => (
                 <ChecklistItem key={item.label} ok={item.ok} label={item.label} />
@@ -393,8 +466,16 @@ export default function CreationPipeline({
 
       {step === 'build' && (
         <div className="creation-build-wait panel">
-          <h3>Creating project workspace…</h3>
-          <p>Please wait while the project is initialized and Build mode opens.</p>
+          <h3>Ready to Build</h3>
+          <p>Spec is approved. Start Build to scaffold the project and open Workspace.</p>
+          <div className="creation-plan-actions">
+            <button type="button" className="ui-btn" onClick={() => setStep('plan', { readyToBuild: false })}>
+              Back to Spec
+            </button>
+            <button type="button" className="ui-btn ui-btn-primary" onClick={startBuild} disabled={creating || !readyToBuild}>
+              {creating ? 'Starting Build…' : 'Start Build'}
+            </button>
+          </div>
         </div>
       )}
 

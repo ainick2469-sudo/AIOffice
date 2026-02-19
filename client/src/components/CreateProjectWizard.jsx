@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ImportDropzone from './ImportDropzone';
 import TemplateGallery from './TemplateGallery';
+import { buildCreationDraft } from '../lib/storage/creationDraft';
 
 const DRAFT_KEY = 'ai-office:create-project-wizard-draft:v1';
 
@@ -79,7 +80,16 @@ export default function CreateProjectWizard({
     setStep(1);
     setError('');
     setStatus('Loaded draft into Describe step.');
-  }, [initialDraft?.id, initialDraft?.text, initialDraft?.templateId, initialDraft?.suggestedName, initialDraft?.suggestedStack, initialDraft?.importQueueRuntime]);
+  }, [
+    initialDraft?.id,
+    initialDraft?.text,
+    initialDraft?.templateId,
+    initialDraft?.suggestedName,
+    initialDraft?.suggestedStack,
+    initialDraft?.project_name,
+    initialDraft?.stack_choice,
+    initialDraft?.importQueueRuntime,
+  ]);
 
   useEffect(() => {
     if (!summaryProject?.name) return;
@@ -113,11 +123,15 @@ export default function CreateProjectWizard({
       }
       onDraftUpdate?.({
         text: prompt,
+        seedPrompt: prompt,
         templateId: selectedTemplate || null,
+        projectName: normalizeProjectName(projectName),
         suggestedName: normalizeProjectName(projectName),
+        stackHint: stackChoice,
         suggestedStack: stackChoice,
         importQueueRuntime: queuedImports,
         importQueue: queuedImports,
+        phase: 'DISCUSS',
         pipelineStep: 'describe',
         lastEditedAt: nowIso,
       });
@@ -163,11 +177,15 @@ export default function CreateProjectWizard({
     }
     onDraftUpdate?.({
       text: promptRef.current,
+      seedPrompt: promptRef.current,
       templateId: selectedTemplate || null,
+      projectName: normalizeProjectName(projectName),
       suggestedName: normalizeProjectName(projectName),
+      stackHint: stackChoice,
       suggestedStack: stackChoice,
       importQueueRuntime: queuedImports,
       importQueue: queuedImports,
+      phase: 'DISCUSS',
       pipelineStep: 'describe',
       lastEditedAt: nowIso,
     });
@@ -250,41 +268,70 @@ export default function CreateProjectWizard({
     if (busy) return;
     persistWizardDraftNow();
     const currentPrompt = String(promptRef.current || '');
+    const latestStatePrompt = String(prompt || '');
+    if (currentPrompt !== latestStatePrompt) {
+      const captureError = 'Prompt not captured, try again.';
+      setError(captureError);
+      setStatus('');
+      console.error('[create] Prompt capture mismatch on submit.', {
+        currentPromptLength: currentPrompt.length,
+        statePromptLength: latestStatePrompt.length,
+      });
+      return;
+    }
     if (!currentPrompt.trim()) {
       setError('Prompt cannot be empty.');
       return;
     }
+    if (currentPrompt.trim().length < 3) {
+      const captureError = 'Prompt not captured, try again.';
+      setError(captureError);
+      setStatus('');
+      console.error('[create] Prompt rejected: too short.', {
+        promptLength: currentPrompt.trim().length,
+      });
+      return;
+    }
+
+    const draftSeed = buildCreationDraft({
+      draftId: `draft-${Date.now()}`,
+      text: currentPrompt,
+      seedPrompt: currentPrompt,
+      rawRequest: currentPrompt,
+      templateId: selectedTemplate || null,
+      templateHint: selectedTemplate || null,
+      projectName: resolvedProjectName,
+      suggestedName: resolvedProjectName,
+      stackHint: stackChoice,
+      suggestedStack: stackChoice,
+      phase: 'DISCUSS',
+      pipelineStep: 'discuss',
+      createdAt: new Date().toISOString(),
+      lastEditedAt: new Date().toISOString(),
+      importQueueRuntime: queuedImports,
+      importQueue: queuedImports.map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        name: item.name,
+        count: item.count,
+        bytes: item.bytes,
+        summary: item.summary,
+        entries: (item.entries || []).map((entry) => ({
+          path: entry.path || '',
+          name: entry.file?.name || '',
+          size: entry.file?.size || 0,
+          type: entry.file?.type || '',
+          hasFile: Boolean(entry.file),
+        })),
+      })),
+      brainstormMessages: [],
+    });
+
     setBusy(true);
     setError('');
     setStatus('Opening draft discussion...');
     try {
-      await onStartDraftDiscussion?.({
-        text: currentPrompt,
-        rawRequest: currentPrompt,
-        templateId: selectedTemplate || null,
-        templateHint: selectedTemplate || null,
-        suggestedName: resolvedProjectName,
-        suggestedStack: stackChoice,
-        pipelineStep: 'discuss',
-        createdAt: new Date().toISOString(),
-        lastEditedAt: new Date().toISOString(),
-        importQueueRuntime: queuedImports,
-        importQueue: queuedImports.map((item) => ({
-          id: item.id,
-          kind: item.kind,
-          name: item.name,
-          count: item.count,
-          bytes: item.bytes,
-          summary: item.summary,
-          entries: (item.entries || []).map((entry) => ({
-            path: entry.path || '',
-            name: entry.file?.name || '',
-            size: entry.file?.size || 0,
-            type: entry.file?.type || '',
-            hasFile: Boolean(entry.file),
-          })),
-        })),
-      });
+      await onStartDraftDiscussion?.(draftSeed);
       setStatus('Draft discussion opened.');
     } catch (err) {
       setError(err?.message || 'Unable to open draft discussion.');
@@ -334,7 +381,7 @@ export default function CreateProjectWizard({
                   setPrompt(nextValue);
                 }}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' && event.ctrlKey) {
+                  if (event.key === 'Enter' && !event.shiftKey) {
                     event.preventDefault();
                     gotoNext();
                   }
@@ -345,7 +392,7 @@ export default function CreateProjectWizard({
               />
               <div className="create-prompt-meta">
                 <span>{String(prompt || '').length} characters</span>
-                <span>Enter = newline, Ctrl+Enter = continue</span>
+                <span>Enter = continue, Shift+Enter = newline</span>
               </div>
               <TemplateGallery
                 templates={templates}

@@ -43,6 +43,12 @@ from .models import (
     ProjectUIStateIn,
     ProjectUIStateOut,
     ProjectCreateFromPromptIn,
+    CreationDraftIn,
+    CreationDraftOut,
+    CreationBrainstormIn,
+    CreationBrainstormOut,
+    CreationSpecIn,
+    CreationSpecOut,
     DebugBundleIn,
     MemoryEraseIn,
     ExecuteCodeIn,
@@ -228,6 +234,104 @@ def _seed_spec_from_prompt(prompt: str, *, project_name: str, template: Optional
         "- \n"
     )
     return spec, ideas
+
+
+def _normalize_creation_draft_id(value: Optional[str]) -> str:
+    raw = re.sub(r"[^a-z0-9-]+", "-", (value or "").strip().lower())
+    raw = re.sub(r"-{2,}", "-", raw).strip("-")
+    return raw[:120].strip("-")
+
+
+def _creation_brainstorm(seed_prompt: str, *, template_id: Optional[str], project_name: Optional[str], stack_hint: Optional[str]) -> dict:
+    prompt = (seed_prompt or "").strip()
+    topic = prompt.splitlines()[0].strip() if prompt else "new project"
+    stack = (stack_hint or "").strip() or "auto-detect"
+    assumptions = [
+        "Prioritize a working end-to-end slice before adding optional polish.",
+        "Keep implementation scope small enough to preview quickly.",
+    ]
+    if template_id:
+        assumptions.append(f"Template hint should guide initial scaffold: {template_id}.")
+    risks = [
+        "Scope expansion before first preview can delay delivery.",
+        "Unknown integrations may require additional clarification.",
+    ]
+    questions = [
+        "What is the smallest successful first demo for this request?",
+        "Are there required integrations or data sources from day one?",
+        "What constraints are non-negotiable for launch quality?",
+    ]
+    next_steps = [
+        "Capture success criteria in Spec before coding.",
+        "Approve the spec, then scaffold and run preview.",
+        "Iterate based on verification and review feedback.",
+    ]
+    return {
+        "scope": f"Build a focused first version for: {topic}",
+        "assumptions": assumptions,
+        "risks": risks,
+        "clarifying_questions": questions,
+        "next_steps": next_steps,
+        "suggested_stack": stack,
+        "project_name": project_name,
+    }
+
+
+def _creation_spec_markdown(seed_prompt: str, brainstorm: dict, *, project_name: Optional[str], template_id: Optional[str], stack_hint: Optional[str]) -> str:
+    title = (project_name or "New Project").strip() or "New Project"
+    prompt = (seed_prompt or "").strip()
+    scope = str(brainstorm.get("scope") or "").strip() or "Define the primary user-facing outcome."
+    assumptions = brainstorm.get("assumptions") if isinstance(brainstorm.get("assumptions"), list) else []
+    risks = brainstorm.get("risks") if isinstance(brainstorm.get("risks"), list) else []
+    questions = brainstorm.get("clarifying_questions") if isinstance(brainstorm.get("clarifying_questions"), list) else []
+    suggested_stack = (str(brainstorm.get("suggested_stack") or stack_hint or "auto-detect")).strip()
+    lines = [
+        f"# Spec: {title}",
+        "",
+        "## Goal",
+        prompt or "-",
+        "",
+        "## Non-goals",
+        "- Avoid optional features until the first end-to-end preview works.",
+        "- Avoid broad refactors before baseline behavior is verified.",
+        "",
+        "## User flow",
+        f"- {scope}",
+        "- Define primary action -> system response -> success state.",
+        "",
+        "## Screens",
+        "- Home/Create",
+        "- Discuss/Planning",
+        "- Workspace Build",
+        "",
+        "## Data model",
+        "- Core entities:",
+        "- State transitions:",
+        "",
+        "## API endpoints",
+        "- Existing endpoints to reuse:",
+        "- New endpoints (if needed):",
+        "",
+        "## Milestones",
+        "1. Discuss and scope lock",
+        "2. Spec completeness + approval",
+        "3. Build initial scaffold + preview",
+        "4. Verify and iterate",
+        "",
+        "## Definition of Done",
+        "- Prompt intent preserved verbatim in project metadata/spec.",
+        "- Spec approved before build starts.",
+        "- Preview runs and core flow is demonstrable.",
+        "",
+        "## Assumptions",
+    ]
+    lines.extend([f"- {item}" for item in assumptions] or ["- None recorded yet."])
+    lines.extend(["", "## Risks"])
+    lines.extend([f"- {item}" for item in risks] or ["- None recorded yet."])
+    lines.extend(["", "## Clarifying Questions"])
+    lines.extend([f"- {item}" for item in questions] or ["- None recorded yet."])
+    lines.extend(["", "## Stack Hint", f"- Template: {template_id or 'none'}", f"- Stack: {suggested_stack or 'auto-detect'}", ""])
+    return "\n".join(lines)
 
 
 def _registry_agents() -> list[dict]:
@@ -985,6 +1089,92 @@ async def set_project_ui_state(name: str, body: ProjectUIStateIn):
         pane_layout=meta.get("pane_layout") or {},
         last_opened_at=meta.get("last_opened_at"),
     )
+
+
+@router.post("/creation/draft", response_model=CreationDraftOut)
+async def create_or_update_creation_draft(body: CreationDraftIn):
+    payload = body.model_dump(exclude_unset=True)
+    draft_id = _normalize_creation_draft_id(payload.get("draft_id") or payload.get("payload", {}).get("draft_id"))
+    if not draft_id:
+        draft_id = f"draft-{int(time.time() * 1000)}"
+    merged_payload = {
+        **(payload.get("payload") or {}),
+        "seed_prompt": payload.get("seed_prompt", ""),
+        "template_id": payload.get("template_id"),
+        "project_name": payload.get("project_name"),
+        "stack_hint": payload.get("stack_hint"),
+        "brainstorm_messages": payload.get("brainstorm_messages", []),
+        "spec_draft": payload.get("spec_draft", ""),
+        "phase": payload.get("phase", "DISCUSS"),
+    }
+    row = await db.upsert_creation_draft(draft_id, merged_payload)
+    return CreationDraftOut(**row)
+
+
+@router.get("/creation/draft/{draft_id}", response_model=CreationDraftOut)
+async def get_creation_draft(draft_id: str):
+    normalized = _normalize_creation_draft_id(draft_id)
+    if not normalized:
+        raise HTTPException(400, "Invalid draft_id")
+    row = await db.get_creation_draft(normalized)
+    if not row:
+        raise HTTPException(404, "Creation draft not found")
+    return CreationDraftOut(**row)
+
+
+@router.put("/creation/draft/{draft_id}", response_model=CreationDraftOut)
+async def update_creation_draft(draft_id: str, body: CreationDraftIn):
+    normalized = _normalize_creation_draft_id(draft_id)
+    if not normalized:
+        raise HTTPException(400, "Invalid draft_id")
+    existing = await db.get_creation_draft(normalized)
+    if not existing:
+        raise HTTPException(404, "Creation draft not found")
+    payload = body.model_dump(exclude_unset=True)
+    merged_payload = {
+        **(existing.get("payload") or {}),
+        **(payload.get("payload") or {}),
+        "seed_prompt": payload.get("seed_prompt", existing.get("seed_prompt", "")),
+        "template_id": payload.get("template_id", existing.get("template_id")),
+        "project_name": payload.get("project_name", existing.get("project_name")),
+        "stack_hint": payload.get("stack_hint", existing.get("stack_hint")),
+        "brainstorm_messages": payload.get("brainstorm_messages", existing.get("brainstorm_messages", [])),
+        "spec_draft": payload.get("spec_draft", existing.get("spec_draft", "")),
+        "phase": payload.get("phase", existing.get("phase", "DISCUSS")),
+    }
+    row = await db.upsert_creation_draft(normalized, merged_payload, created_at=existing.get("created_at"))
+    return CreationDraftOut(**row)
+
+
+@router.post("/creation/brainstorm", response_model=CreationBrainstormOut)
+async def creation_brainstorm(body: CreationBrainstormIn):
+    payload = _creation_brainstorm(
+        body.seed_prompt,
+        template_id=body.template_id,
+        project_name=body.project_name,
+        stack_hint=body.stack_hint,
+    )
+    return CreationBrainstormOut(**payload)
+
+
+@router.post("/creation/spec", response_model=CreationSpecOut)
+async def creation_spec(body: CreationSpecIn):
+    brainstorm = body.brainstorm if isinstance(body.brainstorm, dict) else {}
+    if not brainstorm:
+        brainstorm = _creation_brainstorm(
+            body.seed_prompt,
+            template_id=body.template_id,
+            project_name=body.project_name,
+            stack_hint=body.stack_hint,
+        )
+    spec_md = _creation_spec_markdown(
+        body.seed_prompt,
+        brainstorm,
+        project_name=body.project_name,
+        template_id=body.template_id,
+        stack_hint=body.stack_hint,
+    )
+    return CreationSpecOut(spec_markdown=spec_md)
 
 
 @router.post("/projects/create_from_prompt")

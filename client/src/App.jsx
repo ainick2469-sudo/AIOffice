@@ -181,6 +181,39 @@ function officeModeStorageKey(projectName) {
   return `ai-office:workspace-office-mode:${safe}`;
 }
 
+function normalizeDraftRouteId(value) {
+  const raw = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 64);
+  return raw || '';
+}
+
+function parseAppPathname(pathname) {
+  const path = String(pathname || '/').trim() || '/';
+  if (path === '/workspace') return { topTab: 'workspace', draftId: '' };
+  if (path === '/settings') return { topTab: 'settings', draftId: '' };
+  if (path === '/create') return { topTab: 'create', draftId: '' };
+  if (path.startsWith('/create/')) {
+    const slug = decodeURIComponent(path.slice('/create/'.length));
+    return { topTab: 'create', draftId: normalizeDraftRouteId(slug) };
+  }
+  return { topTab: 'home', draftId: '' };
+}
+
+function buildAppPathname(topTab, draftId = '') {
+  if (topTab === 'workspace') return '/workspace';
+  if (topTab === 'settings') return '/settings';
+  if (topTab === 'create') {
+    const safe = normalizeDraftRouteId(draftId);
+    return safe ? `/create/${encodeURIComponent(safe)}` : '/create';
+  }
+  return '/';
+}
+
 function isTypingTarget(target) {
   if (!target) return false;
   const tag = String(target.tagName || '').toLowerCase();
@@ -216,9 +249,14 @@ function collectScrollSnapshot() {
 
 export default function App() {
   const { enabled: beginnerMode, toggleEnabled: toggleBeginnerMode } = useBeginnerMode();
+  const initialRoute = useMemo(
+    () => parseAppPathname(typeof window !== 'undefined' ? window.location.pathname : '/'),
+    []
+  );
   const [theme, setTheme] = useState('dark');
   const [themeMode, setThemeMode] = useState('dark');
-  const [topTab, setTopTab] = useState('home');
+  const [topTab, setTopTab] = useState(initialRoute.topTab);
+  const [createRouteDraftId, setCreateRouteDraftId] = useState(initialRoute.draftId || '');
   const [workspaceTab, setWorkspaceTab] = useState('builder');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState('default');
@@ -257,9 +295,14 @@ export default function App() {
 
   const activeProject = active.project || 'ai-office';
   const activeChannel = active.channel || channelForProject(activeProject);
-  const routeKey = `${topTab}|${workspaceTab}`;
+  const creationDraftId = String(creationDraft?.draftId || creationDraft?.id || '').trim();
+  const routeKey = topTab === 'create'
+    ? `${topTab}:${createRouteDraftId || 'draft'}|${workspaceTab}`
+    : `${topTab}|${workspaceTab}`;
   const breadcrumbLabel = topTab === 'workspace'
     ? `Workspace / ${workspaceTab}`
+    : topTab === 'create'
+      ? `Create / ${createRouteDraftId || 'draft'}`
     : topTab === 'settings'
       ? 'Settings'
       : 'Home';
@@ -373,6 +416,43 @@ export default function App() {
     return () => media.removeListener(onChange);
   }, [themeMode]);
 
+  const navigateToTab = useCallback((nextTopTab, options = {}) => {
+    const normalized = String(nextTopTab || 'home').trim().toLowerCase();
+    const tab = ['home', 'workspace', 'settings', 'create'].includes(normalized) ? normalized : 'home';
+    const nextDraftId = tab === 'create'
+      ? normalizeDraftRouteId(options?.draftId || createRouteDraftId)
+      : '';
+    const pathname = buildAppPathname(tab, nextDraftId);
+    const replace = Boolean(options?.replace);
+    if (tab === 'create') {
+      setCreateRouteDraftId(nextDraftId);
+    } else if (createRouteDraftId) {
+      setCreateRouteDraftId('');
+    }
+    setTopTab(tab);
+    if (typeof window !== 'undefined') {
+      const samePath = window.location.pathname === pathname;
+      if (replace || samePath) {
+        window.history.replaceState({ topTab: tab, draftId: nextDraftId }, '', pathname);
+      } else {
+        window.history.pushState({ topTab: tab, draftId: nextDraftId }, '', pathname);
+      }
+    }
+  }, [createRouteDraftId]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const parsed = parseAppPathname(window.location.pathname);
+      setTopTab(parsed.topTab);
+      setCreateRouteDraftId(parsed.draftId || '');
+      if (parsed.topTab === 'create') {
+        setCreationDraft(loadCreationDraft(parsed.draftId || null));
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
   const refreshProjects = async () => {
     const resp = await fetch('/api/projects');
     const payload = resp.ok ? await resp.json() : { projects: [] };
@@ -428,10 +508,12 @@ export default function App() {
       setLoading(true);
       setError('');
       try {
-        const persistedDraft = loadCreationDraft();
+        const persistedDraft = loadCreationDraft(createRouteDraftId || null);
         if (!cancelled) {
           setCreationDraft(persistedDraft);
-          if (persistedDraft?.text) setTopTab('home');
+          if (topTab === 'create' && !persistedDraft?.text) {
+            navigateToTab('home', { replace: true });
+          }
         }
 
         await refreshProjects();
@@ -454,7 +536,27 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+    // run once on app boot; route-specific draft updates handled below
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (topTab !== 'create') return;
+    const draft = loadCreationDraft(createRouteDraftId || null);
+    setCreationDraft(draft);
+    if (!draft?.text) {
+      setError('Draft not found. Start again from Home.');
+      navigateToTab('home', { replace: true });
+    }
+  }, [createRouteDraftId, navigateToTab, topTab]);
+
+  useEffect(() => {
+    if (topTab !== 'create') return;
+    const nextId = creationDraftId;
+    if (!nextId) return;
+    if (nextId === createRouteDraftId) return;
+    navigateToTab('create', { draftId: nextId, replace: true });
+  }, [createRouteDraftId, creationDraftId, navigateToTab, topTab]);
 
   const openProject = async (source) => {
     setError('');
@@ -483,7 +585,7 @@ export default function App() {
 
       const normalized = normalizeActiveContext({ ...activePayload, channel });
       setActive(normalized);
-      setTopTab('workspace');
+      navigateToTab('workspace');
       await loadProjectUiState(normalized.project);
       await refreshProjects();
     } catch (err) {
@@ -531,7 +633,7 @@ export default function App() {
     await refreshProjects();
     if (activeProject === project.name) {
       setActive(normalizeActiveContext({ project: 'ai-office', channel: 'main', branch: 'main', is_app_root: true }));
-      setTopTab('home');
+      navigateToTab('home');
     }
   };
 
@@ -551,12 +653,14 @@ export default function App() {
     const draft = buildCreationDraft({
       ...(payload || {}),
       pipelineStep: 'discuss',
+      phase: 'DISCUSS',
       rawRequest: String(payload?.rawRequest ?? payload?.text ?? payload?.prompt ?? ''),
     });
     saveCreationDraft(draft);
     setCreationDraft(draft);
+    setCreateRouteDraftId(draft.draftId || draft.id || '');
     setLeaveDraftModalOpen(false);
-    setTopTab('home');
+    navigateToTab('create', { draftId: draft.draftId || draft.id || '' });
     try {
       localStorage.setItem(officeModeStorageKey('ai-office'), 'discuss');
     } catch {
@@ -643,7 +747,6 @@ export default function App() {
       await persistDraftSeedToProjectSpec(data, draft, requestText);
     } catch (seedError) {
       if (import.meta.env?.DEV) {
-        // eslint-disable-next-line no-console
         console.warn('[creation] Unable to persist draft seed to spec.', {
           project: projectName || '(unknown)',
           message: seedError?.message || String(seedError),
@@ -653,15 +756,16 @@ export default function App() {
 
     clearCreationDraft();
     setCreationDraft(null);
+    setCreateRouteDraftId('');
     setLeaveDraftModalOpen(false);
     await openProject(data);
     setWorkspaceTab('spec');
-    setTopTab('workspace');
+    navigateToTab('workspace');
     return data;
   };
 
   const openHomeTab = () => {
-    setTopTab('home');
+    navigateToTab('home');
   };
 
   const openWorkspaceTab = () => {
@@ -669,7 +773,7 @@ export default function App() {
       setLeaveDraftModalOpen(true);
       return;
     }
-    setTopTab('workspace');
+    navigateToTab('workspace');
   };
 
   const handleRepairCodex = async () => {
@@ -723,7 +827,7 @@ export default function App() {
   };
 
   const openWorkspacePanel = (panel) => {
-    setTopTab('workspace');
+    navigateToTab('workspace');
     setWorkspaceTab(panel || 'builder');
   };
 
@@ -871,13 +975,13 @@ export default function App() {
       }
       if (event.key === '`') {
         event.preventDefault();
-        setTopTab('workspace');
+        navigateToTab('workspace');
         setWorkspaceTab('chat');
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [navigateToTab]);
 
   useEffect(() => {
     const history = navHistoryRef.current;
@@ -924,8 +1028,11 @@ export default function App() {
     if (history.length > 1) {
       history.pop();
       const previous = String(history[history.length - 1] || '');
-      const [prevTopTab, prevWorkspaceTab] = previous.split('|');
-      setTopTab(prevTopTab || 'workspace');
+      const [prevTopToken, prevWorkspaceTab] = previous.split('|');
+      const [prevTopTab, prevDraftId] = String(prevTopToken || '').split(':');
+      navigateToTab(prevTopTab || 'workspace', {
+        draftId: prevTopTab === 'create' ? prevDraftId : '',
+      });
       if ((prevTopTab || 'workspace') === 'workspace') {
         setWorkspaceTab(prevWorkspaceTab || 'chat');
       }
@@ -933,7 +1040,7 @@ export default function App() {
     }
 
     if (topTab !== 'workspace') {
-      setTopTab('workspace');
+      navigateToTab('workspace');
       setWorkspaceTab('chat');
       return;
     }
@@ -943,21 +1050,21 @@ export default function App() {
       return;
     }
 
-    setTopTab('home');
-  }, [topTab, workspaceTab]);
+    navigateToTab('home');
+  }, [navigateToTab, topTab, workspaceTab]);
 
   const resetUiState = useCallback(() => {
     clearAllBodyScrollLocks();
     window.dispatchEvent(new CustomEvent('ai-office:reset-ui-state'));
     setPaletteOpen(false);
     setLeaveDraftModalOpen(false);
-    setTopTab('workspace');
+    navigateToTab('workspace');
     setWorkspaceTab('chat');
     setError('');
     if (IS_DEV) {
       collectLayoutDebugState();
     }
-  }, [collectLayoutDebugState]);
+  }, [collectLayoutDebugState, navigateToTab]);
 
   useEscapeKey((event) => {
     const detail = { handled: false, source: 'global-escape' };
@@ -967,7 +1074,7 @@ export default function App() {
       return;
     }
     if (topTab !== 'workspace') {
-      setTopTab('workspace');
+      navigateToTab('workspace');
       setWorkspaceTab('chat');
       event.preventDefault();
       return;
@@ -992,7 +1099,7 @@ export default function App() {
 
   return (
     <div className={`app app-v2 ${previewFocus ? 'preview-focus-enabled' : ''}`} data-theme={theme}>
-      {!previewFocus && (
+      {!previewFocus && topTab !== 'create' && (
         <ProjectsSidebar
           projects={sortedProjects}
           activeProject={activeProject}
@@ -1016,9 +1123,9 @@ export default function App() {
             </div>
             <span className="app-route-breadcrumb">{breadcrumbLabel}</span>
             <nav className="app-topbar-nav" aria-label="Primary">
-              <button className={`ui-tab ${topTab === 'home' ? 'active ui-tab-active' : ''}`} onClick={openHomeTab}>Home</button>
+              <button className={`ui-tab ${topTab === 'home' || topTab === 'create' ? 'active ui-tab-active' : ''}`} onClick={openHomeTab}>Home</button>
               <button className={`ui-tab ${topTab === 'workspace' ? 'active ui-tab-active' : ''}`} onClick={openWorkspaceTab}>Workspace</button>
-              <button className={`ui-tab ${topTab === 'settings' ? 'active ui-tab-active' : ''}`} onClick={() => setTopTab('settings')}>Settings</button>
+              <button className={`ui-tab ${topTab === 'settings' ? 'active ui-tab-active' : ''}`} onClick={() => navigateToTab('settings')}>Settings</button>
             </nav>
           </div>
 
@@ -1134,18 +1241,45 @@ export default function App() {
 
         {loading && <div className="panel-empty">Loading workspace...</div>}
         {!loading && error && <div className="agent-config-error app-error">{error}</div>}
+        {!loading && IS_DEV && topTab === 'create' && creationDraft ? (
+          <details className="creation-debug-panel">
+            <summary>Creation Draft Debug</summary>
+            <pre>{JSON.stringify(creationDraft, null, 2)}</pre>
+          </details>
+        ) : null}
 
         {!loading && topTab === 'home' && (
           <CreateHome
             projects={sortedProjects}
             onOpenProject={openProject}
             onStartDraftDiscussion={startCreationDraftDiscussion}
+            onResumeDraft={(draftId) => navigateToTab('create', { draftId })}
             creationDraft={creationDraft}
             onCreationDraftChange={updateCreationDraft}
             onCreateProjectFromDraft={createProjectFromDraft}
             onDiscardCreationDraft={discardCreationDraft}
             onProjectDeleted={async () => refreshProjects()}
             onProjectRenamed={async () => refreshProjects()}
+            createOnly={false}
+          />
+        )}
+
+        {!loading && topTab === 'create' && (
+          <CreateHome
+            projects={sortedProjects}
+            onOpenProject={openProject}
+            onStartDraftDiscussion={startCreationDraftDiscussion}
+            onResumeDraft={(draftId) => navigateToTab('create', { draftId })}
+            creationDraft={creationDraft}
+            onCreationDraftChange={updateCreationDraft}
+            onCreateProjectFromDraft={createProjectFromDraft}
+            onDiscardCreationDraft={() => {
+              discardCreationDraft();
+              navigateToTab('home');
+            }}
+            onProjectDeleted={async () => refreshProjects()}
+            onProjectRenamed={async () => refreshProjects()}
+            createOnly
           />
         )}
 
@@ -1160,7 +1294,7 @@ export default function App() {
             onPaneLayoutChange={handlePaneLayoutChange}
             previewFocus={previewFocus}
             onToggleFocusMode={handlePreviewFocusToggle}
-            onOpenSettings={() => setTopTab('settings')}
+            onOpenSettings={() => navigateToTab('settings')}
             projectSidebarCollapsed={projectsSidebarCollapsed}
             onToggleProjectSidebar={() => setProjectsSidebarCollapsed((prev) => !prev)}
             activeTab={workspaceTab}
@@ -1170,11 +1304,11 @@ export default function App() {
             onCreateProjectFromDraft={createProjectFromDraft}
             onDiscardCreationDraft={() => {
               discardCreationDraft();
-              setTopTab('home');
+              navigateToTab('home');
             }}
             onEditCreationDraft={(payload) => {
               updateCreationDraft((prev) => buildCreationDraft({ ...prev, ...(payload || {}) }));
-              setTopTab('home');
+              navigateToTab('create', { draftId: (creationDraft?.draftId || creationDraft?.id || createRouteDraftId) });
             }}
             ingestionProgress={
               ingestionProgress?.project === activeProject
@@ -1223,7 +1357,7 @@ export default function App() {
                 className="msg-action-btn ui-btn"
                 onClick={() => {
                   setLeaveDraftModalOpen(false);
-                  setTopTab('home');
+                  navigateToTab('create', { draftId: creationDraft?.draftId || creationDraft?.id || createRouteDraftId });
                 }}
               >
                 Keep working
@@ -1233,7 +1367,7 @@ export default function App() {
                 className="refresh-btn ui-btn ui-btn-primary"
                 onClick={() => {
                   discardCreationDraft();
-                  setTopTab('workspace');
+                  navigateToTab('workspace');
                 }}
               >
                 Discard Draft & Open Workspace

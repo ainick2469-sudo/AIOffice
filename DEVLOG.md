@@ -2744,3 +2744,74 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 ### Verification
 - `cd client && npm run build` PASS
 - `with-runtime.cmd python -m pytest -q tests` PASS (`95 passed`, warnings only)
+
+## 2026-02-19 | Prompt #25: Reliable Home -> Create -> Discuss -> Spec -> Build pipeline
+
+### Creation draft model + persistence hardening
+- Expanded `client/src/lib/storage/creationDraft.js` to support durable draft identity and richer pipeline state:
+  - per-draft storage keys (`aiOffice.creationDraft:<draftId>`) plus current draft pointer
+  - `draftId`, `seedPrompt`, `projectName`, `stackHint`, `brainstormMessages`, `specDraft`, and `phase` aliases
+  - explicit phase mapping (`DISCUSS`, `SPEC`, `READY_TO_BUILD`, `BUILDING`)
+  - helper support for listing drafts and loading by draft id.
+
+### Dedicated create routing and no premature workspace jump
+- Refactored `client/src/App.jsx` to parse/push app paths:
+  - `/` -> Home
+  - `/create` and `/create/:draftId` -> Create flow
+  - `/workspace` -> Workspace
+  - `/settings` -> Settings
+- Home submit now routes to `/create/:draftId` and never creates a project directly.
+- Create route loads draft by id and resumes safely after refresh.
+- Added a dev-only creation draft JSON inspector (`Creation Draft Debug`) while on create route.
+
+### Discuss -> Spec -> Build gating improvements
+- Updated `client/src/components/CreateProjectWizard.jsx`:
+  - prompt capture safety guard (state vs ref mismatch check)
+  - explicit submit validation (`Prompt not captured, try again.` + console diagnostics)
+  - Enter/Shift+Enter behavior changed to:
+    - Enter = continue
+    - Shift+Enter = newline
+  - draft seed now created with explicit phase metadata before routing.
+- Updated `client/src/components/CreationPipeline.jsx`:
+  - spec approval no longer starts build immediately
+  - `Approve Spec` transitions to `READY_TO_BUILD`
+  - separate explicit `Start Build` action is now the only trigger for project creation/scaffolding.
+- Updated `client/src/components/discuss/DraftDiscussView.jsx`:
+  - added `Generate ideas` action wired to new brainstorm API
+  - brainstorm output updates draft summary + `brainstormMessages`
+  - retained lightweight `More Ideas` flow.
+
+### Home/Create UX refinements
+- Updated `client/src/components/CreateHome.jsx`:
+  - create-only mode for dedicated `/create` flow
+  - `Resume Draft` card on Home to continue existing draft without loss.
+- Added supporting styles in `client/src/App.css` and `client/src/styles/draft-discuss.css`.
+
+### Backend creation draft + brainstorm/spec APIs
+- Extended `server/database.py` with migration-safe `creation_drafts` table and CRUD helpers:
+  - `upsert_creation_draft`
+  - `get_creation_draft`
+  - `list_creation_drafts`
+- Added new models in `server/models.py`:
+  - `CreationDraftIn/Out`
+  - `CreationBrainstormIn/Out`
+  - `CreationSpecIn/Out`
+- Added new routes in `server/routes_api.py`:
+  - `POST /api/creation/draft`
+  - `GET /api/creation/draft/{draft_id}`
+  - `PUT /api/creation/draft/{draft_id}`
+  - `POST /api/creation/brainstorm`
+  - `POST /api/creation/spec`
+- Brainstorm/spec generation is deterministic and structured (scope, assumptions, risks, questions, milestones, DoD) to support beginner-safe pipeline progression.
+
+### Tests
+- Added `tests/test_creation_flow_api.py` covering:
+  - draft round trip with multiline seed prompt preservation
+  - draft phase transitions (`DISCUSS` -> `READY_TO_BUILD`)
+  - no project side-effects from draft-only API usage
+  - brainstorm/spec endpoint behavior.
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests/test_creation_flow_api.py` PASS
+- `with-runtime.cmd python -m pytest -q tests` PASS (warnings only)
+- `cd client && npm run build` PASS

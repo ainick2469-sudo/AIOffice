@@ -279,6 +279,62 @@ class ProjectSwitchIn(BaseModel):
     name: str
 
 
+class CreationDraftIn(BaseModel):
+    model_config = {"extra": "allow"}
+
+    draft_id: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    seed_prompt: str = Field(default="", max_length=20000)
+    template_id: Optional[str] = Field(default=None, max_length=120)
+    project_name: Optional[str] = Field(default=None, max_length=120)
+    stack_hint: Optional[str] = Field(default=None, max_length=120)
+    brainstorm_messages: list[dict] = Field(default_factory=list)
+    spec_draft: str = Field(default="", max_length=250000)
+    phase: Literal["DISCUSS", "SPEC", "READY_TO_BUILD", "BUILDING"] = "DISCUSS"
+    payload: dict = Field(default_factory=dict)
+
+
+class CreationDraftOut(BaseModel):
+    draft_id: str
+    created_at: str
+    updated_at: str
+    seed_prompt: str = ""
+    template_id: Optional[str] = None
+    project_name: Optional[str] = None
+    stack_hint: Optional[str] = None
+    brainstorm_messages: list[dict] = Field(default_factory=list)
+    spec_draft: str = ""
+    phase: Literal["DISCUSS", "SPEC", "READY_TO_BUILD", "BUILDING"] = "DISCUSS"
+    payload: dict = Field(default_factory=dict)
+
+
+class CreationBrainstormIn(BaseModel):
+    seed_prompt: str = Field(..., min_length=1, max_length=20000)
+    template_id: Optional[str] = Field(default=None, max_length=120)
+    project_name: Optional[str] = Field(default=None, max_length=120)
+    stack_hint: Optional[str] = Field(default=None, max_length=120)
+
+
+class CreationBrainstormOut(BaseModel):
+    scope: str
+    assumptions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    clarifying_questions: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    suggested_stack: Optional[str] = None
+
+
+class CreationSpecIn(BaseModel):
+    seed_prompt: str = Field(..., min_length=1, max_length=20000)
+    template_id: Optional[str] = Field(default=None, max_length=120)
+    project_name: Optional[str] = Field(default=None, max_length=120)
+    stack_hint: Optional[str] = Field(default=None, max_length=120)
+    brainstorm: dict = Field(default_factory=dict)
+
+
+class CreationSpecOut(BaseModel):
+    spec_markdown: str
+
+
 class BranchSwitchIn(BaseModel):
     channel: str = "main"
     branch: str = Field(..., min_length=1, max_length=120)
