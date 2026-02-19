@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import ChatRoom from './ChatRoom';
 import FileViewer from './FileViewer';
 import TaskBoard from './TaskBoard';
@@ -7,7 +7,6 @@ import PreviewPanel from './PreviewPanel';
 import GitPanel from './GitPanel';
 import LayoutPresetToggle from './LayoutPresetToggle';
 import SplitPane from './layout/SplitPane';
-import useSplitPaneState from './layout/useSplitPaneState';
 import ActivityBar from './ActivityBar';
 import DiscussView from './DiscussView';
 import DraftDiscussView from './discuss/DraftDiscussView';
@@ -20,69 +19,70 @@ import useEscapeKey from '../hooks/useEscapeKey';
 const BUILD_LAYOUT_OPTIONS = [
   { id: 'split', label: 'Split' },
   { id: 'full-ide', label: 'Full IDE' },
-  { id: 'focus-chat', label: 'Focus Chat' },
-  { id: 'focus-preview', label: 'Focus Preview' },
-  { id: 'focus-files', label: 'Focus Files' },
 ];
 
 const BUILD_ITEMS = [
-  { id: 'chat', label: 'Chat', icon: 'C' },
-  { id: 'files', label: 'Files', icon: 'F' },
-  { id: 'tasks', label: 'Tasks', icon: 'T' },
-  { id: 'spec', label: 'Spec', icon: 'S' },
-  { id: 'preview', label: 'Preview', icon: 'P' },
-  { id: 'git', label: 'Git', icon: 'G' },
+  { id: 'chat', label: 'Chat', icon: 'C', shortcut: 'Ctrl+1' },
+  { id: 'files', label: 'Files', icon: 'F', shortcut: 'Ctrl+2' },
+  { id: 'git', label: 'Git', icon: 'G', shortcut: 'Ctrl+3' },
+  { id: 'tasks', label: 'Tasks', icon: 'T', shortcut: 'Ctrl+4' },
+  { id: 'spec', label: 'Spec', icon: 'S', shortcut: 'Ctrl+5' },
+  { id: 'preview', label: 'Preview', icon: 'P', shortcut: 'Ctrl+6' },
+  { id: 'settings', label: 'Settings', icon: '⚙', shortcut: 'Ctrl+,' },
 ];
 
+const PRIMARY_VIEW_IDS = BUILD_ITEMS
+  .map((item) => item.id)
+  .filter((id) => id !== 'settings');
+
 const MODE_DETAILS = {
-  discuss: 'Discuss mode: align goals and decisions before touching build tooling.',
-  build: 'Build mode: execute the plan with files, spec, tasks, preview, and git.',
+  discuss: 'Discuss mode: align scope, risks, and decisions before implementation.',
+  build: 'Build mode: one primary view with optional pinned side pane for calm execution.',
 };
 
 const PANEL_HELP = {
   chat: {
     title: 'Chat',
-    whatIs: 'Coordinate with agents, ask questions, and request implementation updates.',
-    nextStep: 'Start with the outcome you want and ask for a concrete next action.',
-    commonMistake: 'Sending vague prompts without desired output or constraints.',
+    whatIs: 'Coordinate with agents and guide execution.',
+    nextStep: 'Ask for one concrete next change and verification.',
+    commonMistake: 'Starting implementation without defining acceptance criteria.',
   },
   files: {
     title: 'Files',
-    whatIs: 'Browse, inspect, and compare project files before editing.',
-    nextStep: 'Open key entry files first, then inspect diffs after each change.',
-    commonMistake: 'Editing random files before confirming where the feature lives.',
+    whatIs: 'Inspect and edit code with quick open and diff-safe workflow.',
+    nextStep: 'Open core files first, then compare edits before commit.',
+    commonMistake: 'Changing many files before confirming the right entry point.',
   },
   tasks: {
     title: 'Tasks',
-    whatIs: 'Capture and triage work items so nothing gets dropped.',
-    nextStep: 'Add one actionable task, then move it through triage to done.',
-    commonMistake: 'Keeping tasks as vague ideas instead of testable outcomes.',
+    whatIs: 'Capture and triage work items in an execution queue.',
+    nextStep: 'Create one scoped task and move it through triage.',
+    commonMistake: 'Keeping tasks too vague to verify.',
   },
   spec: {
     title: 'Spec',
-    whatIs: 'Define goal, scope, and acceptance criteria before implementation.',
-    nextStep: 'Fill required sections, then approve when completeness is healthy.',
-    commonMistake: 'Skipping non-goals and acceptance criteria before building.',
+    whatIs: 'Define goal, scope, and acceptance criteria.',
+    nextStep: 'Complete required sections before approval.',
+    commonMistake: 'Skipping non-goals and explicit constraints.',
   },
   preview: {
     title: 'Preview',
-    whatIs: 'Run the app and verify behavior in a real output surface.',
-    nextStep: 'Apply a run preset, start preview, and inspect logs for URL/health.',
-    commonMistake: 'Trying to debug without running the app or checking logs.',
+    whatIs: 'Run the app and validate behavior in output.',
+    nextStep: 'Apply preset, start preview, then inspect logs and URL.',
+    commonMistake: 'Debugging blind without live output.',
   },
   git: {
     title: 'Git',
-    whatIs: 'Review changes, stage safely, and commit with clear messages.',
-    nextStep: 'Check diffs first, then commit only after verification passes.',
-    commonMistake: 'Committing without reviewing staged files and diff context.',
+    whatIs: 'Review diffs, stage deliberately, and commit safely.',
+    nextStep: 'Inspect changes before committing.',
+    commonMistake: 'Committing without validating staged diff.',
   },
 };
 
 function normalizeBuildLayoutMode(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'split' || raw === 'full-ide') return raw;
-  if (raw.startsWith('focus-')) return raw;
-  if (raw === 'focus') return 'focus-preview';
+  if (raw === 'focus') return 'full-ide';
   return 'split';
 }
 
@@ -98,9 +98,38 @@ function officeModeKey(projectName) {
   return `ai-office:workspace-office-mode:${safe}`;
 }
 
-function canonicalFromBuildLayout(mode) {
-  if (mode === 'split' || mode === 'full-ide') return mode;
-  return 'focus';
+function paneStorageProjectId(value) {
+  const base = String(value || 'ai-office').trim().toLowerCase() || 'ai-office';
+  return base.replace(/[^a-z0-9-]+/g, '-');
+}
+
+function workspaceStorageKey(projectName, suffix) {
+  const projectId = paneStorageProjectId(projectName);
+  return `ai-office:workspace:${projectId}:${suffix}`;
+}
+
+function readStorage(key, fallback = '') {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw == null) return fallback;
+    return raw;
+  } catch {
+    return fallback;
+  }
+}
+
+function readBooleanStorage(key, fallback = false) {
+  const value = String(readStorage(key, '')).trim().toLowerCase();
+  if (!value) return fallback;
+  return value === 'true';
+}
+
+function writeStorage(key, value) {
+  try {
+    localStorage.setItem(key, String(value));
+  } catch {
+    // ignore storage failures
+  }
 }
 
 function paneMeta(viewId) {
@@ -109,61 +138,79 @@ function paneMeta(viewId) {
   return { icon: item.icon, title: item.label };
 }
 
-function paneStorageProjectId(value) {
-  const base = String(value || 'ai-office').trim().toLowerCase() || 'ai-office';
-  return base.replace(/[^a-z0-9-]+/g, '-');
+function isTypingTarget(target) {
+  if (!target) return false;
+  const tag = String(target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+  if (target.isContentEditable) return true;
+  return false;
 }
 
-function PaneFrame({
-  title,
-  subtitle,
-  icon,
-  className = '',
-  actions = null,
-  help = null,
+function removePaneSizeKeys(projectStorageId) {
+  try {
+    const prefix = `ai-office:paneSizes:${projectStorageId}:`;
+    const removals = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key && key.startsWith(prefix)) {
+        removals.push(key);
+      }
+    }
+    removals.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function ViewPane({
+  id,
+  role = 'primary',
   beginnerMode = false,
+  isFocusMode = false,
+  pinned = false,
+  onTogglePin = null,
+  onPopOut = null,
+  onRefresh = null,
   children,
 }) {
+  const meta = paneMeta(id);
+  const help = PANEL_HELP[id];
   return (
-    <section className={`workspace-pane-frame ${className}`}>
-      <header className="workspace-pane-frame-header">
-        <div className="workspace-pane-frame-title">
-          <span className="workspace-pane-frame-icon">{icon}</span>
-          <div className="workspace-pane-frame-copy">
-            <h3>{title}</h3>
-            {subtitle ? <p>{subtitle}</p> : null}
+    <section className={`workspace-view-pane ${role === 'secondary' ? 'secondary' : 'primary'}`}>
+      <header className="workspace-view-header">
+        <div className="workspace-view-title">
+          <span className="workspace-view-icon">{meta.icon}</span>
+          <div>
+            <h3>{meta.title}</h3>
+            <p>{role === 'secondary' ? 'Pinned side pane' : 'Primary workspace pane'}</p>
           </div>
         </div>
-        {(beginnerMode && help) || actions ? (
-          <div className="workspace-pane-frame-actions">
-            {beginnerMode && help ? (
-              <HelpPopover
-                title={help.title}
-                whatIs={help.whatIs}
-                nextStep={help.nextStep}
-                commonMistake={help.commonMistake}
-              />
-            ) : null}
-            {actions}
-          </div>
-        ) : null}
+        <div className="workspace-view-actions">
+          {!isFocusMode && id !== 'settings' && (
+            <button type="button" className="ui-btn" onClick={onTogglePin}>
+              {pinned ? 'Unpin Side' : 'Pin to Side'}
+            </button>
+          )}
+          {role === 'secondary' && (
+            <button type="button" className="ui-btn" onClick={onPopOut}>
+              Pop Out
+            </button>
+          )}
+          <button type="button" className="ui-btn" onClick={onRefresh}>
+            Refresh
+          </button>
+          {beginnerMode && help ? (
+            <HelpPopover
+              title={help.title}
+              whatIs={help.whatIs}
+              nextStep={help.nextStep}
+              commonMistake={help.commonMistake}
+            />
+          ) : null}
+        </div>
       </header>
-      <div className="workspace-pane-frame-body">{children}</div>
+      <div className="workspace-view-body">{children}</div>
     </section>
-  );
-}
-
-function CenterHelper({ title, description, actionLabel, onAction }) {
-  return (
-    <div className="workspace-collapsed-empty">
-      <h4>{title}</h4>
-      <p>{description}</p>
-      {onAction ? (
-        <button type="button" className="refresh-btn ui-btn" onClick={onAction}>
-          {actionLabel}
-        </button>
-      ) : null}
-    </div>
   );
 }
 
@@ -174,6 +221,10 @@ export default function WorkspaceShell({
   layoutPreset = 'split',
   onLayoutPresetChange,
   previewFocus = false,
+  onToggleFocusMode = null,
+  onOpenSettings = null,
+  projectSidebarCollapsed = false,
+  onToggleProjectSidebar = null,
   activeTab = null,
   onActiveTabChange,
   creationDraft = null,
@@ -189,72 +240,91 @@ export default function WorkspaceShell({
     markViewOpened,
     setPreviewState,
   } = useBeginnerMode();
-  const [internalView, setInternalView] = useState('spec');
+  const [internalView, setInternalView] = useState('chat');
   const [showHandoffModal, setShowHandoffModal] = useState(false);
-  const [chatSuppressed, setChatSuppressed] = useState(false);
   const [queuedChatMessage, setQueuedChatMessage] = useState(null);
   const [chatPrefill, setChatPrefill] = useState('');
-  const [chatDrawerOpen, setChatDrawerOpen] = useState(false);
   const [officeModeOverrides, setOfficeModeOverrides] = useState({});
-  const buildScrollRef = useRef(null);
-  const viewScrollRef = useRef({});
+  const [secondaryPinnedOverrides, setSecondaryPinnedOverrides] = useState({});
+  const [coachDismissedOverrides, setCoachDismissedOverrides] = useState({});
+  const [refreshVersions, setRefreshVersions] = useState({});
 
   const projectLabel = projectName || 'ai-office';
   const branchLabel = branch || 'main';
   const hasCreationDraft = Boolean(creationDraft?.text);
+  const projectStorageId = useMemo(() => paneStorageProjectId(projectLabel), [projectLabel]);
   const officeStorageKey = useMemo(() => officeModeKey(projectLabel), [projectLabel]);
-  const paneStorageProject = useMemo(() => paneStorageProjectId(projectLabel), [projectLabel]);
+  const primaryViewStorageKey = useMemo(() => workspaceStorageKey(projectLabel, 'primaryView'), [projectLabel]);
+  const secondaryPinnedStorageKey = useMemo(() => workspaceStorageKey(projectLabel, 'secondaryPinned'), [projectLabel]);
+  const focusModeStorageKey = useMemo(() => workspaceStorageKey(projectLabel, 'focusMode'), [projectLabel]);
+  const coachDismissedStorageKey = useMemo(() => workspaceStorageKey(projectLabel, 'coachDismissed'), [projectLabel]);
 
-  const persistedOfficeMode = useMemo(() => {
-    try {
-      const raw = localStorage.getItem(officeStorageKey);
-      return normalizeOfficeMode(raw, projectLabel);
-    } catch {
-      return normalizeOfficeMode(null, projectLabel);
-    }
-  }, [officeStorageKey, projectLabel]);
-
+  const persistedOfficeMode = useMemo(
+    () => normalizeOfficeMode(readStorage(officeStorageKey, ''), projectLabel),
+    [officeStorageKey, projectLabel]
+  );
   const officeMode = hasCreationDraft
     ? 'discuss'
     : (officeModeOverrides[officeStorageKey] || persistedOfficeMode);
+
   const setOfficeMode = useCallback((nextMode) => {
     const normalized = normalizeOfficeMode(nextMode, projectLabel);
     setOfficeModeOverrides((prev) => ({ ...prev, [officeStorageKey]: normalized }));
-    try {
-      localStorage.setItem(officeStorageKey, normalized);
-    } catch {
-      // ignore storage failures
-    }
+    writeStorage(officeStorageKey, normalized);
   }, [officeStorageKey, projectLabel]);
 
-  const incomingBuildLayout = normalizeBuildLayoutMode(layoutPreset);
-  const {
-    mode: storedBuildLayout,
-    setMode: setStoredBuildLayout,
-    layout,
-    updateLayout,
-    resetLayout,
-  } = useSplitPaneState({
-    projectName: projectLabel,
-    branch: branchLabel,
-    initialMode: incomingBuildLayout,
-  });
+  const setView = onActiveTabChange || setInternalView;
+  const rawView = activeTab || internalView;
+  const activeView = PRIMARY_VIEW_IDS.includes(rawView) ? rawView : 'chat';
 
-  const selectedBuildLayout = previewFocus ? 'focus-preview' : storedBuildLayout;
-  const paneStorageKey = useCallback(
-    (splitId, orientation = 'vertical') => {
-      const safeSplitId = String(splitId || 'main').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-');
-      const safeOrientation = String(orientation || 'vertical').trim().toLowerCase();
-      return `ai-office:paneSizes:${paneStorageProject}:${selectedBuildLayout}:${safeOrientation}:${safeSplitId}`;
-    },
-    [paneStorageProject, selectedBuildLayout]
+  useEffect(() => {
+    const persisted = readStorage(primaryViewStorageKey, 'chat');
+    const normalized = PRIMARY_VIEW_IDS.includes(persisted) ? persisted : 'chat';
+    if (normalized !== activeView) {
+      setView(normalized);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [primaryViewStorageKey]);
+
+  useEffect(() => {
+    writeStorage(primaryViewStorageKey, activeView);
+  }, [primaryViewStorageKey, activeView]);
+
+  const persistedPinned = useMemo(
+    () => readStorage(secondaryPinnedStorageKey, ''),
+    [secondaryPinnedStorageKey]
+  );
+  const secondaryPinned = secondaryPinnedOverrides[secondaryPinnedStorageKey] ?? persistedPinned;
+
+  const setSecondaryPinned = useCallback((nextValue) => {
+    const normalized = PRIMARY_VIEW_IDS.includes(nextValue) ? nextValue : '';
+    setSecondaryPinnedOverrides((prev) => ({ ...prev, [secondaryPinnedStorageKey]: normalized }));
+    writeStorage(secondaryPinnedStorageKey, normalized);
+  }, [secondaryPinnedStorageKey]);
+
+  const coachDismissed = coachDismissedOverrides[coachDismissedStorageKey]
+    ?? readBooleanStorage(coachDismissedStorageKey, false);
+
+  const setCoachDismissed = useCallback((nextValue) => {
+    const normalized = Boolean(nextValue);
+    setCoachDismissedOverrides((prev) => ({ ...prev, [coachDismissedStorageKey]: normalized }));
+    writeStorage(coachDismissedStorageKey, normalized ? 'true' : 'false');
+  }, [coachDismissedStorageKey]);
+
+  const selectedBuildLayout = normalizeBuildLayoutMode(layoutPreset);
+  const hasPinnedSecondary = Boolean(
+    !previewFocus
+    && selectedBuildLayout === 'split'
+    && secondaryPinned
+    && secondaryPinned !== activeView
+    && PRIMARY_VIEW_IDS.includes(secondaryPinned)
   );
 
-  const setView = onActiveTabChange || setInternalView;
-  const buildView = activeTab || internalView;
-  const activeView = BUILD_ITEMS.some((item) => item.id === buildView) ? buildView : 'spec';
-
   useBodyScrollLock(Boolean(showHandoffModal), 'workspace-build-handoff-modal');
+
+  useEffect(() => {
+    writeStorage(focusModeStorageKey, previewFocus ? 'true' : 'false');
+  }, [focusModeStorageKey, previewFocus]);
 
   useEffect(() => {
     if (officeMode !== 'build') return;
@@ -264,7 +334,7 @@ export default function WorkspaceShell({
   useEffect(() => {
     const onOpenTab = (event) => {
       const tab = String(event?.detail?.tab || '').trim().toLowerCase();
-      if (!BUILD_ITEMS.some((item) => item.id === tab)) return;
+      if (!PRIMARY_VIEW_IDS.includes(tab)) return;
       setOfficeMode('build');
       setView(tab);
     };
@@ -272,20 +342,41 @@ export default function WorkspaceShell({
     return () => window.removeEventListener('workspace:open-tab', onOpenTab);
   }, [setView, setOfficeMode]);
 
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if (officeMode !== 'build') return;
+      if (!event.ctrlKey || isTypingTarget(event.target)) return;
+      const key = String(event.key || '').toLowerCase();
+      if (event.shiftKey && key === 'f') {
+        event.preventDefault();
+        onToggleFocusMode?.();
+        return;
+      }
+      if (key === ',') {
+        event.preventDefault();
+        onOpenSettings?.();
+        return;
+      }
+
+      const map = {
+        '1': 'chat',
+        '2': 'files',
+        '3': 'git',
+        '4': 'tasks',
+        '5': 'spec',
+        '6': 'preview',
+      };
+      const nextView = map[key];
+      if (!nextView) return;
+      event.preventDefault();
+      setView(nextView);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [officeMode, onOpenSettings, onToggleFocusMode, setView]);
+
   const handlePreviewStateChange = (preview) => {
     setPreviewState(projectLabel, preview);
-  };
-
-  useEffect(() => {
-    const host = buildScrollRef.current;
-    if (!host) return;
-    host.scrollTop = viewScrollRef.current[activeView] || 0;
-  }, [activeView, selectedBuildLayout, officeMode]);
-
-  const setBuildLayoutMode = (nextMode) => {
-    const normalized = normalizeBuildLayoutMode(nextMode);
-    setStoredBuildLayout(normalized);
-    onLayoutPresetChange?.(canonicalFromBuildLayout(normalized));
   };
 
   const queueMessage = (text) => {
@@ -310,7 +401,6 @@ export default function WorkspaceShell({
     const draft = String(text || '').trim();
     if (!draft) return;
     setOfficeMode('build');
-    setChatSuppressed(false);
     setView('chat');
     setChatPrefill('');
     window.setTimeout(() => {
@@ -322,26 +412,11 @@ export default function WorkspaceShell({
     setChatPrefill('');
   };
 
-  const renderChatRoom = (extra = {}) => (
-    <ChatRoom
-      channel={channel}
-      workspaceMode={officeMode === 'build' ? 'build' : 'discuss'}
-      showStatusPanel={false}
-      compact
-      beginnerMode={beginnerMode}
-      queuedMessage={queuedChatMessage}
-      prefillText={chatPrefill}
-      onPrefillConsumed={consumeChatPrefill}
-      onRequestOpenTab={setView}
-      {...extra}
-    />
-  );
-
   const beginBuildHandoff = () => {
     setShowHandoffModal(false);
     setOfficeMode('build');
     setView('spec');
-    setBuildLayoutMode('split');
+    onLayoutPresetChange?.('split');
   };
 
   const closeWorkspaceOverlays = useCallback(() => {
@@ -349,12 +424,8 @@ export default function WorkspaceShell({
       setShowHandoffModal(false);
       return true;
     }
-    if (chatDrawerOpen) {
-      setChatDrawerOpen(false);
-      return true;
-    }
     return false;
-  }, [chatDrawerOpen, showHandoffModal]);
+  }, [showHandoffModal]);
 
   useEscapeKey((event) => {
     const handled = closeWorkspaceOverlays();
@@ -372,9 +443,11 @@ export default function WorkspaceShell({
     };
     const onResetUi = () => {
       setShowHandoffModal(false);
-      setChatDrawerOpen(false);
-      setChatSuppressed(false);
-      updateLayout({ collapsed: { chat: false, preview: false } });
+      setSecondaryPinned('');
+      setView('chat');
+      if (previewFocus) onToggleFocusMode?.();
+      onLayoutPresetChange?.('split');
+      removePaneSizeKeys(projectStorageId);
     };
     window.addEventListener('ai-office:escape', onGlobalEscape);
     window.addEventListener('ai-office:reset-ui-state', onResetUi);
@@ -382,46 +455,41 @@ export default function WorkspaceShell({
       window.removeEventListener('ai-office:escape', onGlobalEscape);
       window.removeEventListener('ai-office:reset-ui-state', onResetUi);
     };
-  }, [closeWorkspaceOverlays, updateLayout]);
+  }, [
+    closeWorkspaceOverlays,
+    onLayoutPresetChange,
+    onToggleFocusMode,
+    previewFocus,
+    projectStorageId,
+    setSecondaryPinned,
+    setView,
+  ]);
 
-  const toggleChatPane = () => {
-    const next = !layout?.collapsed?.chat;
-    updateLayout({ collapsed: { chat: next } });
-    if (next && activeView === 'chat') {
-      setChatSuppressed(true);
-      setView('files');
-    }
-  };
-
-  const togglePreviewPane = () => {
-    updateLayout({ collapsed: { preview: !layout?.collapsed?.preview } });
-  };
-
-  const restoreChat = () => {
-    setChatSuppressed(false);
-    updateLayout({ collapsed: { chat: false } });
-    setView('chat');
-  };
+  const renderChatRoom = (extra = {}) => (
+    <ChatRoom
+      key={`chat-${refreshVersions.chat || 0}`}
+      channel={channel}
+      workspaceMode={officeMode === 'build' ? 'build' : 'discuss'}
+      showStatusPanel={false}
+      compact
+      beginnerMode={beginnerMode}
+      queuedMessage={queuedChatMessage}
+      prefillText={chatPrefill}
+      onPrefillConsumed={consumeChatPrefill}
+      onRequestOpenTab={setView}
+      {...extra}
+    />
+  );
 
   const renderBuildViewContent = (viewId) => {
-    if (viewId === 'chat') {
-      if (chatSuppressed || layout?.collapsed?.chat) {
-        return (
-          <CenterHelper
-            title="Chat is hidden"
-            description="Restore chat to continue discussion in build mode."
-            actionLabel="Show Chat"
-            onAction={restoreChat}
-          />
-        );
-      }
-      return renderChatRoom();
-    }
-    if (viewId === 'files') return <FileViewer channel={channel} beginnerMode={beginnerMode} />;
-    if (viewId === 'tasks') return <TaskBoard channel={channel} beginnerMode={beginnerMode} />;
+    const refreshKey = refreshVersions[viewId] || 0;
+    if (viewId === 'chat') return renderChatRoom();
+    if (viewId === 'files') return <FileViewer key={`files-${refreshKey}`} channel={channel} beginnerMode={beginnerMode} />;
+    if (viewId === 'tasks') return <TaskBoard key={`tasks-${refreshKey}`} channel={channel} beginnerMode={beginnerMode} />;
     if (viewId === 'spec') {
       return (
         <SpecPanel
+          key={`spec-${refreshKey}`}
           channel={channel}
           onOpenTab={setView}
           onDraftRequest={handleDraftRequest}
@@ -432,6 +500,7 @@ export default function WorkspaceShell({
     if (viewId === 'preview') {
       return (
         <PreviewPanel
+          key={`preview-${refreshKey}`}
           channel={channel}
           onDraftRequest={handleDraftRequest}
           beginnerMode={beginnerMode}
@@ -439,287 +508,86 @@ export default function WorkspaceShell({
         />
       );
     }
-    if (viewId === 'git') return <GitPanel channel={channel} beginnerMode={beginnerMode} onOpenTab={setView} />;
-    return <FileViewer channel={channel} beginnerMode={beginnerMode} />;
+    if (viewId === 'git') return <GitPanel key={`git-${refreshKey}`} channel={channel} beginnerMode={beginnerMode} onOpenTab={setView} />;
+    return <FileViewer key={`fallback-${refreshKey}`} channel={channel} beginnerMode={beginnerMode} />;
   };
 
-  const renderMainPane = () => {
-    const meta = paneMeta(activeView);
-    const help = PANEL_HELP[activeView] || null;
-    return (
-      <PaneFrame
-        title={meta.title}
-        subtitle="Primary build workspace"
-        icon={meta.icon}
-        className="workspace-pane-main"
-        help={help}
-        beginnerMode={beginnerMode}
-      >
-        <div
-          ref={buildScrollRef}
-          className="workspace-pane-scroll"
-          onScroll={(event) => {
-            viewScrollRef.current[activeView] = event.currentTarget.scrollTop;
-          }}
-        >
-          <div className="workspace-pane-scroll-content">{renderBuildViewContent(activeView)}</div>
-        </div>
-      </PaneFrame>
-    );
+  const refreshView = (viewId) => {
+    if (!viewId) return;
+    setRefreshVersions((prev) => ({ ...prev, [viewId]: (prev[viewId] || 0) + 1 }));
   };
 
-  const renderChatPane = () => (
-    <PaneFrame
-      title="Chat"
-      subtitle="Build collaboration"
-      icon="C"
-      className="workspace-pane-chat"
-      help={PANEL_HELP.chat}
+  const togglePinForView = (viewId) => {
+    if (!viewId || !PRIMARY_VIEW_IDS.includes(viewId)) return;
+    setSecondaryPinned(secondaryPinned === viewId ? '' : viewId);
+    if (selectedBuildLayout !== 'split') {
+      onLayoutPresetChange?.('split');
+    }
+  };
+
+  const openBuildView = (viewId) => {
+    if (viewId === 'settings') {
+      onOpenSettings?.();
+      return;
+    }
+    if (!PRIMARY_VIEW_IDS.includes(viewId)) return;
+    setOfficeMode('build');
+    setView(viewId);
+  };
+
+  const resetLayout = () => {
+    setSecondaryPinned('');
+    setView('chat');
+    onLayoutPresetChange?.('split');
+    if (previewFocus) {
+      onToggleFocusMode?.();
+    }
+    removePaneSizeKeys(projectStorageId);
+  };
+
+  const renderPrimaryPane = () => (
+    <ViewPane
+      id={activeView}
+      role="primary"
       beginnerMode={beginnerMode}
-      actions={(
-        <button type="button" className="msg-action-btn ui-btn" onClick={toggleChatPane}>
-          Hide
-        </button>
-      )}
+      isFocusMode={previewFocus}
+      pinned={secondaryPinned === activeView}
+      onTogglePin={() => togglePinForView(activeView)}
+      onRefresh={() => refreshView(activeView)}
     >
-      {renderChatRoom()}
-    </PaneFrame>
+      {renderBuildViewContent(activeView)}
+    </ViewPane>
   );
 
-  const renderPreviewPane = () => (
-    <PaneFrame
-      title="Preview"
-      subtitle="Run and inspect"
-      icon="P"
-      className="workspace-pane-preview"
-      help={PANEL_HELP.preview}
+  const renderSecondaryPane = () => (
+    <ViewPane
+      id={secondaryPinned}
+      role="secondary"
       beginnerMode={beginnerMode}
-      actions={(
-        <button type="button" className="msg-action-btn ui-btn" onClick={togglePreviewPane}>
-          Hide
-        </button>
-      )}
+      pinned
+      onTogglePin={() => setSecondaryPinned('')}
+      onRefresh={() => refreshView(secondaryPinned)}
+      onPopOut={() => {
+        setView(secondaryPinned);
+        setSecondaryPinned('');
+      }}
     >
-      <PreviewPanel
-        channel={channel}
-        onDraftRequest={handleDraftRequest}
-        beginnerMode={beginnerMode}
-        onStateChange={handlePreviewStateChange}
-      />
-    </PaneFrame>
+      {renderBuildViewContent(secondaryPinned)}
+    </ViewPane>
   );
 
-  const renderRestoreHandles = () => (
-    <>
-      {selectedBuildLayout === 'full-ide' && layout?.collapsed?.chat && (
-        <button
-          type="button"
-          className="workspace-restore-handle left"
-          onClick={() => updateLayout({ collapsed: { chat: false } })}
-          title="Restore chat pane"
-        >
-          ▸ Chat
-        </button>
-      )}
-      {(selectedBuildLayout === 'split' || selectedBuildLayout === 'full-ide') && layout?.collapsed?.preview && (
-        <button
-          type="button"
-          className="workspace-restore-handle right"
-          onClick={() => updateLayout({ collapsed: { preview: false } })}
-          title="Restore preview pane"
-        >
-          Preview ◂
-        </button>
-      )}
-    </>
-  );
-
-  const renderBuildLayout = () => {
-    if (selectedBuildLayout === 'focus-chat') {
-      return (
-        <div className="workspace-layout-single">
-          <PaneFrame
-            title="Chat Focus"
-            subtitle="Conversation-first build mode"
-            icon="C"
-            help={PANEL_HELP.chat}
-            beginnerMode={beginnerMode}
-          >
-            {renderChatRoom()}
-          </PaneFrame>
-        </div>
-      );
-    }
-    if (selectedBuildLayout === 'focus-files') {
-      return (
-        <div className="workspace-layout-single">
-          <PaneFrame
-            title="Files Focus"
-            subtitle="File editing mode"
-            icon="F"
-            help={PANEL_HELP.files}
-            beginnerMode={beginnerMode}
-          >
-            <FileViewer channel={channel} beginnerMode={beginnerMode} />
-          </PaneFrame>
-        </div>
-      );
-    }
-    if (selectedBuildLayout === 'focus-preview') {
-      return (
-        <div className="workspace-layout-single">
-          <PaneFrame
-            title="Preview Focus"
-            subtitle="Execution and output"
-            icon="P"
-            help={PANEL_HELP.preview}
-            beginnerMode={beginnerMode}
-            actions={(
-              <button type="button" className="msg-action-btn ui-btn" onClick={() => setChatDrawerOpen((prev) => !prev)}>
-                {chatDrawerOpen ? 'Hide Chat Drawer' : 'Show Chat Drawer'}
-              </button>
-            )}
-          >
-            <div className="workspace-preview-focus-wrap">
-              <PreviewPanel
-                channel={channel}
-                onDraftRequest={handleDraftRequest}
-                beginnerMode={beginnerMode}
-                onStateChange={handlePreviewStateChange}
-              />
-              {chatDrawerOpen && (
-                <aside className="workspace-preview-drawer">
-                  {renderChatRoom()}
-                </aside>
-              )}
-            </div>
-          </PaneFrame>
-        </div>
-      );
-    }
-
-    if (selectedBuildLayout === 'full-ide') {
-      if (layout?.collapsed?.chat && layout?.collapsed?.preview) {
-        return (
-          <div className="workspace-layout-single">
-            {renderMainPane()}
-            {renderRestoreHandles()}
-          </div>
-        );
-      }
-      if (layout?.collapsed?.chat) {
-        return (
-          <div className="workspace-layout-split">
-            <SplitPane
-              direction="vertical"
-              ratio={Number(layout?.centerRatio) || 0.64}
-              defaultRatio={0.64}
-              minPrimary={500}
-              minSecondary={360}
-              persistKey={paneStorageKey('main-preview', 'vertical')}
-              primaryLabel={paneMeta(activeView).title}
-              secondaryLabel="Preview"
-              onRatioChange={(nextRatio) => updateLayout({ centerRatio: nextRatio })}
-            >
-              {renderMainPane()}
-              {renderPreviewPane()}
-            </SplitPane>
-            {renderRestoreHandles()}
-          </div>
-        );
-      }
-      if (layout?.collapsed?.preview) {
-        return (
-          <div className="workspace-layout-split">
-            <SplitPane
-              direction="vertical"
-              ratio={Number(layout?.leftRatio) || 0.24}
-              defaultRatio={0.24}
-              minPrimary={340}
-              minSecondary={520}
-              persistKey={paneStorageKey('chat-main', 'vertical')}
-              primaryLabel="Chat"
-              secondaryLabel={paneMeta(activeView).title}
-              onRatioChange={(nextRatio) => updateLayout({ leftRatio: nextRatio })}
-            >
-              {renderChatPane()}
-              {renderMainPane()}
-            </SplitPane>
-            {renderRestoreHandles()}
-          </div>
-        );
-      }
-      return (
-        <div className="workspace-layout-full-ide">
-          <SplitPane
-            direction="vertical"
-            ratio={Number(layout?.leftRatio) || 0.24}
-            defaultRatio={0.24}
-            minPrimary={340}
-            minSecondary={760}
-            persistKey={paneStorageKey('chat-main-preview', 'vertical')}
-            primaryLabel="Chat"
-            secondaryLabel={paneMeta(activeView).title}
-            onRatioChange={(nextRatio) => updateLayout({ leftRatio: nextRatio })}
-          >
-            {renderChatPane()}
-            <SplitPane
-              direction="vertical"
-              ratio={Number(layout?.centerRatio) || 0.64}
-              defaultRatio={0.64}
-              minPrimary={420}
-              minSecondary={360}
-              persistKey={paneStorageKey('main-preview', 'vertical')}
-              primaryLabel={paneMeta(activeView).title}
-              secondaryLabel="Preview"
-              onRatioChange={(nextRatio) => updateLayout({ centerRatio: nextRatio })}
-            >
-              {renderMainPane()}
-              {renderPreviewPane()}
-            </SplitPane>
-          </SplitPane>
-          {renderRestoreHandles()}
-        </div>
-      );
-    }
-
-    if (activeView === 'preview' || layout?.collapsed?.preview) {
-      return (
-        <div className="workspace-layout-single">
-          {renderMainPane()}
-          {renderRestoreHandles()}
-        </div>
-      );
-    }
-
-    return (
-      <div className="workspace-layout-split">
-        <SplitPane
-          direction="vertical"
-          ratio={Number(layout?.ratio) || 0.58}
-          defaultRatio={0.58}
-          minPrimary={420}
-          minSecondary={360}
-          persistKey={paneStorageKey('main-preview', 'vertical')}
-          primaryLabel={paneMeta(activeView).title}
-          secondaryLabel="Preview"
-          onRatioChange={(nextRatio) => updateLayout({ ratio: nextRatio })}
-        >
-          {renderMainPane()}
-          {renderPreviewPane()}
-        </SplitPane>
-        {renderRestoreHandles()}
-      </div>
-    );
-  };
+  const showCoach = officeMode === 'build' && !coachDismissed;
 
   return (
-    <div className="workspace-shell workspace-office-shell">
+    <div className={`workspace-shell workspace-office-shell ${previewFocus ? 'workspace-focus-mode' : ''}`}>
       <header className="workspace-shell-header compact office-shell-header">
         <div className="workspace-shell-meta">
           <span className="workspace-breadcrumb">{projectLabel}</span>
           <span className="workspace-breadcrumb-sep">→</span>
           <span className="workspace-breadcrumb mode">{officeMode.toUpperCase()}</span>
+          {officeMode === 'build' ? (
+            <span className="workspace-breadcrumb-subtle">Primary: {paneMeta(activeView).title}</span>
+          ) : null}
         </div>
         <div className="workspace-shell-controls">
           <div className="office-mode-switch" role="tablist" aria-label="Workspace modes">
@@ -754,25 +622,17 @@ export default function WorkspaceShell({
               <LayoutPresetToggle
                 value={selectedBuildLayout}
                 options={BUILD_LAYOUT_OPTIONS}
-                onChange={setBuildLayoutMode}
+                onChange={(nextMode) => onLayoutPresetChange?.(normalizeBuildLayoutMode(nextMode))}
                 onReset={resetLayout}
-                showReset={false}
               />
-              {!selectedBuildLayout.startsWith('focus-') && (
-                <>
-                  <button type="button" className="control-btn ui-btn" onClick={togglePreviewPane}>
-                    {layout?.collapsed?.preview ? 'Show Preview' : 'Hide Preview'}
-                  </button>
-                  <button type="button" className="control-btn ui-btn" onClick={toggleChatPane}>
-                    {layout?.collapsed?.chat ? 'Show Chat' : 'Hide Chat'}
-                  </button>
-                </>
-              )}
+              <button type="button" className="control-btn ui-btn" onClick={onToggleProjectSidebar}>
+                {projectSidebarCollapsed ? 'Show Projects' : 'Hide Projects'}
+              </button>
+              <button type="button" className={`control-btn ui-btn ${previewFocus ? 'ui-btn-primary' : ''}`} onClick={onToggleFocusMode}>
+                {previewFocus ? 'Exit Focus Mode' : 'Focus Mode'}
+              </button>
               <button type="button" className="control-btn ui-btn ui-btn-primary" onClick={runBuildLoop}>
                 Run Build Loop
-              </button>
-              <button type="button" className="control-btn ui-btn" onClick={resetLayout}>
-                Reset Layout
               </button>
             </>
           )}
@@ -793,6 +653,19 @@ export default function WorkspaceShell({
           ? 'Draft Discuss mode: refine the request first, then explicitly create the project to unlock build tooling.'
           : MODE_DETAILS[officeMode]}
       </div>
+
+      {showCoach ? (
+        <div className="workspace-coachmark">
+          <div>
+            <strong>Workspace quick start</strong>
+            <p>Use the left activity bar to switch views, and pin Preview or Spec to keep it visible in Split mode.</p>
+          </div>
+          <div className="workspace-coachmark-actions">
+            <button type="button" className="ui-btn" onClick={resetLayout}>Reset Layout</button>
+            <button type="button" className="ui-btn ui-btn-primary" onClick={() => setCoachDismissed(true)}>Got it</button>
+          </div>
+        </div>
+      ) : null}
 
       {beginnerMode && (
         <GuidedStepper
@@ -853,16 +726,36 @@ export default function WorkspaceShell({
             />
           )
         ) : (
-          <div className="workspace-build-mode">
-            <ActivityBar
-              items={BUILD_ITEMS}
-              activeId={activeView}
-              onSelect={(id) => {
-                setView(id);
-                if (id === 'chat') setChatSuppressed(false);
-              }}
-            />
-            <div className="workspace-build-main">{renderBuildLayout()}</div>
+          <div className={`workspace-build-mode ${previewFocus ? 'is-focus-mode' : ''}`}>
+            {!previewFocus && (
+              <ActivityBar
+                items={BUILD_ITEMS}
+                activeId={activeView}
+                compact={projectSidebarCollapsed}
+                onSelect={openBuildView}
+              />
+            )}
+            <div className="workspace-build-main">
+              {hasPinnedSecondary ? (
+                <SplitPane
+                  direction="vertical"
+                  ratio={0.62}
+                  defaultRatio={0.62}
+                  minPrimary={460}
+                  minSecondary={360}
+                  persistKey={`ai-office:paneSizes:${projectStorageId}:${selectedBuildLayout}:vertical:primary-secondary`}
+                  primaryLabel={paneMeta(activeView).title}
+                  secondaryLabel={paneMeta(secondaryPinned).title}
+                >
+                  {renderPrimaryPane()}
+                  {renderSecondaryPane()}
+                </SplitPane>
+              ) : (
+                <div className="workspace-layout-single">
+                  {renderPrimaryPane()}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -872,12 +765,12 @@ export default function WorkspaceShell({
           <div className="workspace-handoff-modal">
             <h3>Start Building</h3>
             <p>
-              You are moving from discussion into development mode. The workspace will open build tooling and focus the spec panel first.
+              You are moving from discussion into development mode. Spec opens first so implementation stays grounded.
             </p>
             <ul>
-              <li>Spec opens as the primary panel</li>
-              <li>Tasks/files/preview stay available in Build mode</li>
-              <li>You can switch back to Discuss anytime</li>
+              <li>Spec opens as the primary view</li>
+              <li>Use activity bar to switch Chat, Files, Tasks, Preview, and Git</li>
+              <li>Pin Preview or Spec to keep context while switching views</li>
             </ul>
             <div className="workspace-handoff-actions">
               <button type="button" className="msg-action-btn ui-btn" onClick={() => setShowHandoffModal(false)}>

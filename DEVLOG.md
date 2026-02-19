@@ -2664,3 +2664,52 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 ### Verification
 - `with-runtime.cmd python -m pytest` PASS (`95 passed`)
 - `with-runtime.cmd npm --prefix client run build` PASS
+
+## 2026-02-19 | Prompt #23: Workspace de-clutter with activity bar, pinnable panes, focus mode, and sidebar collapse
+
+### Workspace shell redesign
+- Rebuilt `client/src/components/WorkspaceShell.jsx` around a calmer IDE model:
+  - primary view selected from a left activity bar
+  - optional secondary pane only when explicitly pinned and layout is `Split`
+  - `Full IDE` now behaves as primary-only (no always-on secondary clutter)
+- Added per-project workspace UI persistence in localStorage:
+  - primary view
+  - pinned secondary view
+  - focus mode mirror state
+  - split pane sizes (via split-pane persisted keys)
+- Added keyboard navigation in Build mode:
+  - `Ctrl+1..6` for Chat/Files/Git/Tasks/Spec/Preview
+  - `Ctrl+,` opens Settings
+  - `Ctrl+Shift+F` toggles Focus Mode
+- Added first-run workspace coachmark and reset-layout action.
+
+### Activity bar and sidebar
+- Updated `client/src/components/ActivityBar.jsx`:
+  - supports Settings entry
+  - shortcut hints in tooltips
+  - compact mode support.
+- Reworked `client/src/components/ProjectsSidebar.jsx`:
+  - collapse/expand behavior
+  - collapsed slim rail mode
+  - project search
+  - pin/unpin project affordance
+  - virtualization retained for expanded list.
+- Wired sidebar collapse state through `client/src/App.jsx` and persisted per project.
+
+### Preview UX in workspace
+- Updated `client/src/components/PreviewPanel.jsx` and `client/src/styles/preview.css`:
+  - added in-panel device width presets (mobile/tablet/desktop)
+  - added explicit Reload and Open controls in Live Preview header
+  - wrapped iframe in a framed stage for clearer visual hierarchy.
+
+### Styling and layout consistency
+- Added extensive workspace layout styles in `client/src/App.css` for:
+  - activity bar rail
+  - view pane headers/actions
+  - coachmark card
+  - split-pane visuals/cursor/drag feedback
+  - collapsed and expanded project sidebar modes.
+
+### Verification
+- `cd client && npm run build` PASS
+- `with-runtime.cmd python -m pytest` PASS (`95 passed`)

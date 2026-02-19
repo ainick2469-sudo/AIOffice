@@ -38,6 +38,11 @@ function channelForProject(projectName) {
   return `proj-${name}`;
 }
 
+function sidebarCollapsedKey(projectName) {
+  const safe = String(projectName || 'ai-office').trim().toLowerCase() || 'ai-office';
+  return `ai-office:workspace:${safe}:sidebarCollapsed`;
+}
+
 function normalizeActiveContext(raw) {
   const project = String(raw?.project || 'ai-office').trim() || 'ai-office';
   const branch = String(raw?.branch || 'main').trim() || 'main';
@@ -130,6 +135,15 @@ export default function App() {
   const [layoutPreset, setLayoutPreset] = useState(DEFAULT_LAYOUT_PRESET);
   const [paneLayout, setPaneLayout] = useState(DEFAULT_PANE_LAYOUT);
   const [previewFocus, setPreviewFocus] = useState(false);
+  const [projectsSidebarCollapsed, setProjectsSidebarCollapsed] = useState(() => {
+    try {
+      const raw = localStorage.getItem(sidebarCollapsedKey('ai-office'));
+      if (raw == null) return true;
+      return raw === 'true';
+    } catch {
+      return true;
+    }
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [codexMismatch, setCodexMismatch] = useState(false);
@@ -855,6 +869,8 @@ export default function App() {
           onOpenProject={openProject}
           onRenameProject={renameProject}
           onDeleteProject={deleteProject}
+          collapsed={projectsSidebarCollapsed}
+          onToggleCollapsed={() => setProjectsSidebarCollapsed((prev) => !prev)}
         />
       )}
 
@@ -1013,6 +1029,10 @@ export default function App() {
             paneLayout={paneLayout}
             onPaneLayoutChange={handlePaneLayoutChange}
             previewFocus={previewFocus}
+            onToggleFocusMode={handlePreviewFocusToggle}
+            onOpenSettings={() => setTopTab('settings')}
+            projectSidebarCollapsed={projectsSidebarCollapsed}
+            onToggleProjectSidebar={() => setProjectsSidebarCollapsed((prev) => !prev)}
             activeTab={workspaceTab}
             onActiveTabChange={setWorkspaceTab}
             creationDraft={creationDraft}
@@ -1137,3 +1157,26 @@ export default function App() {
     </div>
   );
 }
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(sidebarCollapsedKey(activeProject));
+      if (raw == null) {
+        setProjectsSidebarCollapsed(true);
+      } else {
+        setProjectsSidebarCollapsed(raw === 'true');
+      }
+    } catch {
+      setProjectsSidebarCollapsed(true);
+    }
+  }, [activeProject]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        sidebarCollapsedKey(activeProject),
+        projectsSidebarCollapsed ? 'true' : 'false'
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }, [activeProject, projectsSidebarCollapsed]);
