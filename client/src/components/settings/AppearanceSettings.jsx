@@ -70,6 +70,28 @@ export default function AppearanceSettings({
           </select>
         </label>
       </div>
+
+      <div className="appearance-preview-strip panel">
+        <div className="appearance-preview-head">
+          <strong>Theme preview</strong>
+          <span>Live sample of panel, text, chips, and button states.</span>
+        </div>
+        <div className="appearance-preview-body">
+          <article className="appearance-preview-card">
+            <h5>Sample Panel</h5>
+            <p>Primary content text with muted metadata below.</p>
+            <small>Muted helper text</small>
+          </article>
+          <div className="appearance-preview-chips">
+            <span className="ui-chip">Project chip</span>
+            <span className="ui-chip pill is-active">Active state</span>
+          </div>
+          <div className="appearance-preview-actions">
+            <button type="button" className="ui-btn ui-btn-primary">Primary</button>
+            <button type="button" className="ui-btn">Secondary</button>
+          </div>
+        </div>
+      </div>
     </section>
   );
 }

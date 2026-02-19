@@ -14,6 +14,7 @@ import useEscapeKey from './hooks/useEscapeKey';
 import useBodyScrollLock, { getBodyScrollLockSnapshot } from './hooks/useBodyScrollLock';
 import { clearAllBodyScrollLocks } from './hooks/scrollLockManager';
 import { useBeginnerMode } from './components/beginner/BeginnerModeContext';
+import './styles/tokens.css';
 import './styles/theme.css';
 import './styles/components.css';
 import './styles/settings.css';

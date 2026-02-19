@@ -252,7 +252,7 @@
   width: 100%;
   min-height: 420px;
   border: none;
-  background: #fff;
+  background: var(--panel);
 }
 
 .preview-v3-empty-state {
