@@ -45,6 +45,7 @@ export default function WorkspaceToolbar({
             type="button"
             className={`mode-chip ${officeMode === 'discuss' ? 'active' : ''}`}
             onClick={() => onSetOfficeMode?.('discuss')}
+            data-tooltip="Discuss ideas with your agent team before coding. Use Brainstorm + Office Board to capture goals/questions."
           >
             Discuss
           </button>
@@ -53,7 +54,7 @@ export default function WorkspaceToolbar({
             className={`mode-chip ${officeMode === 'build' ? 'active' : ''}`}
             onClick={handleBuildModeClick}
             disabled={hasCreationDraft}
-            title={hasCreationDraft ? 'Create the project first to enter Build mode.' : ''}
+            data-tooltip="Work on files/spec/tasks/preview. No silent changes: verify with build/tests."
           >
             Build
           </button>
@@ -61,26 +62,36 @@ export default function WorkspaceToolbar({
       </div>
 
       <div className="workspace-toolbar-right">
-        <button type="button" className="ui-btn workspace-toolbar-btn" onClick={onToggleProjectSidebar}>
+        <button
+          type="button"
+          className="ui-btn workspace-toolbar-btn"
+          onClick={onToggleProjectSidebar}
+          data-tooltip="Toggle the Projects sidebar."
+        >
           {projectSidebarCollapsed ? 'Show Projects' : 'Hide Projects'}
         </button>
         <button
           type="button"
           className={`ui-btn workspace-toolbar-btn ${previewFocus ? 'ui-btn-primary' : ''}`}
           onClick={onToggleFocusMode}
+          data-tooltip="Hide side panels for a distraction-free view."
         >
           {previewFocus ? 'Exit Focus Mode' : 'Focus Mode'}
         </button>
 
-        <MoreMenu label="Workspace actions">
+        <MoreMenu
+          label="Workspace actions"
+          triggerTooltip="Advanced workspace controls: layout, beginner mode, preview focus, and build loop."
+        >
           <div className="workspace-more-menu-section">
-            <h4>Layout</h4>
+            <h4 data-tooltip="Choose a layout. Split shows a secondary pinned pane.">Layout</h4>
             <label className="workspace-more-layout-row">
               <span>Preset</span>
               <select
                 className="ui-input"
                 value={layoutPreset}
                 onChange={(event) => onLayoutPresetChange?.(event.target.value)}
+                data-tooltip="Choose a layout. Split shows a secondary pinned pane."
               >
                 {(layoutOptions || []).map((option) => (
                   <option key={option.id} value={option.id}>
@@ -89,7 +100,12 @@ export default function WorkspaceToolbar({
                 ))}
               </select>
             </label>
-            <button type="button" className="ui-btn" onClick={onResetLayout}>
+            <button
+              type="button"
+              className="ui-btn"
+              onClick={onResetLayout}
+              data-tooltip="Reset pane sizes and pinned views back to calm defaults."
+            >
               Reset Layout
             </button>
           </div>
@@ -100,6 +116,7 @@ export default function WorkspaceToolbar({
               type="button"
               className={`ui-btn ${beginnerMode ? 'ui-btn-primary' : ''}`}
               onClick={onToggleBeginnerMode}
+              data-tooltip="Guided UI that explains the workflow. Turn off for a cleaner layout."
             >
               Beginner Mode: {beginnerMode ? 'On' : 'Off'}
             </button>
@@ -111,6 +128,7 @@ export default function WorkspaceToolbar({
               type="button"
               className={`ui-btn ${previewFocus ? 'ui-btn-primary' : ''}`}
               onClick={onToggleFocusMode}
+              data-tooltip="Keep preview in focus while reducing workspace chrome."
             >
               Preview Focus: {previewFocus ? 'On' : 'Off'}
             </button>
@@ -123,7 +141,7 @@ export default function WorkspaceToolbar({
               className="ui-btn ui-btn-primary"
               onClick={onRunBuildLoop}
               disabled={hasCreationDraft || !isBuildMode}
-              title={hasCreationDraft ? 'Create the project first to run build loop.' : ''}
+              data-tooltip="Ask the agents to execute the next build step, then verify with checks and report changes."
             >
               Run Build Loop
             </button>

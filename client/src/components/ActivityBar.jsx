@@ -8,6 +8,18 @@ const DEFAULT_ITEMS = [
   { id: 'settings', label: 'Settings', icon: '⚙', shortcut: 'Ctrl+,' },
 ];
 
+function tooltipForItem(item) {
+  const base = item.shortcut ? `${item.label} (${item.shortcut})` : item.label;
+  if (item.id === 'chat') return `${base}: talk to agents and run guided actions.`;
+  if (item.id === 'files') return `${base}: browse and edit project files quickly.`;
+  if (item.id === 'git') return `${base}: review diffs, stage, and commit safely.`;
+  if (item.id === 'tasks') return `${base}: capture and triage build work.`;
+  if (item.id === 'spec') return `${base}: edit scope and acceptance criteria.`;
+  if (item.id === 'preview') return `${base}: run and inspect the live app output.`;
+  if (item.id === 'settings') return `${base}: open app configuration and diagnostics.`;
+  return base;
+}
+
 export default function ActivityBar({
   items = DEFAULT_ITEMS,
   activeId = 'files',
@@ -20,10 +32,10 @@ export default function ActivityBar({
         <button
           type="button"
           key={item.id}
-          title={item.shortcut ? `${item.label} (${item.shortcut})` : item.label}
           aria-label={item.label}
           className={`activity-bar-btn ${activeId === item.id ? 'active' : ''}`}
           onClick={() => onSelect?.(item.id)}
+          data-tooltip={tooltipForItem(item)}
         >
           <span className="activity-bar-icon">{item.icon}</span>
           <span className="activity-bar-text">{item.label}</span>

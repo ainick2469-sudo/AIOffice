@@ -216,3 +216,30 @@ textarea::placeholder {
   outline: none;
   box-shadow: 0 0 0 2px var(--focusRing);
 }
+
+.app-tooltip-layer {
+  position: fixed;
+  z-index: 1350;
+  pointer-events: none;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--textPrimary);
+  box-shadow: var(--shadow);
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  max-width: min(360px, calc(100vw - 24px));
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.1s ease, transform 0.1s ease;
+}
+
+.app-tooltip-layer.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.app-tooltip-layer.top.visible {
+  transform: translateY(0);
+}

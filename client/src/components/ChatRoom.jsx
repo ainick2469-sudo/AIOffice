@@ -4,6 +4,7 @@ import useWebSocket from '../hooks/useWebSocket';
 import MessageContent from './MessageContent';
 import StatusPanel from './StatusPanel';
 import ContextStrip from './chat/ContextStrip';
+import ChatEmptyState from './chat/ChatEmptyState';
 import MessageActionsMenu from './chat/MessageActionsMenu';
 import MoreMenu from './ui/MoreMenu';
 import {
@@ -132,6 +133,34 @@ function getMessageProvenance(message) {
   return parts.join(' | ');
 }
 
+function isRuntimeSmokeMessage(message) {
+  const text = String(message?.content || '').toLowerCase();
+  if (text.includes('[runtime-smoke-')) return true;
+  const metaTag = String(message?.meta?.tag || '').trim().toLowerCase();
+  if (metaTag === 'runtime_smoke') return true;
+  return false;
+}
+
+function sanitizeChannelName(name) {
+  const value = String(name || '').trim();
+  if (!value) return { title: '', warning: '' };
+  const lower = value.toLowerCase();
+  const looksLikeError = (
+    lower.includes('[error:')
+    || lower.startsWith('error:')
+    || lower.includes('not reachable')
+    || lower.includes('request failed')
+    || lower.includes('connection refused')
+  );
+  if (!looksLikeError) {
+    return { title: value, warning: '' };
+  }
+  return {
+    title: '',
+    warning: `Channel metadata contained an error string ("${value}"). Showing a safe fallback room title.`,
+  };
+}
+
 export default function ChatRoom({
   channel = 'main',
   workspaceMode = 'build',
@@ -214,6 +243,10 @@ export default function ChatRoom({
   );
   const { setDiscussMessageCount } = useBeginnerMode();
   const isDiscussMode = workspaceMode === 'discuss' || workspaceMode === 'discuss-draft';
+  const visibleMessages = useMemo(
+    () => messages.filter((message) => !isRuntimeSmokeMessage(message)),
+    [messages]
+  );
 
   useBodyScrollLock(
     Boolean(contextPickerOpen || specActionModal.open || activeApproval),
@@ -258,8 +291,8 @@ export default function ChatRoom({
 
   useEffect(() => {
     if (!isDiscussMode) return;
-    setDiscussMessageCount(activeProject?.project || 'ai-office', messages.length);
-  }, [isDiscussMode, activeProject?.project, messages.length, setDiscussMessageCount]);
+    setDiscussMessageCount(activeProject?.project || 'ai-office', visibleMessages.length);
+  }, [isDiscussMode, activeProject?.project, visibleMessages.length, setDiscussMessageCount]);
 
   useEffect(() => {
     const pins = safeReadJson(pinsKey, {});
@@ -438,7 +471,7 @@ export default function ChatRoom({
   useEffect(() => {
     const list = messageListRef.current;
     if (!list) return;
-    const nextCount = messages.length;
+    const nextCount = visibleMessages.length;
     const prevCount = prevMessageCountRef.current;
     const appended = nextCount > prevCount;
     prevMessageCountRef.current = nextCount;
@@ -452,7 +485,7 @@ export default function ChatRoom({
       setShowJumpToLatest(true);
       setUnreadCount((value) => value + (nextCount - prevCount));
     }
-  }, [messages, typingAgents]);
+  }, [typingAgents, visibleMessages]);
 
   useEffect(() => {
     const interval = setInterval(() => setClockMs(Date.now()), 1000);
@@ -716,42 +749,42 @@ export default function ChatRoom({
 
   const messageMap = useMemo(() => {
     const map = new Map();
-    messages.forEach((message) => {
+    visibleMessages.forEach((message) => {
       map.set(message.id, message);
     });
     return map;
-  }, [messages]);
+  }, [visibleMessages]);
 
   const childCounts = useMemo(() => {
     const counts = {};
-    messages.forEach((message) => {
+    visibleMessages.forEach((message) => {
       if (message.parent_id) {
         counts[message.parent_id] = (counts[message.parent_id] || 0) + 1;
       }
     });
     return counts;
-  }, [messages]);
+  }, [visibleMessages]);
 
   const threadMessageIds = useMemo(() => {
     if (!threadRootId) return new Set();
 
     const ids = new Set([threadRootId]);
-    let expanded = true;
-    while (expanded) {
-      expanded = false;
-      for (const message of messages) {
-        if (message.parent_id && ids.has(message.parent_id) && !ids.has(message.id)) {
-          ids.add(message.id);
-          expanded = true;
+      let expanded = true;
+      while (expanded) {
+        expanded = false;
+        for (const message of visibleMessages) {
+          if (message.parent_id && ids.has(message.parent_id) && !ids.has(message.id)) {
+            ids.add(message.id);
+            expanded = true;
+          }
         }
       }
-    }
-    return ids;
-  }, [messages, threadRootId]);
+      return ids;
+  }, [visibleMessages, threadRootId]);
 
   const threadMessages = useMemo(
-    () => messages.filter(message => threadMessageIds.has(message.id)),
-    [messages, threadMessageIds]
+    () => visibleMessages.filter(message => threadMessageIds.has(message.id)),
+    [visibleMessages, threadMessageIds]
   );
 
   const threadRootMessage = threadRootId ? messageMap.get(threadRootId) : null;
@@ -1279,27 +1312,24 @@ export default function ChatRoom({
     return depth;
   };
 
-  const channelLabel = channelName
-    ? (channel === 'main' ? `# ${channelName}` : channelName)
+  const channelMeta = sanitizeChannelName(channelName);
+  const channelLabel = channelMeta.title
+    ? (channel === 'main' ? `# ${channelMeta.title}` : channelMeta.title)
     : (
       channel === 'main'
         ? '# Main Room'
         : `DM: ${agents[channel.replace('dm:', '')]?.display_name || channel}`
     );
+  const headerTitle = compact ? 'Chat' : channelLabel;
 
   const isActive = convoStatus?.active;
   const approvalCountdownSeconds = activeApproval?.expires_at
     ? Math.max(0, Math.floor((new Date(activeApproval.expires_at).getTime() - clockMs) / 1000))
     : null;
   const runningProcesses = processState.items.filter((item) => item.status === 'running');
-  const processSummaryTitle = runningProcesses.length
-    ? runningProcesses
-      .map((item) => `${item.name} (pid ${item.pid || '-'}${item.port ? `, :${item.port}` : ''})`)
-      .join('\n')
-    : 'No running processes';
   const breadcrumbMode = String(workspaceMode || 'build').replace('-', ' ');
   const providerIssue = useMemo(() => {
-    const recent = [...messages].reverse().slice(0, 40);
+    const recent = [...visibleMessages].reverse().slice(0, 40);
     for (const message of recent) {
       const sender = String(message?.sender || '').toLowerCase();
       const msgType = String(message?.msg_type || '').toLowerCase();
@@ -1322,7 +1352,7 @@ export default function ChatRoom({
       }
     }
     return '';
-  }, [messages]);
+  }, [visibleMessages]);
   const statusIssueText = !connected
     ? 'Realtime link is reconnecting. If this stays disconnected, verify provider settings and local network.'
     : providerIssue;
@@ -1338,10 +1368,12 @@ export default function ChatRoom({
     <div className={`chat-room ${compact ? 'chat-room-compact' : ''}`}>
       <div className="chat-header">
         <div className="chat-header-left">
-          <div className="chat-breadcrumb">
-            {activeProject?.project || 'ai-office'} → {breadcrumbMode} → Chat
-          </div>
-          <h2>{channelLabel}</h2>
+          {!compact ? (
+            <div className="chat-breadcrumb">
+              {activeProject?.project || 'ai-office'} → {breadcrumbMode} → Chat
+            </div>
+          ) : null}
+          <h2>{headerTitle}</h2>
           <div className="chat-status-line">
             <span className={`status-dot ${connected ? 'online' : 'offline'}`} />
             <span className="status-text">{connected ? 'Connected' : 'Disconnected'}</span>
@@ -1350,12 +1382,16 @@ export default function ChatRoom({
                 type="button"
                 className="chat-error-pill"
                 onClick={() => setStatusErrorOpen((prev) => !prev)}
+                data-tooltip="Open the latest connection/provider issue details."
               >
                 {connected ? 'Provider issue' : 'Connection issue'}
               </button>
             ) : null}
+            {compact && approvalQueue.length > 0 ? (
+              <span className="ui-chip">Pending: {approvalQueue.length}</span>
+            ) : null}
           </div>
-          {statusErrorOpen && hasStatusIssue ? (
+          {statusErrorOpen && hasStatusIssue && !compact ? (
             <div className="chat-error-popover">
               <strong>Issue details</strong>
               <p>{statusIssueText}</p>
@@ -1367,23 +1403,28 @@ export default function ChatRoom({
         </div>
         <div className="chat-header-right">
           {typeof onBackToWorkspace === 'function' && (
-            <button className="stop-btn" onClick={onBackToWorkspace}>
+            <button className="stop-btn" onClick={onBackToWorkspace} data-tooltip="Return to the previous workspace view.">
               Back to Workspace
             </button>
           )}
-          <button className="stop-btn" onClick={refreshProcesses} title={processSummaryTitle}>
+          <button
+            className="stop-btn"
+            onClick={refreshProcesses}
+            data-tooltip="Refresh process status for this channel."
+          >
             Refresh
           </button>
-          <button className="stop-btn" onClick={clearChat}>
+          <button className="stop-btn" onClick={clearChat} data-tooltip="Clear the current chat history for this channel.">
             Clear Chat
           </button>
           {!compact ? (
-            <MoreMenu label="Chat actions">
+            <MoreMenu label="Chat actions" triggerTooltip="Advanced chat actions and controls.">
               <div className="chat-more-actions">
                 <button
                   type="button"
                   className="ui-btn"
                   onClick={() => setStatusPanelOpen(prev => !prev)}
+                  data-tooltip="Toggle the runtime status panel."
                 >
                   {statusPanelOpen ? 'Hide Status Panel' : 'Show Status Panel'}
                 </button>
@@ -1391,24 +1432,25 @@ export default function ChatRoom({
                   type="button"
                   className={`ui-btn ${approvalQueue.length > 0 ? 'ui-btn-primary' : ''}`}
                   onClick={() => setApprovalListOpen(prev => !prev)}
+                  data-tooltip="Review and resolve pending tool approvals."
                 >
                   Pending Approvals: {approvalQueue.length}
                 </button>
-                <button type="button" className="ui-btn" onClick={runKillSwitch}>
+                <button type="button" className="ui-btn" onClick={runKillSwitch} data-tooltip="Stop all running processes and return to SAFE mode.">
                   Kill Switch
                 </button>
                 {String(specState?.status || '').toLowerCase() === 'draft' ? (
-                  <button type="button" className="ui-btn" onClick={approveSpec}>
+                  <button type="button" className="ui-btn" onClick={approveSpec} data-tooltip="Approve the current spec draft to unlock mutating tools.">
                     Approve Spec
                   </button>
                 ) : null}
                 {isActive ? (
-                  <button type="button" className="ui-btn" onClick={stopConversation}>
+                  <button type="button" className="ui-btn" onClick={stopConversation} data-tooltip="Stop the active automated conversation loop.">
                     Stop Conversation
                   </button>
                 ) : null}
                 {workStatus?.running ? (
-                  <button type="button" className="ui-btn" onClick={stopWork}>
+                  <button type="button" className="ui-btn" onClick={stopWork} data-tooltip="Stop current autonomous work execution for this channel.">
                     Stop Work ({workStatus.processed || 0})
                   </button>
                 ) : null}
@@ -1419,7 +1461,7 @@ export default function ChatRoom({
                     className="ui-btn"
                     onClick={() => stopHeaderProcess(proc.id)}
                     disabled={processActionBusy}
-                    title={proc.command}
+                    data-tooltip={`Stop process ${proc.name}.`}
                   >
                     Stop {proc.name}
                   </button>
@@ -1429,6 +1471,12 @@ export default function ChatRoom({
           ) : null}
         </div>
       </div>
+
+      {channelMeta.warning ? (
+        <div className="agent-config-error chat-channel-warning">
+          {channelMeta.warning}
+        </div>
+      ) : null}
 
       {approvalListOpen && approvalQueue.length > 0 && (
         <div className="approval-queue-panel">
@@ -1493,49 +1541,39 @@ export default function ChatRoom({
             if (nearBottom) {
               setShowJumpToLatest(false);
               setUnreadCount(0);
-            } else if (messages.length > 0) {
+            } else if (visibleMessages.length > 0) {
               setShowJumpToLatest(true);
             }
           }}
         >
-          {messages.length === 0 && (
-            <div className={`empty-chat ${beginnerMode && isDiscussMode ? 'beginner-empty-card' : ''}`}>
-              {beginnerMode && isDiscussMode ? (
-                <>
-                  <h4>Kick off project discussion</h4>
-                  <p>Ask the room to brainstorm scope, risks, and first implementation steps.</p>
-                  <div className="beginner-empty-actions">
-                    <button
-                      type="button"
-                      className="ui-btn ui-btn-primary"
-                      onClick={() => {
-                        if (typeof onBeginnerBrainstorm === 'function') {
-                          onBeginnerBrainstorm();
-                          return;
-                        }
-                        send(
-                          'Brainstorm this project idea with tradeoffs, scope options, and the recommended first milestone.',
-                          'message',
-                          null
-                        );
-                      }}
-                    >
-                      Run brainstorm
-                    </button>
-                  </div>
-                </>
-              ) : (
-                'No messages yet. Say something!'
-              )}
-            </div>
+          {visibleMessages.length === 0 && (
+            <ChatEmptyState
+              isDiscussMode={isDiscussMode}
+              onRunBrainstorm={() => {
+                if (typeof onBeginnerBrainstorm === 'function') {
+                  onBeginnerBrainstorm();
+                  return;
+                }
+                send(
+                  'Brainstorm this project idea with tradeoffs, scope options, and the recommended first milestone.',
+                  'message',
+                  null
+                );
+              }}
+              onOpenSpec={() => onRequestOpenTab?.('spec')}
+              onOpenSettings={() => {
+                onRequestOpenTab?.('settings');
+                window.dispatchEvent(new CustomEvent('workspace:open-tab', { detail: { tab: 'settings' } }));
+              }}
+            />
           )}
 
-          {messages.map((msg, index) => {
+          {visibleMessages.map((msg, index) => {
             const sender = getSender(msg);
             const parent = msg.parent_id ? messageMap.get(msg.parent_id) : null;
             const inOpenThread = threadRootId ? threadMessageIds.has(msg.id) : false;
             const hasThread = Boolean(msg.parent_id) || (childCounts[msg.id] || 0) > 0;
-            const showTime = shouldShowTime(messages, index);
+            const showTime = shouldShowTime(visibleMessages, index);
             return (
               <div
                 key={msg.id}

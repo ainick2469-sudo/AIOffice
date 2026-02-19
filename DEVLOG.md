@@ -2849,3 +2849,11 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - Added one-click jump actions (`Providers`, `Providers > Test`, `Agents`, `Workspace`) with localStorage focus targeting.
 - Implemented section highlight + auto-scroll behavior in Providers, Agents, and Advanced views for actionable routing.
 - Reduced Settings dead space by restructuring General into compact summary, checklist block, and collapsible beginner/reset controls.
+## 2026-02-19 - Prompt #007 Workspace declutter + delayed tooltips
+- Added a global delayed tooltip layer (`data-tooltip`) with a 1400ms delay, anchored positioning, and dismiss on leave/scroll/escape/route plus workspace mode/view changes.
+- Applied actionable tooltips across high-impact controls in Workspace toolbar, Activity bar, Discuss actions, Office Board labels/actions, and compact Chat header controls.
+- Reworked Discuss mode defaults for calmer first load: participants collapsed by default, Office Board hidden by default, and full-width chat when the board is closed.
+- Added persisted Discuss UI state per project (`participants-collapsed`, `board-open`) and optional auto-open of Office Board once per session when saved board content already exists.
+- Added Office Board inline guidance and content-change events so Discuss can react to board content presence without backend changes.
+- Added `ChatEmptyState` and filtered runtime-smoke artifacts from visible conversation rendering to avoid fake conversation noise.
+- Simplified compact Chat header hierarchy and protected channel title rendering so error-like channel names no longer appear as room titles.

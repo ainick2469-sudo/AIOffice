@@ -188,16 +188,31 @@ function ViewPane({
         </div>
         <div className="workspace-view-actions">
           {!isFocusMode && id !== 'settings' && (
-            <button type="button" className="ui-btn" onClick={onTogglePin}>
+            <button
+              type="button"
+              className="ui-btn"
+              onClick={onTogglePin}
+              data-tooltip={pinned ? 'Remove this pane from the side rail.' : 'Keep this pane visible in the secondary side area.'}
+            >
               {pinned ? 'Unpin Side' : 'Pin to Side'}
             </button>
           )}
           {role === 'secondary' && (
-            <button type="button" className="ui-btn" onClick={onPopOut}>
+            <button
+              type="button"
+              className="ui-btn"
+              onClick={onPopOut}
+              data-tooltip="Move this side pane back into the primary workspace."
+            >
               Pop Out
             </button>
           )}
-          <button type="button" className="ui-btn" onClick={onRefresh}>
+          <button
+            type="button"
+            className="ui-btn"
+            onClick={onRefresh}
+            data-tooltip="Reload this pane content from the latest state."
+          >
             Refresh
           </button>
           {beginnerMode && help ? (
@@ -296,6 +311,10 @@ export default function WorkspaceShell({
     writeStorage(primaryViewStorageKey, activeView);
   }, [primaryViewStorageKey, activeView]);
 
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('workspace:view-changed', { detail: { view: activeView } }));
+  }, [activeView]);
+
   const persistedPinned = useMemo(
     () => readStorage(secondaryPinnedStorageKey, ''),
     [secondaryPinnedStorageKey]
@@ -352,15 +371,23 @@ export default function WorkspaceShell({
   }, [officeMode, projectLabel, activeView, markViewOpened]);
 
   useEffect(() => {
+    window.dispatchEvent(new CustomEvent('workspace:mode-changed', { detail: { mode: officeMode } }));
+  }, [officeMode]);
+
+  useEffect(() => {
     const onOpenTab = (event) => {
       const tab = String(event?.detail?.tab || '').trim().toLowerCase();
+      if (tab === 'settings') {
+        onOpenSettings?.();
+        return;
+      }
       if (!PRIMARY_VIEW_IDS.includes(tab)) return;
       setOfficeMode('build');
       setView(tab);
     };
     window.addEventListener('workspace:open-tab', onOpenTab);
     return () => window.removeEventListener('workspace:open-tab', onOpenTab);
-  }, [setView, setOfficeMode]);
+  }, [onOpenSettings, setView, setOfficeMode]);
 
   useEffect(() => {
     const onKeyDown = (event) => {

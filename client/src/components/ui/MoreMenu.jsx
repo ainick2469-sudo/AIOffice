@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 export default function MoreMenu({
   label = 'More actions',
+  triggerTooltip = '',
   align = 'right',
   className = '',
   children,
@@ -36,6 +37,7 @@ export default function MoreMenu({
         aria-haspopup="menu"
         aria-expanded={open ? 'true' : 'false'}
         aria-label={label}
+        data-tooltip={triggerTooltip || undefined}
         onClick={() => setOpen((prev) => !prev)}
       >
         ⋯

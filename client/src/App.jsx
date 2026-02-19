@@ -5,6 +5,7 @@ import WorkspaceShell from './components/WorkspaceShell';
 import SettingsShell from './components/settings/SettingsShell';
 import CommandPalette from './components/CommandPalette';
 import DesktopWindowControls from './components/DesktopWindowControls';
+import TooltipLayer from './components/ui/TooltipLayer';
 import {
   buildCreationDraft,
   loadCreationDraft,
@@ -1359,6 +1360,8 @@ export default function App() {
           </footer>
         </aside>
       )}
+
+      <TooltipLayer dismissToken={routeKey} />
 
       <CommandPalette
         key={`palette-${paletteMode}-${paletteEpoch}`}
