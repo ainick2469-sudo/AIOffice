@@ -2,15 +2,39 @@ import { useEffect, useMemo, useState } from 'react';
 import useBodyScrollLock from '../../hooks/useBodyScrollLock';
 import useEscapeKey from '../../hooks/useEscapeKey';
 
-const MODEL_OPTIONS = {
-  openai: ['gpt-5.2-codex', 'gpt-5.2', 'gpt-4o-mini'],
-  claude: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-20250514'],
+const FALLBACK_MODEL_OPTIONS = {
+  openai: ['gpt-5.2-codex', 'gpt-5.2'],
+  claude: ['claude-opus-4-6', 'claude-sonnet-4-6'],
   ollama: ['qwen2.5:14b', 'llama3.2:latest', 'deepseek-coder:6.7b'],
 };
 
-function defaultsFor(agent) {
+function modelOptionsForBackend(modelCatalog, backend) {
+  const providerCatalog = modelCatalog?.providers?.[backend];
+  const rows = Array.isArray(providerCatalog?.models) ? providerCatalog.models : [];
+  if (!rows.length) {
+    return (FALLBACK_MODEL_OPTIONS[backend] || []).map((id) => ({
+      id,
+      label: id,
+      available: null,
+    }));
+  }
+  return rows.map((row) => ({
+    id: String(row?.id || ''),
+    label: String(row?.label || row?.id || ''),
+    available: typeof row?.available === 'boolean' ? row.available : null,
+  }));
+}
+
+function defaultModelForBackend(modelCatalog, backend) {
+  const fromCatalog = String(modelCatalog?.providers?.[backend]?.selected_model_id || '').trim()
+    || String(modelCatalog?.providers?.[backend]?.default_model_id || '').trim();
+  if (fromCatalog) return fromCatalog;
+  return FALLBACK_MODEL_OPTIONS[backend]?.[0] || '';
+}
+
+function defaultsFor(agent, modelCatalog) {
   const backend = agent?.backend || 'openai';
-  const defaultModel = MODEL_OPTIONS[backend]?.[0] || '';
+  const defaultModel = defaultModelForBackend(modelCatalog, backend);
   return {
     backend,
     model: agent?.model || defaultModel,
@@ -32,12 +56,13 @@ export default function AgentConfigDrawer({
   open,
   agent,
   providerConfigs,
+  modelCatalog,
   onClose,
   onSaved,
   onError,
   onNotice,
 }) {
-  const [draft, setDraft] = useState(() => defaultsFor(agent));
+  const [draft, setDraft] = useState(() => defaultsFor(agent, modelCatalog));
   const [saving, setSaving] = useState(false);
   const [modelMode, setModelMode] = useState('list');
   const [credentialSource, setCredentialSource] = useState('provider_default');
@@ -52,14 +77,14 @@ export default function AgentConfigDrawer({
   useBodyScrollLock(Boolean(open), 'settings-agent-config-drawer');
 
   useEffect(() => {
-    setDraft(defaultsFor(agent));
+    setDraft(defaultsFor(agent, modelCatalog));
     setModelMode('list');
     setCredentialSource('provider_default');
     setOverrideMeta(null);
     setOverrideKey('');
     setOverrideBaseUrl('');
     setOverrideTestResult(null);
-  }, [agent]);
+  }, [agent, modelCatalog]);
 
   useEscapeKey((event) => {
     if (!open) return;
@@ -84,7 +109,14 @@ export default function AgentConfigDrawer({
     };
   }, [open, onClose]);
 
-  const modelSuggestions = useMemo(() => MODEL_OPTIONS[draft.backend] || [], [draft.backend]);
+  const modelSuggestions = useMemo(
+    () => modelOptionsForBackend(modelCatalog, draft.backend),
+    [modelCatalog, draft.backend]
+  );
+  const modelSuggestionIds = useMemo(
+    () => modelSuggestions.map((item) => item.id),
+    [modelSuggestions]
+  );
 
   const keyOptions = useMemo(() => {
     if (draft.backend === 'ollama') return [];
@@ -111,7 +143,7 @@ export default function AgentConfigDrawer({
   };
 
   const handleBackendChange = (backend) => {
-    const fallbackModel = MODEL_OPTIONS[backend]?.[0] || '';
+    const fallbackModel = defaultModelForBackend(modelCatalog, backend);
     updateDraft('backend', backend);
     updateDraft('model', fallbackModel);
     updateDraft('provider_key_ref', backend === 'ollama' ? '' : `${backend}_default`);
@@ -146,7 +178,7 @@ export default function AgentConfigDrawer({
   if (!open || !agent) return null;
 
   const resetDefaults = () => {
-    setDraft(defaultsFor(agent));
+    setDraft(defaultsFor(agent, modelCatalog));
     setModelMode('list');
     setOverrideKey('');
     setOverrideBaseUrl(overrideMeta?.base_url || '');
@@ -339,11 +371,12 @@ export default function AgentConfigDrawer({
                 }}
               >
                 {modelSuggestions.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                    {item.available === false ? ' (Unavailable)' : ''}
                   </option>
                 ))}
-                {!modelSuggestions.includes(draft.model) && draft.model ? (
+                {!modelSuggestionIds.includes(draft.model) && draft.model ? (
                   <option value={draft.model}>{draft.model}</option>
                 ) : null}
                 <option value="__custom__">Custom model...</option>

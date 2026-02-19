@@ -68,3 +68,54 @@ def test_provider_test_endpoint_uses_provider_config(monkeypatch):
     assert payload["model_hint"] == "gpt-5.2"
     assert payload["latency_ms"] == 21
     assert payload["details"]["source"] == "test"
+
+
+def test_settings_models_catalog_returns_friendly_defaults():
+    client = TestClient(app)
+    resp = client.get("/api/settings/models")
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    providers = payload.get("providers") or {}
+
+    assert "openai" in providers
+    assert "claude" in providers
+    assert "codex" in providers
+
+    assert providers["openai"]["default_model_id"] == "gpt-5.2"
+    assert providers["claude"]["default_model_id"] == "claude-opus-4-6"
+    assert providers["codex"]["default_model_id"] == "gpt-5.2-codex"
+
+    openai_labels = {item["id"]: item["label"] for item in providers["openai"]["models"]}
+    claude_labels = {item["id"]: item["label"] for item in providers["claude"]["models"]}
+    assert openai_labels.get("gpt-5.2") == "GPT-5.2 Thinking"
+    assert claude_labels.get("claude-opus-4-6") == "Claude Opus 4.6"
+
+
+def test_provider_test_maps_quota_error_code(monkeypatch):
+    client = TestClient(app)
+    saved = client.post(
+        "/api/providers",
+        json={"provider": "openai", "key_ref": "openai_default", "api_key": "sk-provider-7788"},
+    )
+    assert saved.status_code == 200, saved.text
+
+    async def _fake_probe_connection(**_kwargs):
+        return {
+            "ok": False,
+            "model_hint": "gpt-5.2",
+            "latency_ms": 12,
+            "error": "OpenAI rate limit reached.",
+            "details": {"status_code": 429},
+        }
+
+    monkeypatch.setattr("server.openai_adapter.probe_connection", _fake_probe_connection)
+
+    tested = client.post(
+        "/api/providers/test",
+        json={"provider": "openai", "model": "gpt-5.2", "key_ref": "openai_default"},
+    )
+    assert tested.status_code == 200, tested.text
+    payload = tested.json()
+    assert payload["ok"] is False
+    assert payload["error_code"] == "QUOTA_EXCEEDED"
+    assert payload["hint"]

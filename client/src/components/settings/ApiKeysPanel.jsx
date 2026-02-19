@@ -1,35 +1,61 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-const PROVIDERS = [
-  {
-    id: 'openai',
+const PROVIDER_ORDER = ['openai', 'claude'];
+
+const PROVIDER_META = {
+  openai: {
     title: 'OpenAI / Codex',
-    modelOptions: ['gpt-5.2', 'gpt-5.2-codex', 'gpt-4o-mini'],
     baseUrlPlaceholder: 'https://api.openai.com/v1',
+    fallbackModel: 'gpt-5.2',
   },
-  {
-    id: 'claude',
+  claude: {
     title: 'Anthropic Claude',
-    modelOptions: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-sonnet-4-20250514'],
     baseUrlPlaceholder: 'https://api.anthropic.com/v1/messages',
+    fallbackModel: 'claude-opus-4-6',
   },
-];
+};
 
 function createEmptyDraft() {
   return {
     openai: {
       api_key: '',
-      model_default: 'gpt-5.2',
+      model_default: PROVIDER_META.openai.fallbackModel,
       base_url: '',
       reasoning_effort: 'high',
     },
     claude: {
       api_key: '',
-      model_default: 'claude-opus-4-6',
+      model_default: PROVIDER_META.claude.fallbackModel,
       base_url: '',
     },
     fallback_to_ollama: false,
   };
+}
+
+function modelOptionsFor(provider, modelCatalog) {
+  const rows = modelCatalog?.providers?.[provider]?.models;
+  if (!Array.isArray(rows) || !rows.length) {
+    const fallback = PROVIDER_META[provider]?.fallbackModel || '';
+    return fallback ? [{ id: fallback, label: fallback, available: null, availability_reason: null }] : [];
+  }
+  return rows.map((row) => ({
+    id: String(row?.id || ''),
+    label: String(row?.label || row?.id || ''),
+    available: typeof row?.available === 'boolean' ? row.available : null,
+    availability_reason: row?.availability_reason || null,
+  }));
+}
+
+function resolveModelDefault(provider, snapshot, modelCatalog) {
+  const fromSnapshot = String(snapshot?.[provider]?.model_default || '').trim();
+  if (fromSnapshot) return fromSnapshot;
+  const selected = String(modelCatalog?.providers?.[provider]?.selected_model_id || '').trim();
+  if (selected) return selected;
+  const defaultId = String(modelCatalog?.providers?.[provider]?.default_model_id || '').trim();
+  if (defaultId) return defaultId;
+  const firstCatalog = String((modelOptionsFor(provider, modelCatalog)[0] || {}).id || '').trim();
+  if (firstCatalog) return firstCatalog;
+  return PROVIDER_META[provider]?.fallbackModel || '';
 }
 
 async function readJson(response) {
@@ -58,7 +84,28 @@ async function copyJson(value) {
   }
 }
 
-export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
+function prettyProvider(provider) {
+  if (provider === 'openai') return 'OpenAI';
+  if (provider === 'claude') return 'Claude';
+  return String(provider || '').toUpperCase();
+}
+
+function formatErrorSummary(result) {
+  if (!result) return '';
+  if (result.ok) return '';
+  const bits = [];
+  if (result.error_code) bits.push(result.error_code);
+  if (result.error) bits.push(result.error);
+  return bits.join(' — ') || 'Connection test failed.';
+}
+
+export default function ApiKeysPanel({
+  modelCatalog,
+  onError,
+  onNotice,
+  onSaved,
+  onDiagnosticUpdate,
+}) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState({});
   const [testing, setTesting] = useState({});
@@ -67,7 +114,7 @@ export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
     openai: {
       configured: false,
       key_masked: null,
-      model_default: 'gpt-5.2',
+      model_default: PROVIDER_META.openai.fallbackModel,
       base_url: '',
       key_ref: 'openai_default',
       reasoning_effort: 'high',
@@ -77,7 +124,7 @@ export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
     claude: {
       configured: false,
       key_masked: null,
-      model_default: 'claude-opus-4-6',
+      model_default: PROVIDER_META.claude.fallbackModel,
       base_url: '',
       key_ref: 'claude_default',
       last_tested_at: null,
@@ -97,30 +144,46 @@ export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
         throw new Error(payload?.detail || 'Failed to load provider settings.');
       }
       setSnapshot(payload);
-      setDraft({
+      setDraft((prev) => ({
         openai: {
+          ...prev.openai,
           api_key: '',
-          model_default: payload?.openai?.model_default || 'gpt-5.2',
+          model_default: resolveModelDefault('openai', payload, modelCatalog),
           base_url: payload?.openai?.base_url || '',
-          reasoning_effort: payload?.openai?.reasoning_effort || 'high',
+          reasoning_effort: payload?.openai?.reasoning_effort || prev?.openai?.reasoning_effort || 'high',
         },
         claude: {
+          ...prev.claude,
           api_key: '',
-          model_default: payload?.claude?.model_default || 'claude-opus-4-6',
+          model_default: resolveModelDefault('claude', payload, modelCatalog),
           base_url: payload?.claude?.base_url || '',
         },
         fallback_to_ollama: Boolean(payload?.fallback_to_ollama),
-      });
+      }));
     } catch (err) {
       onError?.(err?.message || 'Failed to load provider settings.');
     } finally {
       setLoading(false);
     }
-  }, [onError]);
+  }, [modelCatalog, onError]);
 
   useEffect(() => {
     load().catch(() => {});
   }, [load]);
+
+  useEffect(() => {
+    setDraft((prev) => ({
+      ...prev,
+      openai: {
+        ...prev.openai,
+        model_default: prev.openai.model_default || resolveModelDefault('openai', snapshot, modelCatalog),
+      },
+      claude: {
+        ...prev.claude,
+        model_default: prev.claude.model_default || resolveModelDefault('claude', snapshot, modelCatalog),
+      },
+    }));
+  }, [modelCatalog, snapshot]);
 
   const statusLabels = useMemo(
     () => ({
@@ -129,6 +192,11 @@ export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
     }),
     [snapshot]
   );
+
+  const optionsByProvider = useMemo(() => ({
+    openai: modelOptionsFor('openai', modelCatalog),
+    claude: modelOptionsFor('claude', modelCatalog),
+  }), [modelCatalog]);
 
   const updateDraft = (provider, key, value) => {
     setDraft((prev) => ({
@@ -179,7 +247,7 @@ export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
         },
       }));
       onSaved?.();
-      onNotice?.(`${provider.toUpperCase()} settings saved.`);
+      onNotice?.(`${prettyProvider(provider)} settings saved.`);
     } catch (err) {
       onError?.(err?.message || `Failed to save ${provider} settings.`);
     } finally {
@@ -205,18 +273,31 @@ export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
         throw new Error(payload?.detail || `Failed to test ${provider}.`);
       }
       setTestResult((prev) => ({ ...prev, [provider]: payload }));
+      onDiagnosticUpdate?.(provider, {
+        last_test_at: new Date().toISOString(),
+        latency_ms: payload?.latency_ms || null,
+        ok: Boolean(payload?.ok),
+        details: payload?.details || null,
+        error_summary: formatErrorSummary(payload),
+      });
       await load();
       if (payload?.ok) {
-        onNotice?.(`${provider.toUpperCase()} connection OK (${payload?.latency_ms || 0}ms).`);
+        onNotice?.(`${prettyProvider(provider)} connection OK (${payload?.latency_ms || 0}ms).`);
       } else {
-        onError?.(payload?.error || `${provider.toUpperCase()} test failed.`);
+        const message = [payload?.error_code, payload?.error].filter(Boolean).join(': ') || `${prettyProvider(provider)} test failed.`;
+        onError?.(payload?.hint ? `${message} ${payload.hint}` : message);
       }
     } catch (err) {
       onError?.(err?.message || `Failed to test ${provider}.`);
-      setTestResult((prev) => ({
-        ...prev,
-        [provider]: { ok: false, error: err?.message || 'Unknown error', details: null },
-      }));
+      const failed = { ok: false, error: err?.message || 'Unknown error', details: null };
+      setTestResult((prev) => ({ ...prev, [provider]: failed }));
+      onDiagnosticUpdate?.(provider, {
+        last_test_at: new Date().toISOString(),
+        latency_ms: null,
+        ok: false,
+        details: null,
+        error_summary: failed.error,
+      });
     } finally {
       setTesting((prev) => ({ ...prev, [provider]: false }));
     }
@@ -226,9 +307,9 @@ export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
     <section className="settings-section-card panel">
       <header className="settings-section-head">
         <div>
-          <h4>API Keys</h4>
+          <h4>API Keys & Models</h4>
           <p>
-            Configure provider keys and defaults. Secrets are masked in API responses and never returned in full.
+            Configure provider keys and models from one source of truth. Secrets are masked and never returned in full.
           </p>
         </div>
         <button type="button" className="ui-btn" onClick={() => load().catch(() => {})} disabled={loading}>
@@ -246,15 +327,18 @@ export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
       </label>
 
       <div className="settings-provider-grid">
-        {PROVIDERS.map((provider) => {
-          const providerId = provider.id;
+        {PROVIDER_ORDER.map((providerId) => {
+          const meta = PROVIDER_META[providerId];
           const lastError = snapshot?.[providerId]?.last_error;
-          const testDetails = testResult?.[providerId]?.details || null;
+          const result = testResult?.[providerId] || null;
+          const selectedModel = String(draft?.[providerId]?.model_default || '').trim();
+          const selectedOption = (optionsByProvider[providerId] || []).find((item) => item.id === selectedModel) || null;
+
           return (
             <article key={providerId} className="settings-provider-card panel">
               <header className="settings-provider-head">
                 <div>
-                  <h4>{provider.title}</h4>
+                  <h4>{meta.title}</h4>
                   <p>Key ref: {snapshot?.[providerId]?.key_ref || `${providerId}_default`}</p>
                 </div>
                 <span
@@ -302,21 +386,22 @@ export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
                   <span>Default model</span>
                   <select
                     className="ui-input"
-                    value={draft?.[providerId]?.model_default || ''}
+                    value={selectedModel}
                     onChange={(event) => updateDraft(providerId, 'model_default', event.target.value)}
                   >
-                    {provider.modelOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
+                    {(optionsByProvider[providerId] || []).map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                        {option.available === false ? ' (Unavailable)' : ''}
                       </option>
                     ))}
-                    {!provider.modelOptions.includes(draft?.[providerId]?.model_default) &&
-                    (draft?.[providerId]?.model_default || '').trim() ? (
-                      <option value={draft?.[providerId]?.model_default}>
-                        {draft?.[providerId]?.model_default}
-                      </option>
+                    {selectedModel && !(optionsByProvider[providerId] || []).some((option) => option.id === selectedModel) ? (
+                      <option value={selectedModel}>{selectedModel} (Custom)</option>
                     ) : null}
                   </select>
+                  {selectedOption?.availability_reason ? (
+                    <small>{selectedOption.availability_reason}</small>
+                  ) : null}
                 </label>
 
                 {providerId === 'openai' ? (
@@ -341,7 +426,7 @@ export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
                     type="text"
                     value={draft?.[providerId]?.base_url || ''}
                     onChange={(event) => updateDraft(providerId, 'base_url', event.target.value)}
-                    placeholder={provider.baseUrlPlaceholder}
+                    placeholder={meta.baseUrlPlaceholder}
                   />
                 </label>
 
@@ -378,7 +463,7 @@ export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
                         onClick={() =>
                           copyJson({
                             provider: providerId,
-                            model: draft?.[providerId]?.model_default || null,
+                            model: selectedModel || null,
                             last_error: lastError,
                             last_tested_at: snapshot?.[providerId]?.last_tested_at || null,
                           }).then((ok) => {
@@ -392,22 +477,23 @@ export default function ApiKeysPanel({ onError, onNotice, onSaved }) {
                   </div>
                 ) : null}
 
-                {testResult?.[providerId] ? (
-                  <div className={testResult[providerId].ok ? 'agent-config-notice' : 'agent-config-error'}>
-                    {testResult[providerId].ok
-                      ? `Connected (${testResult[providerId].latency_ms || 0}ms)`
-                      : testResult[providerId].error || 'Connection failed'}
-                    {testDetails ? (
+                {result ? (
+                  <div className={result.ok ? 'agent-config-notice' : 'agent-config-error'}>
+                    {result.ok
+                      ? `Connected (${result.latency_ms || 0}ms)`
+                      : [result.error_code, result.error].filter(Boolean).join(': ') || 'Connection failed'}
+                    {!result.ok && result.hint ? <p style={{ marginTop: 8 }}>{result.hint}</p> : null}
+                    {result?.details ? (
                       <details style={{ marginTop: 8 }}>
                         <summary>Raw details</summary>
                         <pre className="approval-preview" style={{ marginTop: 8 }}>
-                          {JSON.stringify(testDetails, null, 2)}
+                          {JSON.stringify(result.details, null, 2)}
                         </pre>
                         <button
                           type="button"
                           className="ui-btn ui-btn-ghost"
                           onClick={() =>
-                            copyJson(testResult[providerId]).then((ok) => {
+                            copyJson(result).then((ok) => {
                               if (ok) onNotice?.('Test diagnostics copied.');
                             })
                           }

@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from typing import Optional
 from . import database as db
 from . import provider_config
+from . import provider_models
 from .models import (
     ApprovalResponseIn,
     AutonomyModeIn,
@@ -26,6 +27,7 @@ from .models import (
     ProviderSettingsIn,
     ProviderSettingsOut,
     ProviderSettingsProviderOut,
+    ProviderModelCatalogOut,
     AgentUpdateIn,
     AppBuilderStartIn,
     BranchSwitchIn,
@@ -104,10 +106,7 @@ def _slugify_project_name(text: str) -> str:
 
 
 def _normalize_provider(value: str) -> str:
-    provider = (value or "").strip().lower()
-    if provider == "codex":
-        return "openai"
-    return provider
+    return provider_models.normalize_provider(value)
 
 
 def _validate_provider_key(provider: str, api_key: str) -> Optional[str]:
@@ -124,6 +123,75 @@ def _validate_provider_key(provider: str, api_key: str) -> Optional[str]:
         if not key.startswith("sk-ant-"):
             return "Anthropic key should usually start with `sk-ant-`."
     return None
+
+
+def _extract_status_code(details: Optional[dict]) -> Optional[int]:
+    if not isinstance(details, dict):
+        return None
+    candidates = [
+        details.get("status_code"),
+        (details.get("provider_details") or {}).get("status_code")
+        if isinstance(details.get("provider_details"), dict)
+        else None,
+    ]
+    for value in candidates:
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except Exception:
+            continue
+    return None
+
+
+def _map_provider_test_failure(
+    *,
+    provider: str,
+    error: Optional[str],
+    details: Optional[dict],
+) -> tuple[str, str]:
+    status_code = _extract_status_code(details)
+    message = str(error or "").strip()
+    lower = message.lower()
+    provider_title = provider_models.provider_title(provider)
+
+    if status_code in {401, 403}:
+        return (
+            "AUTH_INVALID",
+            f"{provider_title} authentication failed. Re-check your API key and key source, then test again.",
+        )
+    if status_code == 429 or "insufficient_quota" in lower or "quota" in lower:
+        return (
+            "QUOTA_EXCEEDED",
+            f"{provider_title} quota or billing limit was reached. Check account billing/limits and retry.",
+        )
+    if status_code == 404 or "model not available" in lower or "model not found" in lower or "model unavailable" in lower:
+        return (
+            "MODEL_UNAVAILABLE",
+            f"The selected model is not enabled for this account. Pick another model in Settings -> Providers.",
+        )
+    if (
+        status_code in {408, 502, 503, 504}
+        or "timeout" in lower
+        or "timed out" in lower
+        or "unreachable" in lower
+        or "connection" in lower
+        or "dns" in lower
+        or "network" in lower
+    ):
+        return (
+            "PROVIDER_UNREACHABLE",
+            f"{provider_title} is unreachable right now. Check base URL, proxy/firewall, and network access.",
+        )
+    if "no key found" in lower or "missing key" in lower or "not configured" in lower:
+        return (
+            "AUTH_INVALID",
+            f"{provider_title} is not configured. Open Settings -> API Keys, save a key, then test connection.",
+        )
+    return (
+        "UNKNOWN_ERROR",
+        f"{provider_title} test failed. Review diagnostics, then re-run Test Connection.",
+    )
 
 
 def _seed_spec_from_prompt(prompt: str, *, project_name: str, template: Optional[str] = None) -> tuple[str, str]:
@@ -378,6 +446,12 @@ async def get_settings_providers():
     return await _provider_settings_out()
 
 
+@router.get("/settings/models", response_model=ProviderModelCatalogOut)
+async def get_settings_models():
+    snapshot = await provider_config.model_catalog_snapshot(refresh=True)
+    return ProviderModelCatalogOut(**snapshot)
+
+
 @router.post("/settings/providers", response_model=ProviderSettingsOut)
 async def set_settings_providers(body: ProviderSettingsIn):
     payload = body.model_dump(exclude_unset=True)
@@ -537,7 +611,7 @@ async def set_provider_config(body: ProviderConfigIn):
 async def test_provider_config(body: ProviderTestIn):
     provider = _normalize_provider(body.provider)
     if provider not in {"openai", "claude", "ollama"}:
-        raise HTTPException(400, "provider must be one of: openai, claude, ollama, codex")
+        raise HTTPException(400, "provider must be one of: openai, claude, anthropic, ollama, codex")
 
     if provider == "ollama":
         from . import ollama_client
@@ -553,12 +627,19 @@ async def test_provider_config(body: ProviderTestIn):
                 details["models"] = models[:10]
             except Exception as exc:
                 details["models_error"] = str(exc)
+        error_text = None if available else "Ollama is not reachable on http://127.0.0.1:11434. Start Ollama and retry."
+        error_code = None
+        hint = None
+        if error_text:
+            error_code, hint = _map_provider_test_failure(provider=provider, error=error_text, details=details)
         return ProviderTestOut(
             ok=bool(available),
             provider=provider,
             model_hint=None,
             latency_ms=latency_ms,
-            error=None if available else "Ollama is not reachable on http://127.0.0.1:11434. Start Ollama and retry.",
+            error=error_text,
+            error_code=error_code,
+            hint=hint,
             details=details,
         )
 
@@ -573,26 +654,30 @@ async def test_provider_config(body: ProviderTestIn):
     key_ref = (runtime.get("key_ref") or "").strip()
     api_key = (runtime.get("api_key") or "").strip()
     base_url = (runtime.get("base_url") or "").strip() or None
-    if provider == "openai":
-        model_hint = (runtime.get("model_default") or cfg.get("default_model") or "gpt-5.2").strip() or "gpt-5.2"
-    else:
-        model_hint = (
-            runtime.get("model_default") or cfg.get("default_model") or "claude-opus-4-6"
-        ).strip() or "claude-opus-4-6"
+    model_hint = (
+        runtime.get("model_default")
+        or cfg.get("default_model")
+        or provider_models.default_model_for_provider(provider)
+        or ("gpt-5.2" if provider == "openai" else "claude-opus-4-6")
+    ).strip()
 
     if not api_key:
+        details = {
+            "provider": provider,
+            "key_ref": key_ref or None,
+            "key_source": runtime.get("key_source"),
+        }
+        error_text = f"No key found for provider `{provider}`. Save a key in Settings -> API Keys first."
+        error_code, hint = _map_provider_test_failure(provider=provider, error=error_text, details=details)
         result = ProviderTestOut(
             ok=False,
             provider=provider,
             model_hint=model_hint,
             latency_ms=0,
-            error=f"No key found for provider `{provider}`. Save a key in Settings -> API Keys first.",
-            details={
-                "provider": provider,
-                "key_ref": key_ref or None,
-                "key_source": runtime.get("key_source"),
-                "hint": "Open Settings -> API Keys, paste key, click Save, then Test Connection.",
-            },
+            error=error_text,
+            error_code=error_code,
+            hint=hint,
+            details=details,
         )
         await db.set_setting(f"{provider}.last_tested_at", datetime.now(timezone.utc).isoformat())
         await db.set_setting(f"{provider}.last_error", result.error or "")
@@ -618,35 +703,55 @@ async def test_provider_config(body: ProviderTestIn):
                 timeout_seconds=15,
             )
     except Exception as exc:
+        details = {
+            "provider": provider,
+            "base_url": base_url,
+            "key_source": runtime.get("key_source"),
+        }
+        error_text = str(exc)
+        error_code, hint = _map_provider_test_failure(provider=provider, error=error_text, details=details)
         result = ProviderTestOut(
             ok=False,
             provider=provider,
             model_hint=model_hint,
             latency_ms=None,
-            error=str(exc),
-            details={
-                "provider": provider,
-                "base_url": base_url,
-                "key_source": runtime.get("key_source"),
-                "hint": "Check network/firewall, base URL, and key validity.",
-            },
+            error=error_text,
+            error_code=error_code,
+            hint=hint,
+            details=details,
         )
         await db.set_setting(f"{provider}.last_tested_at", datetime.now(timezone.utc).isoformat())
         await db.set_setting(f"{provider}.last_error", result.error or "")
         return result
+
+    probe_details = probe.get("details") if isinstance(probe, dict) else None
+    if not isinstance(probe_details, dict):
+        probe_details = {"raw": probe_details}
+    merged_details = {
+        **probe_details,
+        "provider": provider,
+        "base_url": base_url,
+        "key_source": runtime.get("key_source"),
+    }
+    error_text = probe.get("error")
+    error_code = None
+    hint = None
+    if not bool(probe.get("ok")):
+        error_code, hint = _map_provider_test_failure(
+            provider=provider,
+            error=error_text,
+            details=merged_details,
+        )
 
     result = ProviderTestOut(
         ok=bool(probe.get("ok")),
         provider=provider,
         model_hint=str(probe.get("model_hint") or model_hint),
         latency_ms=probe.get("latency_ms"),
-        error=probe.get("error"),
-        details={
-            **(probe.get("details") or {}),
-            "provider": provider,
-            "base_url": base_url,
-            "key_source": runtime.get("key_source"),
-        },
+        error=error_text,
+        error_code=error_code,
+        hint=hint,
+        details=merged_details,
     )
     await db.set_setting(f"{provider}.last_tested_at", datetime.now(timezone.utc).isoformat())
     await db.set_setting(f"{provider}.last_error", result.error or "")

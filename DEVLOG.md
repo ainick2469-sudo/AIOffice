@@ -2615,3 +2615,52 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-19 | Prompt #21: Provider/model catalog + explicit model defaults + standardized diagnostics
+
+### Backend changes
+- Added `server/provider_models.py` as the single model catalog source:
+  - OpenAI default: `gpt-5.2` (`GPT-5.2 Thinking`)
+  - Claude default: `claude-opus-4-6` (`Claude Opus 4.6`)
+  - Codex alias catalog (`Codex (via OpenAI)`) with default `gpt-5.2-codex`
+- Extended `server/provider_config.py`:
+  - catalog-driven default model resolution
+  - new `model_catalog_snapshot()` with provider/model availability metadata
+- Extended `server/routes_api.py`:
+  - new `GET /api/settings/models`
+  - upgraded `POST /api/providers/test` with standardized error codes:
+    - `PROVIDER_UNREACHABLE`
+    - `AUTH_INVALID`
+    - `QUOTA_EXCEEDED`
+    - `MODEL_UNAVAILABLE`
+    - `UNKNOWN_ERROR`
+  - actionable `hint` field and structured details for diagnostics
+- Updated `server/database.py`:
+  - provider normalization via catalog aliases
+  - seed/migration/default-provider-model logic now driven from catalog
+- Updated `server/models.py`:
+  - provider request literals include `anthropic` alias
+  - provider test output includes `error_code` + `hint`
+  - new models for `/api/settings/models` response contract
+
+### Frontend changes
+- Settings now reads model options from backend catalog instead of hardcoded lists:
+  - `client/src/components/settings/SettingsShell.jsx`
+  - `client/src/components/settings/ApiKeysPanel.jsx`
+  - `client/src/components/settings/AgentConfigDrawer.jsx`
+- `ApiKeysPanel` now:
+  - shows friendly model labels from backend
+  - surfaces standardized test errors/hints
+  - records diagnostics payloads for export/copy
+- `AgentConfigDrawer` now:
+  - uses backend model catalog for model picker entries/labels
+  - keeps custom model support without forcing legacy defaults
+
+### Tests
+- Updated `tests/test_provider_endpoints.py`:
+  - validates `/api/settings/models` defaults and friendly labels
+  - validates provider test error-code mapping (quota example)
+
+### Verification
+- `with-runtime.cmd python -m pytest` PASS (`95 passed`)
+- `with-runtime.cmd npm --prefix client run build` PASS

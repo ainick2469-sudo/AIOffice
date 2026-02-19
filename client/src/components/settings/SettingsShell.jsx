@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Controls from '../Controls';
 import SettingsNav from './SettingsNav';
-import ProviderCard from './ProviderCard';
 import ApiKeysPanel from './ApiKeysPanel';
 import AgentsTable from './AgentsTable';
 import AgentConfigDrawer from './AgentConfigDrawer';
@@ -101,6 +100,7 @@ export default function SettingsShell({
   const [category, setCategory] = useState(() => localStorage.getItem(CATEGORY_KEY) || 'general');
   const [search, setSearch] = useState('');
   const [providers, setProviders] = useState([]);
+  const [modelCatalog, setModelCatalog] = useState({ providers: {} });
   const [agents, setAgents] = useState([]);
   const [providerDiagnostics, setProviderDiagnostics] = useState(loadDiagnostics);
   const [editingAgent, setEditingAgent] = useState(null);
@@ -124,17 +124,27 @@ export default function SettingsShell({
     return list;
   }, []);
 
+  const loadModelCatalog = useCallback(async () => {
+    const response = await fetch('/api/settings/models');
+    const payload = response.ok ? await response.json() : { providers: {} };
+    const providersMap = payload?.providers && typeof payload.providers === 'object'
+      ? payload.providers
+      : {};
+    setModelCatalog({ providers: providersMap });
+    return providersMap;
+  }, []);
+
   const refreshAll = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      await Promise.all([loadProviders(), loadAgents()]);
+      await Promise.all([loadProviders(), loadAgents(), loadModelCatalog()]);
     } catch (loadError) {
       setError(loadError?.message || 'Failed to load settings data.');
     } finally {
       setLoading(false);
     }
-  }, [loadProviders, loadAgents]);
+  }, [loadProviders, loadAgents, loadModelCatalog]);
 
   useEffect(() => {
     refreshAll();
@@ -154,14 +164,6 @@ export default function SettingsShell({
       setCategory(filteredCategories[0]?.id || 'general');
     }
   }, [filteredCategories, category]);
-
-  const providerMap = useMemo(() => {
-    const map = {};
-    PROVIDER_ORDER.forEach((provider) => {
-      map[provider] = providers.find((item) => item.provider === provider) || { provider };
-    });
-    return map;
-  }, [providers]);
 
   const providerDefaults = useMemo(() => {
     const map = {};
@@ -273,9 +275,11 @@ export default function SettingsShell({
   const renderProviders = () => (
     <>
       <ApiKeysPanel
+        modelCatalog={modelCatalog}
         onSaved={async () => {
-          await loadProviders();
+          await Promise.all([loadProviders(), loadModelCatalog()]);
         }}
+        onDiagnosticUpdate={updateDiagnostic}
         onError={(message) => {
           setError(message);
           setNotice('');
@@ -285,29 +289,6 @@ export default function SettingsShell({
           setError('');
         }}
       />
-      <div className="settings-provider-grid">
-        {PROVIDER_ORDER.filter((provider) => matchesSearch(provider, search)).map((provider) => (
-          <ProviderCard
-            key={provider}
-            provider={provider}
-            beginnerMode={beginnerMode}
-            config={providerMap[provider]}
-            diagnostic={providerDiagnostics[provider]}
-            onProviderSaved={async () => {
-              await loadProviders();
-            }}
-            onDiagnosticUpdate={updateDiagnostic}
-            onError={(message) => {
-              setError(message);
-              setNotice('');
-            }}
-            onNotice={(message) => {
-              setNotice(message);
-              setError('');
-            }}
-          />
-        ))}
-      </div>
     </>
   );
 
@@ -323,6 +304,7 @@ export default function SettingsShell({
         open={Boolean(editingAgent)}
         agent={editingAgent}
         providerConfigs={providers}
+        modelCatalog={modelCatalog}
         onClose={() => setEditingAgent(null)}
         onSaved={async () => {
           await loadAgents();

@@ -10,6 +10,7 @@ import time
 from typing import Optional
 
 from . import database as db
+from . import provider_models
 from .runtime_config import APP_ROOT
 from .secrets_vault import decrypt_secret
 
@@ -18,10 +19,7 @@ _CACHE: dict[str, tuple[float, dict]] = {}
 
 
 def _normalize_provider(value: str) -> str:
-    provider = (value or "").strip().lower()
-    if provider == "codex":
-        return "openai"
-    return provider
+    return provider_models.normalize_provider(value)
 
 
 def _mask_key(value: str) -> Optional[str]:
@@ -56,11 +54,7 @@ def _default_base_url(provider: str) -> Optional[str]:
 
 
 def _default_model(provider: str) -> Optional[str]:
-    if provider == "openai":
-        return "gpt-5.2"
-    if provider == "claude":
-        return "claude-opus-4-6"
-    return None
+    return provider_models.default_model_for_provider(provider)
 
 
 def _default_reasoning_effort(provider: str) -> Optional[str]:
@@ -310,3 +304,99 @@ async def provider_settings_snapshot() -> dict:
             "last_error": claude.get("last_error"),
         },
     }
+
+
+def _model_availability_for_provider(
+    *,
+    provider: str,
+    configured: bool,
+    selected_model: Optional[str],
+    last_tested_at: Optional[str],
+    last_error: Optional[str],
+) -> list[dict]:
+    models = []
+    for item in provider_models.models_for_provider(provider):
+        model_id = str(item.get("id") or "").strip()
+        if not model_id:
+            continue
+        available: Optional[bool] = None
+        reason: Optional[str] = None
+        if provider in {"openai", "claude", "codex"}:
+            if not configured:
+                available = False
+                reason = "Provider key is not configured."
+            elif selected_model == model_id and last_tested_at:
+                if last_error:
+                    available = False
+                    reason = last_error
+                else:
+                    available = True
+                    reason = f"Last tested at {last_tested_at}."
+            else:
+                available = None
+                reason = "Availability unknown until Test Connection runs for this model."
+        elif provider == "ollama":
+            available = None
+            reason = "Local model availability depends on your Ollama installation."
+
+        models.append(
+            {
+                "id": model_id,
+                "label": str(item.get("label") or model_id),
+                "capabilities": list(item.get("capabilities") or []),
+                "default": bool(item.get("default")),
+                "legacy": bool(item.get("legacy")),
+                "selected": bool(model_id == (selected_model or "")),
+                "available": available,
+                "availability_reason": reason,
+            }
+        )
+    return models
+
+
+async def model_catalog_snapshot(*, refresh: bool = False) -> dict:
+    openai = await provider_status("openai", refresh=refresh)
+    claude = await provider_status("claude", refresh=refresh)
+    ollama = await provider_status("ollama", refresh=refresh)
+
+    provider_state = {
+        "openai": openai,
+        "claude": claude,
+        "ollama": ollama,
+        # Codex is an OpenAI-backed runtime alias in this app.
+        "codex": {
+            **openai,
+            "provider": "codex",
+            "model_default": openai.get("model_default") or provider_models.default_model_for_provider("codex"),
+        },
+    }
+
+    providers: dict[str, dict] = {}
+    for provider in ["openai", "claude", "ollama", "codex"]:
+        state = provider_state[provider]
+        selected_model = (
+            (state.get("model_default") or "").strip()
+            or provider_models.default_model_for_provider(provider)
+            or ""
+        )
+        providers[provider] = {
+            "provider": provider,
+            "title": provider_models.provider_title(provider),
+            "route_provider": provider_models.normalize_provider(provider),
+            "configured": bool(state.get("configured")),
+            "key_source": state.get("key_source"),
+            "key_ref": state.get("key_ref"),
+            "base_url": state.get("base_url"),
+            "selected_model_id": selected_model or None,
+            "default_model_id": provider_models.default_model_for_provider(provider),
+            "last_tested_at": state.get("last_tested_at"),
+            "last_error": state.get("last_error"),
+            "models": _model_availability_for_provider(
+                provider=provider,
+                configured=bool(state.get("configured")),
+                selected_model=selected_model,
+                last_tested_at=state.get("last_tested_at"),
+                last_error=state.get("last_error"),
+            ),
+        }
+    return {"providers": providers}

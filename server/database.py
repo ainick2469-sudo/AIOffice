@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from . import provider_models
 from .runtime_config import APP_ROOT, DB_PATH as RUNTIME_DB_PATH, ensure_runtime_dirs
 
 
@@ -800,9 +801,9 @@ async def _migrate_codex_defaults(db: aiosqlite.Connection):
 
 async def _seed_provider_configs(db: aiosqlite.Connection):
     defaults = [
-        ("openai", "openai_default", None, "gpt-5.2"),
-        ("claude", "claude_default", None, "claude-opus-4-6"),
-        ("ollama", None, None, None),
+        ("openai", "openai_default", None, provider_models.default_model_for_provider("openai")),
+        ("claude", "claude_default", None, provider_models.default_model_for_provider("claude")),
+        ("ollama", None, None, provider_models.default_model_for_provider("ollama")),
     ]
     for provider, key_ref, base_url, default_model in defaults:
         await db.execute(
@@ -815,19 +816,22 @@ async def _seed_provider_configs(db: aiosqlite.Connection):
 
 async def _migrate_provider_default_models(db: aiosqlite.Connection):
     """Upgrade known legacy provider defaults without clobbering explicit custom models."""
+    openai_default = provider_models.default_model_for_provider("openai") or "gpt-5.2"
+    claude_default = provider_models.default_model_for_provider("claude") or "claude-opus-4-6"
     await db.execute(
         """
         UPDATE provider_configs
-           SET default_model = 'gpt-5.2',
+           SET default_model = ?,
                updated_at = CURRENT_TIMESTAMP
          WHERE provider = 'openai'
            AND (default_model IS NULL OR TRIM(default_model) = '' OR default_model = 'gpt-4o-mini')
-        """
+        """,
+        (openai_default,),
     )
     await db.execute(
         """
         UPDATE provider_configs
-           SET default_model = 'claude-opus-4-6',
+           SET default_model = ?,
                updated_at = CURRENT_TIMESTAMP
          WHERE provider = 'claude'
            AND (
@@ -836,7 +840,8 @@ async def _migrate_provider_default_models(db: aiosqlite.Connection):
                 OR default_model = 'claude-sonnet-4-20250514'
                 OR default_model = 'claude-sonnet-4-6'
            )
-        """
+        """,
+        (claude_default,),
     )
 
 
@@ -1267,10 +1272,7 @@ def _normalize_credential_backend(value: Optional[str]) -> str:
 
 
 def _normalize_provider_name(value: Optional[str]) -> str:
-    provider = (value or "").strip().lower()
-    if provider == "codex":
-        return "openai"
-    return provider
+    return provider_models.normalize_provider(value)
 
 
 async def upsert_agent_credential(
@@ -1590,7 +1592,7 @@ async def get_provider_config(provider: str) -> dict:
             "provider": provider_name,
             "key_ref": f"{provider_name}_default" if provider_name in {"openai", "claude"} else None,
             "base_url": None,
-            "default_model": "gpt-5.2" if provider_name == "openai" else ("claude-opus-4-6" if provider_name == "claude" else None),
+            "default_model": provider_models.default_model_for_provider(provider_name),
             "updated_at": None,
         }
         return fallback
