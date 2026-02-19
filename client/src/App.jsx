@@ -1,18 +1,33 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CreateHome from './components/CreateHome';
 import ProjectsSidebar from './components/ProjectsSidebar';
 import WorkspaceShell from './components/WorkspaceShell';
-import AgentConfig from './components/AgentConfig';
-import ProviderSettings from './components/ProviderSettings';
-import Controls from './components/Controls';
+import SettingsShell from './components/settings/SettingsShell';
 import CommandPalette from './components/CommandPalette';
+import {
+  buildCreationDraft,
+  loadCreationDraft,
+  saveCreationDraft,
+  clearCreationDraft,
+} from './lib/storage/creationDraft';
+import useEscapeKey from './hooks/useEscapeKey';
+import useBodyScrollLock, { getBodyScrollLockSnapshot } from './hooks/useBodyScrollLock';
+import { clearAllBodyScrollLocks } from './hooks/scrollLockManager';
+import { useBeginnerMode } from './components/beginner/BeginnerModeContext';
+import './styles/theme.css';
+import './styles/components.css';
+import './styles/settings.css';
+import './styles/draft-discuss.css';
+import './styles/chat-upgrade.css';
+import './styles/beginner.css';
 import './App.css';
 
-const DEFAULT_LAYOUT_PRESET = 'full-ide';
+const DEFAULT_LAYOUT_PRESET = 'split';
 const DEFAULT_PANE_LAYOUT = {
+  split: [0.52, 0.48],
   'full-ide': [0.28, 0.4, 0.32],
   'chat-files': [0.45, 0.55],
-  'chat-preview': [0.45, 0.55],
+  'files-preview': [0.62, 0.38],
 };
 const INGESTION_TASKS = ['Index file tree', 'Summarize architecture', 'Generate Spec + Blueprint'];
 
@@ -35,6 +50,38 @@ function normalizeActiveContext(raw) {
   };
 }
 
+function toImportFormData(queueItems = [], payload = {}) {
+  const items = Array.isArray(queueItems) ? queueItems : [];
+  const form = new FormData();
+  if (items.length === 1 && items[0]?.kind === 'zip' && items[0]?.entries?.[0]?.file) {
+    const only = items[0].entries[0];
+    form.append('zip_file', only.file, only.file.name || only.path || 'upload.zip');
+  } else {
+    items.forEach((item) => {
+      (item?.entries || []).forEach((entry) => {
+        if (!entry?.file) return;
+        form.append('files', entry.file, entry.path || entry.file.name || 'file');
+      });
+    });
+  }
+
+  const prompt = String(payload?.prompt ?? payload?.text ?? '');
+  const template = String(payload?.templateId || payload?.template || '');
+  const projectName = String(payload?.project_name || payload?.suggestedName || '');
+  const stackChoice = String(payload?.stack_choice || payload?.suggestedStack || '');
+
+  if (prompt) form.append('prompt', prompt);
+  if (template) form.append('template', template);
+  if (projectName) form.append('project_name', projectName);
+  if (stackChoice) form.append('stack_choice', stackChoice);
+  return form;
+}
+
+function officeModeStorageKey(projectName) {
+  const safe = String(projectName || 'ai-office').trim().toLowerCase() || 'ai-office';
+  return `ai-office:workspace-office-mode:${safe}`;
+}
+
 function isTypingTarget(target) {
   if (!target) return false;
   const tag = String(target.tagName || '').toLowerCase();
@@ -43,9 +90,36 @@ function isTypingTarget(target) {
   return false;
 }
 
+const IS_DEV = typeof import.meta !== 'undefined' && Boolean(import.meta?.env?.DEV);
+const DEBUG_SCROLL_SELECTORS = [
+  '.workspace-shell-body',
+  '.workspace-pane-scroll',
+  '.chat-content .message-list',
+  '.thread-body',
+  '.status-body',
+  '.panel-body',
+];
+
+function collectScrollSnapshot() {
+  if (typeof document === 'undefined') return [];
+  return DEBUG_SCROLL_SELECTORS.map((selector) => {
+    const node = document.querySelector(selector);
+    if (!node) return null;
+    return {
+      selector,
+      overflowY: window.getComputedStyle(node).overflowY,
+      scrollTop: Math.round(node.scrollTop || 0),
+      scrollHeight: Math.round(node.scrollHeight || 0),
+      clientHeight: Math.round(node.clientHeight || 0),
+    };
+  }).filter(Boolean);
+}
+
 export default function App() {
+  const { enabled: beginnerMode, toggleEnabled: toggleBeginnerMode } = useBeginnerMode();
+  const [theme, setTheme] = useState('dark');
+  const [themeMode, setThemeMode] = useState('dark');
   const [topTab, setTopTab] = useState('home');
-  const [settingsTab, setSettingsTab] = useState('agents');
   const [workspaceTab, setWorkspaceTab] = useState('builder');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState('default');
@@ -61,9 +135,111 @@ export default function App() {
   const [dismissCodexBanner, setDismissCodexBanner] = useState(false);
   const [repairBusy, setRepairBusy] = useState(false);
   const [ingestionProgress, setIngestionProgress] = useState(null);
+  const [creationDraft, setCreationDraft] = useState(null);
+  const [leaveDraftModalOpen, setLeaveDraftModalOpen] = useState(false);
+  const [layoutDebugOpen, setLayoutDebugOpen] = useState(false);
+  const [layoutDebug, setLayoutDebug] = useState({
+    route: 'home/builder',
+    bodyOverflow: '',
+    scrollLocks: [],
+    scrollContainers: [],
+    updatedAt: '',
+  });
+  const navHistoryRef = useRef([]);
 
   const activeProject = active.project || 'ai-office';
   const activeChannel = active.channel || channelForProject(activeProject);
+  const routeKey = `${topTab}|${workspaceTab}`;
+  const breadcrumbLabel = topTab === 'workspace'
+    ? `Workspace / ${workspaceTab}`
+    : topTab === 'settings'
+      ? 'Settings'
+      : 'Home';
+
+  useBodyScrollLock(Boolean(leaveDraftModalOpen), 'leave-draft-modal');
+
+  useEffect(() => {
+    const storedMode = (() => {
+      try {
+        return localStorage.getItem('ai-office-theme-mode');
+      } catch {
+        return null;
+      }
+    })();
+
+    if (storedMode === 'dark' || storedMode === 'light' || storedMode === 'system') {
+      setThemeMode(storedMode);
+      if (storedMode !== 'system') {
+        setTheme(storedMode);
+      }
+      return;
+    }
+
+    const legacyTheme = (() => {
+      try {
+        return localStorage.getItem('ai-office-theme');
+      } catch {
+        return null;
+      }
+    })();
+
+    if (legacyTheme === 'dark' || legacyTheme === 'light') {
+      setThemeMode(legacyTheme);
+      setTheme(legacyTheme);
+      try {
+        localStorage.setItem('ai-office-theme-mode', legacyTheme);
+      } catch {
+        // ignore storage failures
+      }
+      return;
+    }
+
+    const prefersLight = typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-color-scheme: light)').matches;
+    const initialMode = 'system';
+    const resolved = prefersLight ? 'light' : 'dark';
+    setThemeMode(initialMode);
+    setTheme(resolved);
+    try {
+      localStorage.setItem('ai-office-theme-mode', initialMode);
+      localStorage.setItem('ai-office-theme', resolved);
+    } catch {
+      // ignore storage failures
+    }
+  }, []);
+
+  useEffect(() => {
+    const media = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(prefers-color-scheme: light)')
+      : null;
+
+    const applyTheme = () => {
+      const resolved = themeMode === 'system'
+        ? (media?.matches ? 'light' : 'dark')
+        : themeMode;
+      setTheme(resolved);
+      const root = document.documentElement;
+      root.setAttribute('data-theme', resolved);
+      try {
+        localStorage.setItem('ai-office-theme', resolved);
+        localStorage.setItem('ai-office-theme-mode', themeMode);
+      } catch {
+        // ignore storage failures
+      }
+    };
+
+    applyTheme();
+    if (!media || themeMode !== 'system') return undefined;
+
+    const onChange = () => applyTheme();
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', onChange);
+      return () => media.removeEventListener('change', onChange);
+    }
+    media.addListener(onChange);
+    return () => media.removeListener(onChange);
+  }, [themeMode]);
 
   const refreshProjects = async () => {
     const resp = await fetch('/api/projects');
@@ -76,7 +252,9 @@ export default function App() {
     const resp = await fetch('/api/agents?active_only=false');
     const payload = resp.ok ? await resp.json() : [];
     const codex = (payload || []).find((item) => item.id === 'codex');
-    const mismatch = Boolean(codex && codex.backend === 'ollama' && codex.model === 'qwen2.5:14b');
+    const model = String(codex?.model || '').toLowerCase();
+    const legacyModels = new Set(['qwen2.5:14b', 'qwen2.5:32b', 'qwen2.5:7b', 'qwen3:14b', 'qwen3:32b']);
+    const mismatch = Boolean(codex && codex.backend === 'ollama' && legacyModels.has(model));
     setCodexMismatch(mismatch);
   };
 
@@ -118,6 +296,14 @@ export default function App() {
       setLoading(true);
       setError('');
       try {
+        const persistedDraft = loadCreationDraft();
+        if (!cancelled) {
+          setCreationDraft(persistedDraft);
+          if (persistedDraft?.text) {
+            setTopTab('workspace');
+          }
+        }
+
         await refreshProjects();
         await refreshCodexMismatch();
 
@@ -219,6 +405,123 @@ export default function App() {
     }
   };
 
+  const updateCreationDraft = (updater) => {
+    setCreationDraft((prev) => {
+      const base = prev || buildCreationDraft({});
+      const next = typeof updater === 'function'
+        ? updater(base)
+        : buildCreationDraft({ ...base, ...(updater || {}) });
+      saveCreationDraft(next);
+      return next;
+    });
+  };
+
+  const startCreationDraftDiscussion = async (payload) => {
+    const draft = buildCreationDraft(payload || {});
+    saveCreationDraft(draft);
+    setCreationDraft(draft);
+    setLeaveDraftModalOpen(false);
+    setWorkspaceTab('chat');
+    setTopTab('workspace');
+    setActive(normalizeActiveContext({ project: 'ai-office', channel: 'main', branch: 'main', is_app_root: true }));
+    try {
+      localStorage.setItem(officeModeStorageKey('ai-office'), 'discuss');
+    } catch {
+      // ignore storage failures
+    }
+  };
+
+  const discardCreationDraft = () => {
+    clearCreationDraft();
+    setCreationDraft(null);
+    setLeaveDraftModalOpen(false);
+  };
+
+  const createProjectFromDraft = async (overrideDraft = null) => {
+    const draft = overrideDraft || creationDraft;
+    if (!draft?.text) {
+      throw new Error('Draft prompt is empty. Edit the prompt before creating a project.');
+    }
+
+    const importRuntime = Array.isArray(draft.importQueueRuntime) ? draft.importQueueRuntime : [];
+    const hasImportQueue = Array.isArray(draft.importQueue) && draft.importQueue.length > 0;
+    const hasImportFiles = importRuntime.some((item) =>
+      Array.isArray(item?.entries) && item.entries.some((entry) => Boolean(entry?.file))
+    );
+
+    if (hasImportQueue && !hasImportFiles) {
+      throw new Error('Imported files are metadata-only after refresh. Reattach files in Home before creating this project.');
+    }
+
+    let data = null;
+    if (hasImportFiles) {
+      const form = toImportFormData(importRuntime, {
+        text: draft.text,
+        templateId: draft.templateId,
+        suggestedName: draft.suggestedName,
+        suggestedStack: draft.suggestedStack,
+      });
+      const resp = await fetch('/api/projects/import', {
+        method: 'POST',
+        body: form,
+      });
+      data = resp.ok ? await resp.json() : null;
+      if (!resp.ok) {
+        throw new Error(data?.detail || data?.error || 'Import failed.');
+      }
+      const projectName = String(data?.project || '').trim().toLowerCase();
+      const channelId = String(data?.channel_id || data?.channel || '').trim();
+      if (projectName && channelId) {
+        setIngestionProgress({
+          project: projectName,
+          channel: channelId,
+          done: 0,
+          total: INGESTION_TASKS.length,
+          status: 'running',
+        });
+      }
+    } else {
+      const resp = await fetch('/api/projects/create_from_prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: draft.text,
+          template: draft.templateId || null,
+          project_name: draft.suggestedName || null,
+        }),
+      });
+      data = resp.ok ? await resp.json() : null;
+      if (!resp.ok) {
+        throw new Error(data?.detail || data?.error || 'Project creation failed.');
+      }
+    }
+
+    const projectName = String(data?.project || data?.active?.project || '').trim().toLowerCase();
+    if (projectName) {
+      try {
+        localStorage.setItem(officeModeStorageKey(projectName), 'build');
+      } catch {
+        // ignore storage failures
+      }
+    }
+
+    clearCreationDraft();
+    setCreationDraft(null);
+    setLeaveDraftModalOpen(false);
+    await openProject(data);
+    setWorkspaceTab('spec');
+    setTopTab('workspace');
+    return data;
+  };
+
+  const openHomeTab = () => {
+    if (creationDraft?.text) {
+      setLeaveDraftModalOpen(true);
+      return;
+    }
+    setTopTab('home');
+  };
+
   const handleRepairCodex = async () => {
     setRepairBusy(true);
     try {
@@ -231,16 +534,32 @@ export default function App() {
     }
   };
 
-  const handleLayoutPresetChange = async (nextPreset) => {
+  const applyWorkspaceLayoutState = async (nextPreset, nextPreviewFocus) => {
     const preset = nextPreset || DEFAULT_LAYOUT_PRESET;
+    const focus = Boolean(nextPreviewFocus);
     setLayoutPreset(preset);
-    await saveProjectUiState(activeProject, previewFocus, preset, paneLayout);
+    setPreviewFocus(focus);
+    await saveProjectUiState(activeProject, focus, preset, paneLayout);
+  };
+
+  const handleLayoutPresetChange = async (nextPreset) => {
+    await applyWorkspaceLayoutState(nextPreset || DEFAULT_LAYOUT_PRESET, previewFocus);
   };
 
   const handlePreviewFocusToggle = async () => {
     const next = !previewFocus;
-    setPreviewFocus(next);
-    await saveProjectUiState(activeProject, next, layoutPreset, paneLayout);
+    await applyWorkspaceLayoutState(layoutPreset, next);
+  };
+
+  const handleHeaderLayoutChange = async (nextValue) => {
+    const value = String(nextValue || '').trim().toLowerCase();
+    if (value === 'focus') {
+      await applyWorkspaceLayoutState(layoutPreset, true);
+      return;
+    }
+    if (value === 'split' || value === 'full-ide') {
+      await applyWorkspaceLayoutState(value, false);
+    }
   };
 
   const handlePaneLayoutChange = async (preset, ratios) => {
@@ -313,21 +632,6 @@ export default function App() {
         detail: { title: '', description: '' },
       })
     );
-  };
-
-  const handleProjectImported = async (payload) => {
-    const projectName = String(payload?.project || '').trim().toLowerCase();
-    const channelId = String(payload?.channel_id || payload?.channel || '').trim();
-    if (projectName && channelId) {
-      setIngestionProgress({
-        project: projectName,
-        channel: channelId,
-        done: 0,
-        total: INGESTION_TASKS.length,
-        status: 'running',
-      });
-    }
-    await openProject(payload);
   };
 
   useEffect(() => {
@@ -425,8 +729,119 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
+  useEffect(() => {
+    const history = navHistoryRef.current;
+    if (history[history.length - 1] !== routeKey) {
+      history.push(routeKey);
+      if (history.length > 80) {
+        history.splice(0, history.length - 80);
+      }
+    }
+    if (IS_DEV) {
+      console.debug('[layout] route', routeKey);
+    }
+  }, [routeKey]);
+
+  const collectLayoutDebugState = useCallback(() => {
+    const locks = getBodyScrollLockSnapshot();
+    setLayoutDebug({
+      route: routeKey,
+      bodyOverflow: locks?.bodyOverflow || '',
+      scrollLocks: locks?.locks || [],
+      scrollContainers: collectScrollSnapshot(),
+      updatedAt: new Date().toLocaleTimeString(),
+    });
+  }, [routeKey]);
+
+  useEffect(() => {
+    if (!IS_DEV || !layoutDebugOpen) return undefined;
+    collectLayoutDebugState();
+    const interval = window.setInterval(collectLayoutDebugState, 1000);
+    const onLockChange = () => collectLayoutDebugState();
+    window.addEventListener('ai-office:scroll-lock-changed', onLockChange);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('ai-office:scroll-lock-changed', onLockChange);
+    };
+  }, [layoutDebugOpen, collectLayoutDebugState]);
+
+  const goBack = useCallback(() => {
+    const detail = { handled: false, source: 'back-button' };
+    window.dispatchEvent(new CustomEvent('ai-office:escape', { detail }));
+    if (detail.handled) return;
+
+    const history = navHistoryRef.current;
+    if (history.length > 1) {
+      history.pop();
+      const previous = String(history[history.length - 1] || '');
+      const [prevTopTab, prevWorkspaceTab] = previous.split('|');
+      setTopTab(prevTopTab || 'workspace');
+      if ((prevTopTab || 'workspace') === 'workspace') {
+        setWorkspaceTab(prevWorkspaceTab || 'chat');
+      }
+      return;
+    }
+
+    if (topTab !== 'workspace') {
+      setTopTab('workspace');
+      setWorkspaceTab('chat');
+      return;
+    }
+
+    if (workspaceTab !== 'chat') {
+      setWorkspaceTab('chat');
+      return;
+    }
+
+    setTopTab('home');
+  }, [topTab, workspaceTab]);
+
+  const resetUiState = useCallback(() => {
+    clearAllBodyScrollLocks();
+    window.dispatchEvent(new CustomEvent('ai-office:reset-ui-state'));
+    setPaletteOpen(false);
+    setLeaveDraftModalOpen(false);
+    setTopTab('workspace');
+    setWorkspaceTab('chat');
+    setError('');
+    if (IS_DEV) {
+      collectLayoutDebugState();
+    }
+  }, [collectLayoutDebugState]);
+
+  useEscapeKey((event) => {
+    const detail = { handled: false, source: 'global-escape' };
+    window.dispatchEvent(new CustomEvent('ai-office:escape', { detail }));
+    if (detail.handled) {
+      event.preventDefault();
+      return;
+    }
+    if (topTab !== 'workspace') {
+      setTopTab('workspace');
+      setWorkspaceTab('chat');
+      event.preventDefault();
+      return;
+    }
+    if (workspaceTab !== 'chat') {
+      setWorkspaceTab('chat');
+      event.preventDefault();
+    }
+  }, true);
+
+  const cycleThemeMode = () => {
+    setThemeMode((prev) => {
+      if (prev === 'dark') return 'light';
+      if (prev === 'light') return 'system';
+      return 'dark';
+    });
+  };
+
+  const themeLabel = themeMode === 'system'
+    ? `System (${theme === 'dark' ? 'Dark' : 'Light'})`
+    : (theme === 'dark' ? 'Dark' : 'Light');
+
   return (
-    <div className={`app app-v2 ${previewFocus ? 'preview-focus-enabled' : ''}`}>
+    <div className={`app app-v2 ${previewFocus ? 'preview-focus-enabled' : ''}`} data-theme={theme}>
       {!previewFocus && (
         <ProjectsSidebar
           projects={sortedProjects}
@@ -439,20 +854,130 @@ export default function App() {
 
       <div className="app-main-v2">
         <header className="app-topbar-v2">
-          <div className="app-topbar-nav">
-            <button className={topTab === 'home' ? 'active' : ''} onClick={() => setTopTab('home')}>Home</button>
-            <button className={topTab === 'workspace' ? 'active' : ''} onClick={() => setTopTab('workspace')}>Workspace</button>
-            <button className={topTab === 'settings' ? 'active' : ''} onClick={() => setTopTab('settings')}>Settings</button>
-          </div>
-          {topTab === 'workspace' && (
-            <div className="app-topbar-actions">
-              <span className="pill">Project: {activeProject}</span>
-              <span className="pill">Branch: {active.branch || 'main'}</span>
-              <button className="refresh-btn" onClick={handlePreviewFocusToggle}>
-                {previewFocus ? 'Exit Preview Mode' : 'Preview Mode'}
-              </button>
+          <div className="app-header-left">
+            <button className="refresh-btn ui-btn app-back-btn" onClick={goBack}>
+              Back
+            </button>
+            <div className="app-brand-mark" aria-label="AI Office">
+              <span className="app-brand-dot" />
+              <span className="app-brand-text">AI Office</span>
             </div>
-          )}
+            <span className="app-route-breadcrumb">{breadcrumbLabel}</span>
+            <nav className="app-topbar-nav" aria-label="Primary">
+              <button className={`ui-tab ${topTab === 'home' ? 'active ui-tab-active' : ''}`} onClick={openHomeTab}>Home</button>
+              <button className={`ui-tab ${topTab === 'workspace' ? 'active ui-tab-active' : ''}`} onClick={() => setTopTab('workspace')}>Workspace</button>
+              <button className={`ui-tab ${topTab === 'settings' ? 'active ui-tab-active' : ''}`} onClick={() => setTopTab('settings')}>Settings</button>
+            </nav>
+          </div>
+
+          <div className="app-header-right">
+            <div className="app-header-details">
+              {topTab === 'workspace' && (
+                <>
+                  <span className="pill ui-chip">Project: {activeProject}</span>
+                  <span className="pill ui-chip">Branch: {active.branch || 'main'}</span>
+                  <label className="app-layout-select-wrap">
+                    <span>Layout</span>
+                    <select
+                      className="ui-input"
+                      value={previewFocus ? 'focus' : layoutPreset}
+                      onChange={(event) => handleHeaderLayoutChange(event.target.value)}
+                    >
+                      <option value="split">Split</option>
+                      <option value="full-ide">Full IDE</option>
+                      <option value="focus">Focus</option>
+                    </select>
+                  </label>
+                  <span className={`pill ui-chip ${previewFocus ? 'is-active' : ''}`}>
+                    {previewFocus ? 'Preview Focus ON' : 'Preview Focus OFF'}
+                  </span>
+                  <span className={`pill ui-chip ${beginnerMode ? 'is-active' : ''}`}>
+                    Beginner: {beginnerMode ? 'ON' : 'OFF'}
+                  </span>
+                  <button className="refresh-btn ui-btn" onClick={handlePreviewFocusToggle}>
+                    {previewFocus ? 'Exit Preview Mode' : 'Preview Mode'}
+                  </button>
+                  <button
+                    className={`refresh-btn ui-btn beginner-toggle-chip ${beginnerMode ? 'ui-btn-primary' : ''}`}
+                    onClick={toggleBeginnerMode}
+                  >
+                    {beginnerMode ? 'Beginner Mode On' : 'Beginner Mode Off'}
+                  </button>
+                </>
+              )}
+              <button
+                className="refresh-btn ui-btn app-theme-toggle"
+                onClick={cycleThemeMode}
+              >
+                Theme: {themeLabel}
+              </button>
+              {IS_DEV && (
+                <>
+                  <button
+                    className={`refresh-btn ui-btn ${layoutDebugOpen ? 'ui-btn-primary' : ''}`}
+                    onClick={() => setLayoutDebugOpen((prev) => !prev)}
+                  >
+                    {layoutDebugOpen ? 'Hide Layout Debug' : 'Layout Debug'}
+                  </button>
+                  <button className="refresh-btn ui-btn" onClick={resetUiState}>
+                    Reset UI State
+                  </button>
+                </>
+              )}
+            </div>
+
+            <details className="app-header-compact-menu">
+              <summary>Context</summary>
+              <div className="app-header-compact-popover">
+                {topTab === 'workspace' ? (
+                  <>
+                    <div className="app-header-compact-row"><strong>Project</strong><span>{activeProject}</span></div>
+                    <div className="app-header-compact-row"><strong>Branch</strong><span>{active.branch || 'main'}</span></div>
+                    <label className="app-layout-select-wrap compact">
+                      <span>Layout</span>
+                      <select
+                        className="ui-input"
+                        value={previewFocus ? 'focus' : layoutPreset}
+                        onChange={(event) => handleHeaderLayoutChange(event.target.value)}
+                      >
+                        <option value="split">Split</option>
+                        <option value="full-ide">Full IDE</option>
+                        <option value="focus">Focus</option>
+                      </select>
+                    </label>
+                    <button className="refresh-btn ui-btn" onClick={handlePreviewFocusToggle}>
+                      {previewFocus ? 'Exit Preview Mode' : 'Preview Mode'}
+                    </button>
+                    <button
+                      className={`refresh-btn ui-btn beginner-toggle-chip ${beginnerMode ? 'ui-btn-primary' : ''}`}
+                      onClick={toggleBeginnerMode}
+                    >
+                      {beginnerMode ? 'Beginner Mode On' : 'Beginner Mode Off'}
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  className="refresh-btn ui-btn app-theme-toggle"
+                  onClick={cycleThemeMode}
+                >
+                  Theme: {themeLabel}
+                </button>
+                {IS_DEV && (
+                  <>
+                    <button
+                      className={`refresh-btn ui-btn ${layoutDebugOpen ? 'ui-btn-primary' : ''}`}
+                      onClick={() => setLayoutDebugOpen((prev) => !prev)}
+                    >
+                      {layoutDebugOpen ? 'Hide Layout Debug' : 'Layout Debug'}
+                    </button>
+                    <button className="refresh-btn ui-btn" onClick={resetUiState}>
+                      Reset UI State
+                    </button>
+                  </>
+                )}
+              </div>
+            </details>
+          </div>
         </header>
 
         {loading && <div className="panel-empty">Loading workspace...</div>}
@@ -462,9 +987,9 @@ export default function App() {
           <CreateHome
             projects={sortedProjects}
             onOpenProject={openProject}
+            onStartDraftDiscussion={startCreationDraftDiscussion}
             onProjectDeleted={async () => refreshProjects()}
             onProjectRenamed={async () => refreshProjects()}
-            onProjectImported={handleProjectImported}
           />
         )}
 
@@ -480,6 +1005,17 @@ export default function App() {
             previewFocus={previewFocus}
             activeTab={workspaceTab}
             onActiveTabChange={setWorkspaceTab}
+            creationDraft={creationDraft}
+            onCreationDraftChange={updateCreationDraft}
+            onCreateProjectFromDraft={createProjectFromDraft}
+            onDiscardCreationDraft={() => {
+              discardCreationDraft();
+              setTopTab('home');
+            }}
+            onEditCreationDraft={(payload) => {
+              updateCreationDraft((prev) => buildCreationDraft({ ...prev, ...(payload || {}) }));
+              setTopTab('home');
+            }}
             ingestionProgress={
               ingestionProgress?.project === activeProject
                 ? ingestionProgress
@@ -489,22 +1025,11 @@ export default function App() {
         )}
 
         {!loading && topTab === 'settings' && (
-          <div className="settings-shell">
-            <div className="settings-tabs">
-              <button className={settingsTab === 'agents' ? 'active' : ''} onClick={() => setSettingsTab('agents')}>
-                Agents
-              </button>
-              <button className={settingsTab === 'providers' ? 'active' : ''} onClick={() => setSettingsTab('providers')}>
-                Providers
-              </button>
-              <button className={settingsTab === 'controls' ? 'active' : ''} onClick={() => setSettingsTab('controls')}>
-                Controls
-              </button>
-            </div>
-            {settingsTab === 'agents' && <AgentConfig />}
-            {settingsTab === 'providers' && <ProviderSettings />}
-            {settingsTab === 'controls' && <Controls />}
-          </div>
+          <SettingsShell
+            themeMode={themeMode}
+            onThemeModeChange={setThemeMode}
+            activeProject={activeProject}
+          />
         )}
       </div>
 
@@ -515,14 +1040,81 @@ export default function App() {
             <span>Repair now to route Codex through OpenAI.</span>
           </div>
           <div className="codex-mismatch-actions">
-            <button className="refresh-btn" onClick={handleRepairCodex} disabled={repairBusy}>
+            <button className="refresh-btn ui-btn ui-btn-primary" onClick={handleRepairCodex} disabled={repairBusy}>
               {repairBusy ? 'Repairing...' : 'Repair now'}
             </button>
-            <button className="msg-action-btn" onClick={() => setDismissCodexBanner(true)}>
+            <button className="msg-action-btn ui-btn" onClick={() => setDismissCodexBanner(true)}>
               Dismiss
             </button>
           </div>
         </div>
+      )}
+
+      {leaveDraftModalOpen && (
+        <div className="workspace-handoff-backdrop">
+          <div className="workspace-handoff-modal">
+            <h3>Uncreated Draft</h3>
+            <p>
+              You have an uncreated project draft. Keep discussing it or discard it before leaving Workspace.
+            </p>
+            <div className="workspace-handoff-actions">
+              <button
+                type="button"
+                className="msg-action-btn ui-btn"
+                onClick={() => {
+                  setLeaveDraftModalOpen(false);
+                  setTopTab('workspace');
+                }}
+              >
+                Keep working
+              </button>
+              <button
+                type="button"
+                className="refresh-btn ui-btn ui-btn-primary"
+                onClick={() => {
+                  discardCreationDraft();
+                  setTopTab('home');
+                }}
+              >
+                Discard Draft
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {IS_DEV && layoutDebugOpen && (
+        <aside className="layout-debug-panel">
+          <header>
+            <strong>Layout Debug</strong>
+            <span>{layoutDebug.updatedAt || '—'}</span>
+          </header>
+          <div className="layout-debug-body">
+            <div><strong>Route:</strong> {layoutDebug.route}</div>
+            <div><strong>Body overflow:</strong> {layoutDebug.bodyOverflow || '(auto)'}</div>
+            <div><strong>Scroll locks:</strong> {layoutDebug.scrollLocks.length}</div>
+            <div className="layout-debug-list">
+              {(layoutDebug.scrollLocks || []).map((lock) => (
+                <div key={lock.id}>
+                  <code>{lock.reason}</code>
+                </div>
+              ))}
+              {layoutDebug.scrollLocks.length === 0 ? <div>none</div> : null}
+            </div>
+            <div><strong>Scroll containers:</strong></div>
+            <div className="layout-debug-list">
+              {(layoutDebug.scrollContainers || []).map((item) => (
+                <div key={item.selector}>
+                  <code>{item.selector}</code> [{item.overflowY}] {item.scrollTop}/{item.scrollHeight}
+                </div>
+              ))}
+            </div>
+          </div>
+          <footer>
+            <button className="refresh-btn ui-btn" onClick={collectLayoutDebugState}>Refresh</button>
+            <button className="refresh-btn ui-btn" onClick={resetUiState}>Reset UI State</button>
+          </footer>
+        </aside>
       )}
 
       <CommandPalette

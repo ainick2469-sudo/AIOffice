@@ -19,6 +19,7 @@ class MessageOut(BaseModel):
     content: str
     msg_type: str = "message"
     parent_id: Optional[int] = None
+    meta: Optional[dict] = None
     pinned: bool = False
     created_at: str
 
@@ -85,6 +86,7 @@ class AgentCredentialTestOut(BaseModel):
     model_hint: str
     latency_ms: Optional[int] = None
     error: Optional[str] = None
+    details: Optional[dict] = None
 
 
 class ProviderConfigIn(BaseModel):
@@ -123,6 +125,41 @@ class ProviderTestOut(BaseModel):
     model_hint: Optional[str] = None
     latency_ms: Optional[int] = None
     error: Optional[str] = None
+    details: Optional[dict] = None
+
+
+class ProviderSettingsUpdateIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    api_key: Optional[str] = Field(default=None, max_length=500)
+    model_default: Optional[str] = Field(default=None, max_length=200)
+    base_url: Optional[str] = Field(default=None, max_length=500)
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None
+
+
+class ProviderSettingsIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    openai: Optional[ProviderSettingsUpdateIn] = None
+    claude: Optional[ProviderSettingsUpdateIn] = None
+    fallback_to_ollama: Optional[bool] = None
+
+
+class ProviderSettingsProviderOut(BaseModel):
+    configured: bool = False
+    key_masked: Optional[str] = None
+    model_default: Optional[str] = None
+    base_url: Optional[str] = None
+    key_ref: Optional[str] = None
+    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None
+    last_tested_at: Optional[str] = None
+    last_error: Optional[str] = None
+
+
+class ProviderSettingsOut(BaseModel):
+    openai: ProviderSettingsProviderOut
+    claude: ProviderSettingsProviderOut
+    fallback_to_ollama: bool = False
 
 
 class TaskIn(BaseModel):
@@ -264,14 +301,14 @@ class BuildConfigIn(BaseModel):
 
 class ProjectUIStateIn(BaseModel):
     preview_focus_mode: bool = False
-    layout_preset: Literal["chat-preview", "chat-files", "full-ide", "focus"] = "full-ide"
+    layout_preset: Literal["split", "chat-preview", "chat-files", "full-ide", "focus"] = "split"
     pane_layout: Optional[dict[str, list[float]]] = None
 
 
 class ProjectUIStateOut(BaseModel):
     project_name: str
     preview_focus_mode: bool = False
-    layout_preset: Literal["chat-preview", "chat-files", "full-ide", "focus"] = "full-ide"
+    layout_preset: Literal["split", "chat-preview", "chat-files", "full-ide", "focus"] = "split"
     pane_layout: Optional[dict[str, list[float]]] = None
     last_opened_at: Optional[str] = None
 

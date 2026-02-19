@@ -14,7 +14,7 @@ def test_provider_config_round_trip_redacts_secret():
             "key_ref": "openai_default",
             "api_key": api_key,
             "base_url": "https://api.openai.com/v1",
-            "default_model": "gpt-4o-mini",
+            "default_model": "gpt-5.2",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -46,17 +46,25 @@ def test_provider_test_endpoint_uses_provider_config(monkeypatch):
     )
     assert saved.status_code == 200, saved.text
 
-    async def _fake_generate(**_kwargs):
-        return "pong"
+    async def _fake_probe_connection(**_kwargs):
+        return {
+            "ok": True,
+            "model_hint": "gpt-5.2",
+            "latency_ms": 21,
+            "error": None,
+            "details": {"source": "test"},
+        }
 
-    monkeypatch.setattr("server.openai_adapter.generate", _fake_generate)
+    monkeypatch.setattr("server.openai_adapter.probe_connection", _fake_probe_connection)
 
     tested = client.post(
         "/api/providers/test",
-        json={"provider": "openai", "model": "gpt-4o-mini", "key_ref": "openai_default"},
+        json={"provider": "openai", "model": "gpt-5.2", "key_ref": "openai_default"},
     )
     assert tested.status_code == 200, tested.text
     payload = tested.json()
     assert payload["ok"] is True
     assert payload["provider"] == "openai"
-    assert payload["model_hint"] == "gpt-4o-mini"
+    assert payload["model_hint"] == "gpt-5.2"
+    assert payload["latency_ms"] == 21
+    assert payload["details"]["source"] == "test"

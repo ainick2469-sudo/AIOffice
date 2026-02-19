@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import useBodyScrollLock from '../hooks/useBodyScrollLock';
 
 function matches(command, query) {
   if (!query) return true;
@@ -9,6 +10,8 @@ function matches(command, query) {
 export default function CommandPalette({ open = false, mode = 'default', commands = [], onClose }) {
   const [query, setQuery] = useState(mode === 'files' ? 'open files' : '');
   const [cursor, setCursor] = useState(0);
+
+  useBodyScrollLock(Boolean(open), 'command-palette');
 
   const filtered = useMemo(() => {
     const items = (commands || []).filter((item) => matches(item, query));
@@ -44,6 +47,13 @@ export default function CommandPalette({ open = false, mode = 'default', command
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [open, filtered, cursor, onClose]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onResetUi = () => onClose?.();
+    window.addEventListener('ai-office:reset-ui-state', onResetUi);
+    return () => window.removeEventListener('ai-office:reset-ui-state', onResetUi);
+  }, [open, onClose]);
 
   if (!open) return null;
 

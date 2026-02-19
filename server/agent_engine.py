@@ -32,8 +32,6 @@ from .database import (
     list_tasks,
     get_agent_api_key,
     get_agent_credential_meta,
-    get_provider_config,
-    get_provider_secret,
 )
 from .websocket import manager
 from .memory import get_known_context
@@ -46,6 +44,7 @@ from . import project_manager
 from . import git_tools
 from . import autonomous_worker
 from . import verification_loop
+from . import provider_config
 from .observability import emit_console_event
 
 logger = logging.getLogger("ai-office.engine")
@@ -66,6 +65,7 @@ _channel_turn_policy: dict[str, dict] = {}
 _review_mode: dict[str, bool] = {}
 _review_last_run: dict[str, float] = {}
 _sprint_tasks: dict[str, asyncio.Task] = {}
+_response_meta_queue: dict[tuple[str, str], list[dict]] = {}
 
 BUILD_FIX_MAX_ATTEMPTS = 3
 FAILURE_ESCALATION_THRESHOLD = 3
@@ -112,6 +112,29 @@ TECHNICAL_COMPLEXITY_KEYWORDS = (
     "build", "code", "design", "architecture", "implement", "fix", "test",
     "api", "database", "schema", "frontend", "backend", "deploy", "debug",
 )
+
+
+def _queue_response_meta(channel: str, agent_id: str, meta: Optional[dict]) -> None:
+    if not isinstance(meta, dict):
+        return
+    key = ((channel or "main").strip() or "main", (agent_id or "").strip())
+    if not key[1]:
+        return
+    queue = _response_meta_queue.setdefault(key, [])
+    queue.append(dict(meta))
+    if len(queue) > 20:
+        del queue[:-20]
+
+
+def _pop_response_meta(channel: str, agent_id: str) -> dict:
+    key = ((channel or "main").strip() or "main", (agent_id or "").strip())
+    queue = _response_meta_queue.get(key) or []
+    if not queue:
+        return {}
+    item = queue.pop(0)
+    if not queue:
+        _response_meta_queue.pop(key, None)
+    return dict(item or {})
 
 
 def _looks_risky(text: str) -> bool:
@@ -314,19 +337,21 @@ async def _resolve_remote_credentials(
     backend: str,
     provider_key_ref: Optional[str] = None,
     agent_base_url: Optional[str] = None,
-) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """Return (api_key, base_url, error_message)."""
+) -> tuple[Optional[str], Optional[str], Optional[str], str]:
+    """Return (api_key, base_url, error_message, credential_source)."""
     backend_norm = (backend or "").strip().lower()
     if backend_norm not in {"openai", "claude"}:
-        return None, None, None
+        return None, None, None, "none"
 
-    api_key = await get_agent_api_key(agent_id, backend_norm)
+    api_key = (await get_agent_api_key(agent_id, backend_norm) or "").strip()
     meta = await get_agent_credential_meta(agent_id, backend_norm)
-    provider_cfg = await get_provider_config(backend_norm)
-
-    key_ref = (provider_key_ref or "").strip() or (provider_cfg.get("key_ref") or "").strip()
-    if not api_key and key_ref:
-        api_key = await get_provider_secret(key_ref)
+    provider_cfg = await provider_config.resolve_provider_runtime(
+        backend_norm,
+        key_ref_override=provider_key_ref,
+        api_key_override=api_key or None,
+        base_url_override=agent_base_url,
+    )
+    key_ref = (provider_cfg.get("key_ref") or "").strip()
 
     base_url = (agent_base_url or "").strip() or None
     if not base_url and isinstance(meta, dict):
@@ -334,8 +359,14 @@ async def _resolve_remote_credentials(
     if not base_url:
         base_url = (provider_cfg.get("base_url") or "").strip() or None
 
-    env_ok = openai_adapter.is_available() if backend_norm == "openai" else claude_adapter.is_available()
-    if not api_key and not env_ok:
+    resolved_key = (provider_cfg.get("api_key") or "").strip()
+    raw_key_source = str(provider_cfg.get("key_source") or "").strip().lower()
+    credential_source = "agent_override" if raw_key_source == "override" else "provider_default"
+    if resolved_key:
+        api_key = resolved_key
+
+    if not api_key:
+        setting_hint = "Settings → API Keys"
         env_var = "OPENAI_API_KEY" if backend_norm == "openai" else "ANTHROPIC_API_KEY"
         await emit_console_event(
             channel=channel,
@@ -343,14 +374,57 @@ async def _resolve_remote_credentials(
             source="agent_engine",
             message=f"{backend_norm} backend missing key for {agent_id}",
             project_name=project_name,
-            data={"agent_id": agent_id, "backend": backend_norm, "key_ref": key_ref or None},
+            data={
+                "agent_id": agent_id,
+                "backend": backend_norm,
+                "key_ref": key_ref or None,
+                "key_source": provider_cfg.get("key_source"),
+            },
         )
         return None, base_url, (
             f"{backend_norm.upper()} backend is not configured for agent '{agent_id}'. "
-            f"Set a key in the Agents tab (Credentials) or set {env_var} in .env."
-        )
+            f"Set a key in {setting_hint} (or {env_var}) and run provider test."
+        ), credential_source
 
-    return (api_key or None), base_url, None
+    return (api_key or None), base_url, None, credential_source
+
+
+async def _fallback_to_ollama_enabled() -> bool:
+    raw = (await get_setting("providers.fallback_to_ollama") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+async def _try_ollama_fallback(
+    *,
+    channel: str,
+    project_name: str,
+    agent_id: str,
+    prompt: str,
+    system: str,
+    reason: str,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    if not await ollama_client.is_available():
+        return None, None, "Ollama fallback requested but Ollama is not running."
+    fallback_model = (await get_setting("providers.ollama_fallback_model") or "").strip() or "qwen2.5:14b"
+    response = await ollama_client.generate(
+        model=fallback_model,
+        prompt=prompt,
+        system=system,
+        temperature=0.75,
+        max_tokens=400,
+    )
+    if not (response or "").strip():
+        return None, fallback_model, "Ollama fallback returned an empty response."
+    await emit_console_event(
+        channel=channel,
+        event_type="backend_fallback",
+        source="agent_engine",
+        message=f"{agent_id} fell back to ollama",
+        project_name=project_name,
+        severity="warning",
+        data={"agent_id": agent_id, "fallback_model": fallback_model, "reason": reason[:500]},
+    )
+    return f"(FALLBACK: OLLAMA)\n{response.strip()}", fallback_model, None
 
 
 async def _generate_auto_review(
@@ -361,7 +435,13 @@ async def _generate_auto_review(
     excerpt: str,
 ) -> Optional[str]:
     active_project = await project_manager.get_active_project(channel)
-    backend = reviewer.get("backend", "ollama")
+    backend = str(reviewer.get("backend") or "").strip().lower()
+    if backend not in {"claude", "openai", "ollama"}:
+        return (
+            "Severity: warning\n"
+            f"- Agent backend is misconfigured ({backend or 'missing'}). "
+            "Set backend explicitly to openai, claude, or ollama."
+        )
 
     system = (
         (reviewer.get("system_prompt") or "You are a strict code reviewer.")
@@ -390,7 +470,7 @@ async def _generate_auto_review(
                     "Severity: warning\n"
                     "- API budget reached, auto-review skipped for this write."
                 )
-            api_key, base_url, backend_err = await _resolve_remote_credentials(
+            api_key, base_url, backend_err, _credential_source = await _resolve_remote_credentials(
                 channel=channel,
                 project_name=active_project["project"],
                 agent_id=reviewer.get("id", "reviewer"),
@@ -406,7 +486,7 @@ async def _generate_auto_review(
                 system=system,
                 temperature=0.2,
                 max_tokens=450,
-                model=reviewer.get("model", "claude-sonnet-4-20250514"),
+                model=reviewer.get("model", "claude-opus-4-6"),
                 api_key=api_key,
                 base_url=base_url,
                 channel=channel,
@@ -418,7 +498,7 @@ async def _generate_auto_review(
                 system=system,
                 temperature=0.2,
                 max_tokens=450,
-                model=reviewer.get("model", "gpt-4o-mini"),
+                model=reviewer.get("model", "gpt-5.2"),
                 api_key=api_key,
                 base_url=base_url,
                 channel=channel,
@@ -604,7 +684,12 @@ def _agent_write_counts(messages: list[dict], after_id: int) -> dict[str, int]:
 
 async def _generate_sprint_task_plan(director: dict, channel: str, goal: str) -> Optional[str]:
     active_project = await project_manager.get_active_project(channel)
-    backend = director.get("backend", "ollama")
+    backend = str(director.get("backend") or "").strip().lower()
+    if backend not in {"claude", "openai", "ollama"}:
+        return (
+            f"Agent backend is misconfigured ({backend or 'missing'}). "
+            "Set backend explicitly to openai, claude, or ollama."
+        )
     system = (
         (director.get("system_prompt") or "You are a project director.")
         + "\n\nSPRINT PLANNING MODE:\n"
@@ -626,7 +711,7 @@ async def _generate_sprint_task_plan(director: dict, channel: str, goal: str) ->
             used = budget_state["used_usd"]
             if budget > 0 and used >= budget:
                 return "API budget reached. Sprint planner cannot call remote model right now."
-            api_key, base_url, backend_err = await _resolve_remote_credentials(
+            api_key, base_url, backend_err, _credential_source = await _resolve_remote_credentials(
                 channel=channel,
                 project_name=active_project["project"],
                 agent_id=director.get("id", "director"),
@@ -642,7 +727,7 @@ async def _generate_sprint_task_plan(director: dict, channel: str, goal: str) ->
                 system=system,
                 temperature=0.35,
                 max_tokens=500,
-                model=director.get("model", "claude-sonnet-4-20250514"),
+                model=director.get("model", "claude-opus-4-6"),
                 api_key=api_key,
                 base_url=base_url,
                 channel=channel,
@@ -654,7 +739,7 @@ async def _generate_sprint_task_plan(director: dict, channel: str, goal: str) ->
                 system=system,
                 temperature=0.35,
                 max_tokens=500,
-                model=director.get("model", "gpt-4o-mini"),
+                model=director.get("model", "gpt-5.2"),
                 api_key=api_key,
                 base_url=base_url,
                 channel=channel,
@@ -1195,7 +1280,12 @@ def _oracle_build_context(project_root: Path, question: str, selected_files: lis
 
 async def _generate_oracle_answer(agent: dict, channel: str, question: str, file_context: str, file_tree: str) -> Optional[str]:
     active_project = await project_manager.get_active_project(channel)
-    backend = agent.get("backend", "ollama")
+    backend = str(agent.get("backend") or "").strip().lower()
+    if backend not in {"claude", "openai", "ollama"}:
+        return (
+            f"Agent backend is misconfigured ({backend or 'missing'}). "
+            "Set backend explicitly to openai, claude, or ollama."
+        )
 
     system = (
         (agent.get("system_prompt") or "You are a researcher.")
@@ -1226,7 +1316,7 @@ async def _generate_oracle_answer(agent: dict, channel: str, question: str, file
                     f"Current estimated usage is ${used:.2f}. "
                     "Please raise budget or switch this query to local models."
                 )
-            api_key, base_url, backend_err = await _resolve_remote_credentials(
+            api_key, base_url, backend_err, _credential_source = await _resolve_remote_credentials(
                 channel=channel,
                 project_name=active_project["project"],
                 agent_id=agent.get("id", "researcher"),
@@ -1242,7 +1332,7 @@ async def _generate_oracle_answer(agent: dict, channel: str, question: str, file
                 system=system,
                 temperature=0.2,
                 max_tokens=700,
-                model=agent.get("model", "claude-sonnet-4-20250514"),
+                model=agent.get("model", "claude-opus-4-6"),
                 api_key=api_key,
                 base_url=base_url,
                 channel=channel,
@@ -1254,7 +1344,7 @@ async def _generate_oracle_answer(agent: dict, channel: str, question: str, file
                 system=system,
                 temperature=0.2,
                 max_tokens=700,
-                model=agent.get("model", "gpt-4o-mini"),
+                model=agent.get("model", "gpt-5.2"),
                 api_key=api_key,
                 base_url=base_url,
                 channel=channel,
@@ -2203,7 +2293,20 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
         f"Now respond as {agent['display_name']}. Respond to the user and build on teammate context without repeating."
     )
 
-    backend = agent.get("backend", "ollama")
+    backend = str(agent.get("backend") or "").strip().lower()
+    if backend not in {"claude", "openai", "ollama"}:
+        await emit_console_event(
+            channel=channel,
+            event_type="backend_unavailable",
+            source="agent_engine",
+            message=f"{agent['id']} backend misconfigured",
+            project_name=active_project["project"],
+            data={"agent_id": agent["id"], "backend": backend or None},
+        )
+        return (
+            f"Agent '{agent.get('display_name', agent.get('id', 'agent'))}' backend is misconfigured "
+            f"({backend or 'missing'}). Set backend to openai, claude, or ollama."
+        )
     await emit_console_event(
         channel=channel,
         event_type="prompt",
@@ -2224,6 +2327,11 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
 
     try:
         started_at = time.time()
+        credential_source = "none"
+        fallback_enabled = await _fallback_to_ollama_enabled()
+        fallback_used = False
+        response_backend = backend
+        response_model = (agent.get("model") or "").strip() or None
         if backend in {"claude", "openai"}:
             budget_state = await _api_budget_state(channel, active_project["project"])
             budget = budget_state["budget_usd"]
@@ -2234,7 +2342,7 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                     f"Current estimated usage is ${used:.2f}. "
                     "Please raise budget or switch this task to local models."
                 )
-            api_key, base_url, backend_err = await _resolve_remote_credentials(
+            api_key, base_url, backend_err, credential_source = await _resolve_remote_credentials(
                 channel=channel,
                 project_name=active_project["project"],
                 agent_id=agent.get("id", "agent"),
@@ -2243,32 +2351,136 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                 agent_base_url=agent.get("base_url"),
             )
             if backend_err:
-                return backend_err
+                if not fallback_enabled:
+                    return f"{backend_err} Open Settings -> API Keys and click Test Connection."
+                response, fallback_model, fallback_err = await _try_ollama_fallback(
+                    channel=channel,
+                    project_name=active_project["project"],
+                    agent_id=agent.get("id", "agent"),
+                    prompt=prompt,
+                    system=system,
+                    reason=backend_err,
+                )
+                if fallback_err:
+                    return (
+                        f"{backend_err} Fallback is enabled but unavailable: {fallback_err} "
+                        "Open Settings -> API Keys and fix provider configuration."
+                    )
+                fallback_used = True
+                response_backend = "ollama"
+                response_model = fallback_model
         if backend == "claude":
-            response = await claude_adapter.generate(
-                prompt=prompt,
-                system=system,
-                temperature=0.7,
-                max_tokens=600,
-                model=agent.get("model", "claude-sonnet-4-20250514"),
-                api_key=api_key,
-                base_url=base_url,
-                channel=channel,
-                project_name=active_project["project"],
-            )
+            if not fallback_used:
+                response = await claude_adapter.generate(
+                    prompt=prompt,
+                    system=system,
+                    temperature=0.7,
+                    max_tokens=600,
+                    model=agent.get("model", "claude-opus-4-6"),
+                    api_key=api_key,
+                    base_url=base_url,
+                    channel=channel,
+                    project_name=active_project["project"],
+                )
+                response_model = agent.get("model", "claude-opus-4-6")
+            if not (response or "").strip():
+                detail = claude_adapter.get_last_error() or "Claude returned an empty response."
+                await emit_console_event(
+                    channel=channel,
+                    event_type="backend_error",
+                    source="agent_engine",
+                    message=f"claude request failed for {agent.get('id')}",
+                    project_name=active_project["project"],
+                    severity="warning",
+                    data={
+                        "agent_id": agent.get("id"),
+                        "backend": "claude",
+                        "model": agent.get("model"),
+                        "error": detail,
+                    },
+                )
+                if fallback_enabled:
+                    response, fallback_model, fallback_err = await _try_ollama_fallback(
+                        channel=channel,
+                        project_name=active_project["project"],
+                        agent_id=agent.get("id", "agent"),
+                        prompt=prompt,
+                        system=system,
+                        reason=detail,
+                    )
+                    if not fallback_err and (response or "").strip():
+                        fallback_used = True
+                        response_backend = "ollama"
+                        response_model = fallback_model
+                    else:
+                        return (
+                            f"Claude backend error for {agent.get('display_name', agent.get('id', 'agent'))}: {detail}. "
+                            "Open Settings -> API Keys and run Test Claude."
+                        )
+                else:
+                    return (
+                        f"Claude backend error for {agent.get('display_name', agent.get('id', 'agent'))}: {detail}. "
+                        "Open Settings -> API Keys and run Test Claude."
+                    )
         elif backend == "openai":
-            response = await openai_adapter.generate(
-                prompt=prompt,
-                system=system,
-                temperature=0.7,
-                max_tokens=600,
-                model=agent.get("model", "gpt-4o-mini"),
-                api_key=api_key,
-                base_url=base_url,
-                channel=channel,
-                project_name=active_project["project"],
-            )
+            if not fallback_used:
+                response = await openai_adapter.generate(
+                    prompt=prompt,
+                    system=system,
+                    temperature=0.7,
+                    max_tokens=600,
+                    model=agent.get("model", "gpt-5.2"),
+                    api_key=api_key,
+                    base_url=base_url,
+                    channel=channel,
+                    project_name=active_project["project"],
+                )
+                response_model = agent.get("model", "gpt-5.2")
+            if not (response or "").strip():
+                detail = openai_adapter.get_last_error() or "OpenAI returned an empty response."
+                await emit_console_event(
+                    channel=channel,
+                    event_type="backend_error",
+                    source="agent_engine",
+                    message=f"openai request failed for {agent.get('id')}",
+                    project_name=active_project["project"],
+                    severity="warning",
+                    data={
+                        "agent_id": agent.get("id"),
+                        "backend": "openai",
+                        "model": agent.get("model"),
+                        "error": detail,
+                    },
+                )
+                if fallback_enabled:
+                    response, fallback_model, fallback_err = await _try_ollama_fallback(
+                        channel=channel,
+                        project_name=active_project["project"],
+                        agent_id=agent.get("id", "agent"),
+                        prompt=prompt,
+                        system=system,
+                        reason=detail,
+                    )
+                    if not fallback_err and (response or "").strip():
+                        fallback_used = True
+                        response_backend = "ollama"
+                        response_model = fallback_model
+                    else:
+                        return (
+                            f"OpenAI backend error for {agent.get('display_name', agent.get('id', 'agent'))}: {detail}. "
+                            "Open Settings -> API Keys and run Test OpenAI."
+                        )
+                else:
+                    return (
+                        f"OpenAI backend error for {agent.get('display_name', agent.get('id', 'agent'))}: {detail}. "
+                        "Open Settings -> API Keys and run Test OpenAI."
+                    )
         else:
+            if not await ollama_client.is_available():
+                return (
+                    f"Ollama backend unavailable for {agent.get('display_name', agent.get('id', 'agent'))}. "
+                    "Start Ollama or switch this agent to OpenAI/Claude in Settings > Agents."
+                )
             response = await ollama_client.generate(
                 model=agent["model"],
                 prompt=prompt,
@@ -2276,6 +2488,20 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                 temperature=0.75,
                 max_tokens=400,
             )
+            response_model = agent["model"]
+            response_backend = "ollama"
+            if not (response or "").strip():
+                return f"Ollama backend returned an empty response for {agent.get('display_name', agent.get('id', 'agent'))}."
+        _queue_response_meta(
+            channel,
+            agent.get("id", ""),
+            {
+                "provider": response_backend,
+                "model": response_model or agent.get("model"),
+                "credential_source": credential_source if response_backend in {"openai", "claude"} else ("fallback_ollama" if fallback_used else "local"),
+                "fallback": bool(fallback_used),
+            },
+        )
         elapsed_ms = int((time.time() - started_at) * 1000)
         await emit_console_event(
             channel=channel,
@@ -2285,8 +2511,10 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
             project_name=active_project["project"],
             data={
                 "agent_id": agent["id"],
-                "backend": backend,
-                "model": agent.get("model"),
+                "backend": response_backend,
+                "model": response_model or agent.get("model"),
+                "credential_source": credential_source,
+                "fallback_used": bool(fallback_used),
                 "latency_ms": elapsed_ms,
                 "response_chars": len(response or ""),
             },
@@ -2371,7 +2599,14 @@ async def _send(
     format_retry: bool = False,
 ):
     """Save + broadcast an agent message, then execute any tool calls."""
-    saved = await insert_message(channel=channel, sender=agent["id"], content=content, msg_type="message")
+    response_meta = _pop_response_meta(channel, agent.get("id", ""))
+    saved = await insert_message(
+        channel=channel,
+        sender=agent["id"],
+        content=content,
+        msg_type="message",
+        meta=response_meta or None,
+    )
     await manager.broadcast(channel, {"type": "chat", "message": saved})
     logger.info(f"  [{agent['display_name']}] {content[:80]}")
     if (

@@ -4,8 +4,8 @@ import { fetchAgents, updateAgent } from '../api';
 const BACKEND_OPTIONS = ['ollama', 'claude', 'openai'];
 const DEFAULT_MODELS = {
   ollama: 'qwen2.5:14b',
-  claude: 'claude-sonnet-4-20250514',
-  openai: 'gpt-4o-mini',
+  claude: 'claude-opus-4-6',
+  openai: 'gpt-5.2-codex',
 };
 
 function toDraft(agent) {
@@ -360,14 +360,14 @@ export default function AgentConfig() {
       <div className="panel-header">
         <h3>Agent Config</h3>
         <button
-          className="refresh-btn"
+          className="refresh-btn ui-btn"
           onClick={handleRepairCodexDefaults}
           disabled={loading || saving}
           title="Repair Codex defaults if it still matches the legacy local-model signature."
         >
           Repair Codex Defaults
         </button>
-        <button className="refresh-btn" onClick={handleRefresh} disabled={loading || saving}>
+        <button className="refresh-btn ui-btn" onClick={handleRefresh} disabled={loading || saving}>
           Refresh
         </button>
       </div>
@@ -384,6 +384,11 @@ export default function AgentConfig() {
               <span className="agent-dot" style={{ backgroundColor: agent.color || '#6B7280' }} />
               <span className="agent-config-item-name">{agent.display_name}</span>
               {agent.id === 'codex' && <span className="agent-id-pill">Codex</span>}
+              {agent.id === 'codex' && (
+                <span className={`agent-id-pill ${backendStatus.openai ? 'ok' : 'warn'}`}>
+                  API {backendStatus.openai ? 'ready' : 'missing key'}
+                </span>
+              )}
               <span className={`agent-config-item-status ${agent.active ? 'on' : 'off'}`}>
                 {agent.active ? 'active' : 'inactive'}
               </span>
@@ -524,6 +529,16 @@ export default function AgentConfig() {
                   last test: {credTestResult ? (credTestResult.ok ? `ok (${credTestResult.latency_ms || 0}ms)` : (credTestResult.error || 'failed')) : 'not run'}
                 </span>
               </div>
+              {draft.backend === 'openai' && !backendStatus.openai && (
+                <div className="agent-config-error">
+                  OpenAI key missing. Codex cannot run on OpenAI until you set a key in Settings -&gt; API Keys and run Test OpenAI.
+                </div>
+              )}
+              {draft.backend === 'claude' && !backendStatus.claude && (
+                <div className="agent-config-error">
+                  Claude key missing. Configure Anthropic key in Settings -&gt; API Keys before using this backend.
+                </div>
+              )}
 
               {credentialsEnabled && (
                 <div className="agent-config-form" style={{ marginTop: 12 }}>
@@ -546,7 +561,7 @@ export default function AgentConfig() {
                   </div>
                   <div className="agent-config-actions">
                     <button
-                      className="control-btn gate-btn"
+                      className="control-btn gate-btn ui-btn ui-btn-primary"
                       onClick={handleSaveCredentials}
                       disabled={credSaving || saving}
                       title="Save per-agent credentials"
@@ -554,7 +569,7 @@ export default function AgentConfig() {
                       {credSaving ? 'Saving...' : 'Save Credentials'}
                     </button>
                     <button
-                      className="control-btn"
+                      className="control-btn ui-btn"
                       onClick={handleClearCredentials}
                       disabled={credSaving || saving || !credMeta?.has_key}
                       title="Remove stored credentials for this backend"
@@ -562,7 +577,7 @@ export default function AgentConfig() {
                       Clear
                     </button>
                     <button
-                      className="control-btn"
+                      className="control-btn ui-btn"
                       onClick={handleTestCredentials}
                       disabled={credSaving || saving || credTestBusy}
                       title="Test backend connection with the current credential binding"
@@ -575,6 +590,11 @@ export default function AgentConfig() {
                       {credTestResult.ok
                         ? `Connection ok (${credTestResult.latency_ms || 0}ms)`
                         : credTestResult.error || 'Connection failed'}
+                      {credTestResult?.details && (
+                        <pre className="approval-preview" style={{ marginTop: 8 }}>
+                          {JSON.stringify(credTestResult.details, null, 2)}
+                        </pre>
+                      )}
                     </div>
                   )}
                 </div>
@@ -584,7 +604,7 @@ export default function AgentConfig() {
               {notice && <div className="agent-config-notice">{notice}</div>}
 
               <div className="agent-config-actions">
-                <button className="control-btn gate-btn" onClick={handleSave} disabled={saving}>
+                <button className="control-btn gate-btn ui-btn ui-btn-primary" onClick={handleSave} disabled={saving}>
                   {saving ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>

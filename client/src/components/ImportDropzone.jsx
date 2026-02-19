@@ -1,127 +1,124 @@
 import { useRef, useState } from 'react';
 
-function isZip(file) {
-  const name = String(file?.name || '').toLowerCase();
-  return name.endsWith('.zip');
+function makeId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-const PHASES = [
-  { id: 'uploading', label: 'Uploading' },
-  { id: 'extracting', label: 'Extracting' },
-  { id: 'detecting', label: 'Detecting stack' },
-  { id: 'seeding', label: 'Seeding tasks/spec' },
-];
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
 
-export default function ImportDropzone({ onImported, onPhaseChange }) {
+function rootFolder(entries) {
+  const first = entries[0]?.path || '';
+  if (!first.includes('/')) return '';
+  return first.split('/')[0];
+}
+
+function toEntries(files) {
+  return Array.from(files || []).map((file) => ({
+    file,
+    path: file.webkitRelativePath || file.name,
+  }));
+}
+
+function queueFromFiles(files) {
+  const entries = toEntries(files);
+  if (entries.length === 0) return null;
+
+  if (entries.length === 1 && String(entries[0].path || '').toLowerCase().endsWith('.zip')) {
+    const only = entries[0];
+    return {
+      id: makeId(),
+      kind: 'zip',
+      name: only.file.name,
+      entries,
+      count: 1,
+      bytes: only.file.size || 0,
+      summary: `Zip archive (${formatBytes(only.file.size || 0)})`,
+    };
+  }
+
+  const folder = rootFolder(entries);
+  const bytes = entries.reduce((acc, item) => acc + (item.file.size || 0), 0);
+  if (folder) {
+    return {
+      id: makeId(),
+      kind: 'folder',
+      name: folder,
+      entries,
+      count: entries.length,
+      bytes,
+      summary: `${entries.length} files (${formatBytes(bytes)})`,
+    };
+  }
+
+  return {
+    id: makeId(),
+    kind: 'files',
+    name: `${entries.length} files`,
+    entries,
+    count: entries.length,
+    bytes,
+    summary: `${entries.length} files (${formatBytes(bytes)})`,
+  };
+}
+
+export default function ImportDropzone({
+  queuedItems = [],
+  onQueueChange,
+  disabled = false,
+}) {
   const zipInputRef = useRef(null);
   const folderInputRef = useRef(null);
   const [dragActive, setDragActive] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [phase, setPhase] = useState('');
-  const [status, setStatus] = useState('');
-  const [error, setError] = useState('');
 
-  const setPhaseWithNotify = (nextPhase) => {
-    setPhase(nextPhase);
-    onPhaseChange?.(nextPhase);
+  const pushQueueItem = (item) => {
+    if (!item) return;
+    onQueueChange?.([...(queuedItems || []), item]);
   };
 
-  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-  const upload = async (formData) => {
-    setBusy(true);
-    setError('');
-    setPhaseWithNotify('uploading');
-    setStatus('Uploading files...');
-    try {
-      const resp = await fetch('/api/projects/import', {
-        method: 'POST',
-        body: formData,
-      });
-      const payload = resp.ok ? await resp.json() : null;
-      if (!resp.ok) {
-        throw new Error(payload?.detail || payload?.error || 'Import failed.');
-      }
-      setPhaseWithNotify('extracting');
-      setStatus('Extracting files...');
-      await wait(150);
-      setPhaseWithNotify('detecting');
-      setStatus('Detecting stack...');
-      await wait(150);
-      setPhaseWithNotify('seeding');
-      setStatus('Seeding tasks and spec...');
-      await wait(150);
-      setStatus(`Imported ${payload.project} (${payload.extracted_files || 0} files).`);
-      setPhaseWithNotify('');
-      onImported?.(payload);
-    } catch (err) {
-      setError(err?.message || 'Import failed.');
-      setPhaseWithNotify('');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onZipFilePicked = async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const form = new FormData();
-    form.append('zip_file', file, file.name);
-    await upload(form);
-    event.target.value = '';
-  };
-
-  const onFolderPicked = async (event) => {
-    const files = Array.from(event.target.files || []);
-    if (files.length === 0) return;
-    const form = new FormData();
-    files.forEach((file) => {
-      const rel = file.webkitRelativePath || file.name;
-      form.append('files', file, rel);
-    });
-    await upload(form);
-    event.target.value = '';
-  };
-
-  const handleDrop = async (event) => {
+  const handleDrop = (event) => {
     event.preventDefault();
+    event.stopPropagation();
     setDragActive(false);
-    if (busy) return;
+    if (disabled) return;
+    const item = queueFromFiles(event.dataTransfer?.files || []);
+    if (item) pushQueueItem(item);
+  };
 
-    const files = Array.from(event.dataTransfer.files || []);
-    if (files.length === 0) return;
+  const handleZipPick = (event) => {
+    if (disabled) return;
+    const item = queueFromFiles(event.target.files || []);
+    if (item) pushQueueItem(item);
+    event.target.value = '';
+  };
 
-    const zip = files.find(isZip);
-    if (zip) {
-      const form = new FormData();
-      form.append('zip_file', zip, zip.name);
-      await upload(form);
-      return;
-    }
+  const handleFolderPick = (event) => {
+    if (disabled) return;
+    const item = queueFromFiles(event.target.files || []);
+    if (item) pushQueueItem(item);
+    event.target.value = '';
+  };
 
-    const form = new FormData();
-    files.forEach((file) => form.append('files', file, file.webkitRelativePath || file.name));
-    await upload(form);
+  const removeItem = (id) => {
+    onQueueChange?.((queuedItems || []).filter((item) => item.id !== id));
+  };
+
+  const clearAll = () => {
+    onQueueChange?.([]);
   };
 
   return (
-    <div
-      className={`import-dropzone ${dragActive ? 'active' : ''} ${busy ? 'busy' : ''}`}
-      onDragOver={(event) => {
-        event.preventDefault();
-        if (!busy) setDragActive(true);
-      }}
-      onDragLeave={(event) => {
-        event.preventDefault();
-        setDragActive(false);
-      }}
-      onDrop={handleDrop}
-    >
+    <section className={`import-dropzone-wizard ${dragActive ? 'active' : ''} ${disabled ? 'disabled' : ''}`}>
       <input
         ref={zipInputRef}
         type="file"
         accept=".zip"
-        onChange={onZipFilePicked}
+        onChange={handleZipPick}
         className="hidden-file-input"
       />
       <input
@@ -130,32 +127,66 @@ export default function ImportDropzone({ onImported, onPhaseChange }) {
         multiple
         webkitdirectory="true"
         directory="true"
-        onChange={onFolderPicked}
+        onChange={handleFolderPick}
         className="hidden-file-input"
       />
 
-      <h4>Import / Drop files to create a project</h4>
-      <p>Drop a zip or project folder to deconstruct, understand, and rebuild.</p>
-      {busy && (
-        <div className="import-phase-list">
-          {PHASES.map((item) => (
-            <div key={item.id} className={`import-phase-item ${phase === item.id ? 'active' : ''}`}>
-              <span className="import-phase-dot" />
-              <span>{item.label}</span>
-            </div>
-          ))}
+      <div
+        className="import-dropzone-hitarea"
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!disabled) setDragActive(true);
+        }}
+        onDragEnter={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!disabled) setDragActive(true);
+        }}
+        onDragLeave={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setDragActive(false);
+        }}
+        onDrop={handleDrop}
+      >
+        <h4>Import zip or folder</h4>
+        <p>Drop files here to queue import inputs. Supported: <code>.zip</code> or folder upload.</p>
+        <div className="import-dropzone-actions">
+          <button type="button" className="refresh-btn ui-btn" disabled={disabled} onClick={() => zipInputRef.current?.click()}>
+            Choose Zip
+          </button>
+          <button type="button" className="refresh-btn ui-btn" disabled={disabled} onClick={() => folderInputRef.current?.click()}>
+            Choose Folder
+          </button>
+          <button type="button" className="refresh-btn ui-btn" disabled={disabled || queuedItems.length === 0} onClick={clearAll}>
+            Clear Queue
+          </button>
         </div>
-      )}
-      <div className="import-dropzone-actions">
-        <button className="refresh-btn" disabled={busy} onClick={() => zipInputRef.current?.click()}>
-          Upload Zip
-        </button>
-        <button className="refresh-btn" disabled={busy} onClick={() => folderInputRef.current?.click()}>
-          Upload Folder
-        </button>
       </div>
-      {status && <div className="agent-config-notice">{status}</div>}
-      {error && <div className="agent-config-error">{error}</div>}
-    </div>
+
+      <div className="import-queue-list">
+        {queuedItems.length === 0 && <div className="import-queue-empty">Nothing queued yet.</div>}
+        {queuedItems.map((item) => (
+          <article key={item.id} className="import-queue-item">
+            <div className="import-queue-item-main">
+              <div className="import-queue-item-title">{item.name}</div>
+              <div className="import-queue-item-meta">
+                <span className="ui-chip">{item.kind.toUpperCase()}</span>
+                <span>{item.summary}</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="msg-action-btn ui-btn"
+              disabled={disabled}
+              onClick={() => removeItem(item.id)}
+            >
+              Remove
+            </button>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }

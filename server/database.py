@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS messages (
     content TEXT NOT NULL,
     msg_type TEXT DEFAULT 'message',
     parent_id INTEGER,
+    meta_json TEXT,
     pinned INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -144,6 +145,7 @@ CREATE TABLE IF NOT EXISTS agents (
     color TEXT DEFAULT '#6B7280',
     emoji TEXT DEFAULT '🤖',
     system_prompt TEXT,
+    user_overrides TEXT DEFAULT '{}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -335,9 +337,17 @@ async def init_db():
         await db.executescript(SCHEMA)
         await _run_migrations(db)
         await _seed_agents(db)
+        await _sync_agents_from_registry_db(db, force=False)
         await _seed_provider_configs(db)
+        await _migrate_provider_default_models(db)
         await _migrate_codex_defaults(db)
         await _seed_channels(db)
+        await db.execute(
+            """INSERT INTO settings (key, value, updated_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(key) DO NOTHING""",
+            ("providers.fallback_to_ollama", "false"),
+        )
         await db.commit()
     finally:
         await db.close()
@@ -365,6 +375,7 @@ async def _run_migrations(db: aiosqlite.Connection):
            )"""
     )
     await _ensure_column(db, "tasks", "assigned_by", "TEXT")
+    await _ensure_column(db, "messages", "meta_json", "TEXT")
     await _ensure_column(db, "tasks", "channel", "TEXT NOT NULL DEFAULT 'main'")
     await _ensure_column(db, "tasks", "project_name", "TEXT NOT NULL DEFAULT 'ai-office'")
     await _ensure_column(db, "tasks", "branch", "TEXT NOT NULL DEFAULT 'main'")
@@ -474,6 +485,7 @@ async def _run_migrations(db: aiosqlite.Connection):
     )
     await _ensure_column(db, "agents", "provider_key_ref", "TEXT")
     await _ensure_column(db, "agents", "base_url", "TEXT")
+    await _ensure_column(db, "agents", "user_overrides", "TEXT DEFAULT '{}'")
     await _ensure_column(db, "project_metadata", "display_name", "TEXT")
     await _ensure_column(db, "project_metadata", "last_opened_at", "TEXT")
     await _ensure_column(db, "project_metadata", "preview_focus_mode", "INTEGER NOT NULL DEFAULT 0")
@@ -519,11 +531,164 @@ def _normalize_task_row(row: dict) -> dict:
     return data
 
 
+def _normalize_message_row(row: dict) -> dict:
+    data = dict(row)
+    data["meta"] = _json_loads(data.get("meta_json"), {})
+    return data
+
+
 async def _ensure_column(db: aiosqlite.Connection, table: str, column: str, column_def: str):
     rows = await db.execute(f"PRAGMA table_info({table})")
     cols = {row["name"] for row in await rows.fetchall()}
     if column not in cols:
         await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}")
+
+
+REGISTRY_SYNC_FIELDS = (
+    "display_name",
+    "role",
+    "backend",
+    "model",
+    "permissions",
+    "active",
+    "color",
+    "emoji",
+    "system_prompt",
+    "provider_key_ref",
+    "base_url",
+)
+
+
+def _parse_overrides(value: Optional[str]) -> dict[str, bool]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    out: dict[str, bool] = {}
+    for key, raw in parsed.items():
+        if isinstance(key, str) and raw:
+            out[key] = True
+    return out
+
+
+def _registry_agent_fields(agent: dict) -> dict:
+    backend = (agent.get("backend") or "ollama").strip().lower() or "ollama"
+    provider_key_ref = (agent.get("provider_key_ref") or "").strip() or None
+    if not provider_key_ref and agent.get("id") == "codex" and backend == "openai":
+        provider_key_ref = "openai_default"
+    return {
+        "display_name": agent.get("display_name", "Agent"),
+        "role": agent.get("role", "Assistant"),
+        "backend": backend,
+        "model": (agent.get("model") or "").strip(),
+        "permissions": agent.get("permissions", "read"),
+        "active": 1 if agent.get("active", True) else 0,
+        "color": agent.get("color", "#6B7280"),
+        "emoji": agent.get("emoji", "🤖"),
+        "system_prompt": agent.get("system_prompt", ""),
+        "provider_key_ref": provider_key_ref,
+        "base_url": (agent.get("base_url") or "").strip() or None,
+    }
+
+
+def _load_registry_agents() -> list[dict]:
+    registry_path = APP_ROOT / "agents" / "registry.json"
+    if not registry_path.exists():
+        return []
+    try:
+        data = json.loads(registry_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    agents = data.get("agents", [])
+    return agents if isinstance(agents, list) else []
+
+
+async def _sync_agents_from_registry_db(db: aiosqlite.Connection, *, force: bool = False) -> dict:
+    agents = _load_registry_agents()
+    changed: list[dict] = []
+    inserted: list[str] = []
+
+    if not any(a.get("id") == "codex" for a in agents):
+        agents.append(
+            {
+                "id": "codex",
+                "display_name": "Codex",
+                "role": "Implementation Overseer",
+                "backend": "openai",
+                "model": "gpt-5.2-codex",
+                "permissions": "read,run,write",
+                "active": True,
+                "color": "#0EA5E9",
+                "emoji": "C",
+                "system_prompt": (
+                    "You are Codex, a senior implementation teammate. "
+                    "Help with coding, debugging, architecture sanity checks, and technical execution. "
+                    "Give concise, direct guidance and call out risks early."
+                ),
+            }
+        )
+
+    for raw_agent in agents:
+        agent_id = (raw_agent.get("id") or "").strip()
+        if not agent_id:
+            continue
+        fields = _registry_agent_fields(raw_agent)
+        row = await db.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
+        existing = await row.fetchone()
+        if not existing:
+            await db.execute(
+                """INSERT INTO agents (
+                       id, display_name, role, skills, backend, model, provider_key_ref, base_url,
+                       permissions, active, color, emoji, system_prompt, user_overrides
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    agent_id,
+                    fields["display_name"],
+                    fields["role"],
+                    json.dumps(raw_agent.get("skills", [])),
+                    fields["backend"],
+                    fields["model"],
+                    fields["provider_key_ref"],
+                    fields["base_url"],
+                    fields["permissions"],
+                    fields["active"],
+                    fields["color"],
+                    fields["emoji"],
+                    fields["system_prompt"],
+                    "{}",
+                ),
+            )
+            inserted.append(agent_id)
+            continue
+
+        overrides = _parse_overrides(existing["user_overrides"])
+        updates: dict[str, object] = {}
+        for field in REGISTRY_SYNC_FIELDS:
+            if not force and overrides.get(field):
+                continue
+            desired = fields.get(field)
+            current = existing[field]
+            if field == "active":
+                desired = 1 if desired else 0
+                current = 1 if current else 0
+            if current != desired:
+                updates[field] = desired
+        if updates:
+            assignments = ", ".join(f"{field} = ?" for field in updates.keys())
+            params = list(updates.values()) + [agent_id]
+            await db.execute(f"UPDATE agents SET {assignments} WHERE id = ?", tuple(params))
+            changed.append(
+                {
+                    "id": agent_id,
+                    "updated_fields": sorted(updates.keys()),
+                }
+            )
+
+    return {"changed": changed, "inserted": inserted}
 
 
 async def _seed_agents(db: aiosqlite.Connection):
@@ -545,7 +710,7 @@ async def _seed_agents(db: aiosqlite.Connection):
             "role": "Implementation Overseer",
             "skills": [],
             "backend": "openai",
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.2-codex",
             "permissions": "read,run,write",
             "active": True,
             "color": "#0EA5E9",
@@ -565,8 +730,8 @@ async def _seed_agents(db: aiosqlite.Connection):
             continue
         await db.execute(
             """INSERT INTO agents (id, display_name, role, skills, backend, model,
-               provider_key_ref, base_url, permissions, active, color, emoji, system_prompt)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               provider_key_ref, base_url, permissions, active, color, emoji, system_prompt, user_overrides)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 agent["id"],
                 agent["display_name"],
@@ -584,6 +749,7 @@ async def _seed_agents(db: aiosqlite.Connection):
                 agent.get("color", "#6B7280"),
                 agent.get("emoji", "🤖"),
                 agent.get("system_prompt", ""),
+                "{}",
             ),
         )
 
@@ -591,7 +757,7 @@ async def _seed_agents(db: aiosqlite.Connection):
 async def _migrate_codex_defaults(db: aiosqlite.Connection):
     """One-time codex migration to OpenAI defaults for legacy installs."""
     row = await db.execute(
-        "SELECT id, backend, model, provider_key_ref FROM agents WHERE id = ?",
+        "SELECT id, backend, model, provider_key_ref, user_overrides FROM agents WHERE id = ?",
         ("codex",),
     )
     item = await row.fetchone()
@@ -601,14 +767,19 @@ async def _migrate_codex_defaults(db: aiosqlite.Connection):
     backend = (item["backend"] or "").strip().lower()
     model = (item["model"] or "").strip()
     key_ref = (item["provider_key_ref"] or "").strip()
+    overrides = _parse_overrides(item["user_overrides"] if "user_overrides" in item.keys() else None)
 
-    # Repair known legacy signature only.
-    if backend == "ollama" and model == "qwen2.5:14b":
+    if overrides.get("backend") or overrides.get("model"):
+        return
+
+    # Codex must not silently route to Ollama on startup, but only migrate known legacy defaults.
+    legacy_models = {"qwen2.5:14b", "qwen2.5:32b", "qwen2.5:7b", "qwen3:14b", "qwen3:32b"}
+    if backend == "ollama" and (not model or model in legacy_models):
         await db.execute(
             """UPDATE agents
                SET backend = ?, model = ?, provider_key_ref = COALESCE(NULLIF(provider_key_ref, ''), ?)
                WHERE id = ?""",
-            ("openai", "gpt-4o-mini", "openai_default", "codex"),
+            ("openai", "gpt-5.2-codex", "openai_default", "codex"),
         )
         return
 
@@ -619,11 +790,18 @@ async def _migrate_codex_defaults(db: aiosqlite.Connection):
             ("openai_default", "codex"),
         )
 
+    # Upgrade old codex OpenAI default model if user has not overridden model.
+    if backend == "openai" and model == "gpt-4o-mini" and not overrides.get("model"):
+        await db.execute(
+            "UPDATE agents SET model = ? WHERE id = ?",
+            ("gpt-5.2-codex", "codex"),
+        )
+
 
 async def _seed_provider_configs(db: aiosqlite.Connection):
     defaults = [
-        ("openai", "openai_default", None, "gpt-4o-mini"),
-        ("claude", "claude_default", None, "claude-sonnet-4-20250514"),
+        ("openai", "openai_default", None, "gpt-5.2"),
+        ("claude", "claude_default", None, "claude-opus-4-6"),
         ("ollama", None, None, None),
     ]
     for provider, key_ref, base_url, default_model in defaults:
@@ -633,6 +811,33 @@ async def _seed_provider_configs(db: aiosqlite.Connection):
                ON CONFLICT(provider) DO NOTHING""",
             (provider, key_ref, base_url, default_model),
         )
+
+
+async def _migrate_provider_default_models(db: aiosqlite.Connection):
+    """Upgrade known legacy provider defaults without clobbering explicit custom models."""
+    await db.execute(
+        """
+        UPDATE provider_configs
+           SET default_model = 'gpt-5.2',
+               updated_at = CURRENT_TIMESTAMP
+         WHERE provider = 'openai'
+           AND (default_model IS NULL OR TRIM(default_model) = '' OR default_model = 'gpt-4o-mini')
+        """
+    )
+    await db.execute(
+        """
+        UPDATE provider_configs
+           SET default_model = 'claude-opus-4-6',
+               updated_at = CURRENT_TIMESTAMP
+         WHERE provider = 'claude'
+           AND (
+                default_model IS NULL
+                OR TRIM(default_model) = ''
+                OR default_model = 'claude-sonnet-4-20250514'
+                OR default_model = 'claude-sonnet-4-6'
+           )
+        """
+    )
 
 
 async def _seed_channels(db: aiosqlite.Connection):
@@ -693,19 +898,25 @@ async def rename_channel_db(channel_id: str, name: str):
 
 # ── Query helpers ──────────────────────────────────────────
 
-async def insert_message(channel: str, sender: str, content: str,
-                         msg_type: str = "message", parent_id: Optional[int] = None) -> dict:
+async def insert_message(
+    channel: str,
+    sender: str,
+    content: str,
+    msg_type: str = "message",
+    parent_id: Optional[int] = None,
+    meta: Optional[dict] = None,
+) -> dict:
     db = await get_db()
     try:
         cursor = await db.execute(
-            """INSERT INTO messages (channel, sender, content, msg_type, parent_id)
-               VALUES (?, ?, ?, ?, ?)""",
-            (channel, sender, content, msg_type, parent_id),
+            """INSERT INTO messages (channel, sender, content, msg_type, parent_id, meta_json)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (channel, sender, content, msg_type, parent_id, _json_dumps(meta or {}, {})),
         )
         await db.commit()
         row = await db.execute("SELECT * FROM messages WHERE id = ?", (cursor.lastrowid,))
         msg = await row.fetchone()
-        return dict(msg)
+        return _normalize_message_row(dict(msg))
     finally:
         await db.close()
 
@@ -723,7 +934,7 @@ async def get_messages(channel: str, limit: int = 50, before_id: Optional[int] =
                 "SELECT * FROM messages WHERE channel = ? ORDER BY id DESC LIMIT ?",
                 (channel, limit),
             )
-        results = [dict(r) for r in await rows.fetchall()]
+        results = [_normalize_message_row(dict(r)) for r in await rows.fetchall()]
         results.reverse()
         return results
     finally:
@@ -735,7 +946,7 @@ async def get_message_by_id(message_id: int) -> Optional[dict]:
     try:
         row = await db.execute("SELECT * FROM messages WHERE id = ?", (message_id,))
         result = await row.fetchone()
-        return dict(result) if result else None
+        return _normalize_message_row(dict(result)) if result else None
     finally:
         await db.close()
 
@@ -992,22 +1203,36 @@ async def get_agent(agent_id: str) -> Optional[dict]:
         await db.close()
 
 
-async def update_agent(agent_id: str, updates: dict) -> Optional[dict]:
+async def update_agent(agent_id: str, updates: dict, *, mark_override: bool = True) -> Optional[dict]:
     filtered = {k: v for k, v in updates.items() if k in ALLOWED_AGENT_UPDATE_FIELDS}
-    if not filtered:
-        return await get_agent(agent_id)
-
-    if "active" in filtered:
-        filtered["active"] = 1 if filtered["active"] else 0
-
-    assignments = ", ".join(f"{field} = ?" for field in filtered.keys())
-    params = list(filtered.values()) + [agent_id]
-
     db = await get_db()
     try:
+        row = await db.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
+        existing = await row.fetchone()
+        if not existing:
+            return None
+
+        if not filtered:
+            return dict(existing)
+
+        if "active" in filtered:
+            filtered["active"] = 1 if filtered["active"] else 0
+
+        if mark_override:
+            overrides = _parse_overrides(existing["user_overrides"] if "user_overrides" in existing.keys() else None)
+            for field, value in filtered.items():
+                current = existing[field]
+                if field == "active":
+                    current = 1 if current else 0
+                if current != value:
+                    overrides[field] = True
+            filtered["user_overrides"] = json.dumps(overrides)
+
+        assignments = ", ".join(f"{field} = ?" for field in filtered.keys())
+        params = list(filtered.values()) + [agent_id]
         cursor = await db.execute(
             f"UPDATE agents SET {assignments} WHERE id = ?",
-            params,
+            tuple(params),
         )
         await db.commit()
         if cursor.rowcount == 0:
@@ -1016,6 +1241,23 @@ async def update_agent(agent_id: str, updates: dict) -> Optional[dict]:
         row = await db.execute("SELECT * FROM agents WHERE id = ?", (agent_id,))
         result = await row.fetchone()
         return dict(result) if result else None
+    finally:
+        await db.close()
+
+
+async def sync_agents_from_registry(*, force: bool = False) -> dict:
+    db = await get_db()
+    try:
+        result = await _sync_agents_from_registry_db(db, force=force)
+        await db.commit()
+        return {
+            "ok": True,
+            "force": bool(force),
+            "changed_count": len(result.get("changed", [])),
+            "inserted_count": len(result.get("inserted", [])),
+            "changed": result.get("changed", []),
+            "inserted": result.get("inserted", []),
+        }
     finally:
         await db.close()
 
@@ -1348,7 +1590,7 @@ async def get_provider_config(provider: str) -> dict:
             "provider": provider_name,
             "key_ref": f"{provider_name}_default" if provider_name in {"openai", "claude"} else None,
             "base_url": None,
-            "default_model": "gpt-4o-mini" if provider_name == "openai" else ("claude-sonnet-4-20250514" if provider_name == "claude" else None),
+            "default_model": "gpt-5.2" if provider_name == "openai" else ("claude-opus-4-6" if provider_name == "claude" else None),
             "updated_at": None,
         }
         return fallback
@@ -2606,20 +2848,24 @@ async def get_api_usage_summary(
 
 def _normalize_layout_preset(value: Optional[str]) -> str:
     preset = (value or "").strip().lower()
-    if preset not in {"chat-preview", "chat-files", "full-ide", "focus"}:
-        return "full-ide"
+    if preset == "chat-preview":
+        preset = "split"
+    if preset not in {"split", "chat-files", "full-ide", "focus"}:
+        return "split"
     return preset
 
 
 DEFAULT_PANE_LAYOUTS: dict[str, list[float]] = {
+    "split": [0.52, 0.48],
     "full-ide": [0.28, 0.40, 0.32],
     "chat-files": [0.45, 0.55],
-    "chat-preview": [0.45, 0.55],
+    "files-preview": [0.62, 0.38],
 }
 PANE_MIN_RATIOS: dict[str, float] = {
+    "split": 0.22,
     "full-ide": 0.16,
     "chat-files": 0.22,
-    "chat-preview": 0.22,
+    "files-preview": 0.22,
 }
 
 
@@ -2745,7 +2991,7 @@ async def get_project_metadata(project_name: str) -> dict:
             "display_name": None,
             "last_opened_at": None,
             "preview_focus_mode": 0,
-            "layout_preset": "full-ide",
+            "layout_preset": "split",
             "pane_layout": {},
         }
 
@@ -2765,7 +3011,7 @@ async def get_project_metadata(project_name: str) -> dict:
             "display_name": None,
             "last_opened_at": None,
             "preview_focus_mode": 0,
-            "layout_preset": "full-ide",
+            "layout_preset": "split",
             "pane_layout": {},
         }
     data = dict(item)

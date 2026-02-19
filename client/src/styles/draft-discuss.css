@@ -1,0 +1,182 @@
+.draft-discuss-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  height: 100%;
+}
+
+.draft-discuss-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: start;
+  padding: var(--space-3);
+}
+
+.draft-prompt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.draft-prompt-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.draft-prompt-card-top h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.draft-prompt-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.draft-prompt-readonly {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg2) 74%, transparent);
+  color: var(--textPrimary);
+  white-space: pre-wrap;
+  overflow: auto;
+  max-height: 220px;
+}
+
+.draft-prompt-editor {
+  min-height: 120px;
+}
+
+.draft-head-cta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 240px;
+}
+
+.draft-participants-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+
+.draft-participants-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.participant-chip {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--bg2) 78%, transparent);
+  color: var(--textSecondary);
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.participant-chip.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--accentSoft);
+  color: var(--textPrimary);
+}
+
+.draft-discuss-canvas {
+  min-height: 0;
+  flex: 1;
+}
+
+.draft-discuss-chat,
+.draft-discuss-summary {
+  min-height: 0;
+  height: 100%;
+}
+
+.draft-summary-panel {
+  padding: var(--space-3);
+  height: 100%;
+  overflow: auto;
+}
+
+.draft-summary-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.draft-summary-head p {
+  margin: 4px 0 0;
+  color: var(--textMuted);
+  font-size: 12px;
+}
+
+.draft-summary-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.draft-summary-meta div {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px;
+  background: color-mix(in srgb, var(--bg2) 74%, transparent);
+}
+
+.draft-summary-meta span {
+  display: block;
+  font-size: 11px;
+  color: var(--textMuted);
+}
+
+.draft-summary-meta strong {
+  color: var(--textPrimary);
+  font-size: 12px;
+}
+
+.draft-summary-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.draft-summary-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.draft-summary-field > span {
+  font-size: 12px;
+  color: var(--textSecondary);
+}
+
+.draft-summary-field > small {
+  font-size: 11px;
+  color: var(--textMuted);
+}
+
+@media (max-width: 1100px) {
+  .draft-discuss-head {
+    grid-template-columns: 1fr;
+  }
+
+  .draft-head-cta {
+    min-width: 0;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .draft-participants-strip {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

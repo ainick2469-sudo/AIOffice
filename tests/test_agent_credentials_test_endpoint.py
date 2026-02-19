@@ -12,17 +12,24 @@ def test_agent_credentials_test_endpoint_openai_success(monkeypatch):
     )
     assert saved.status_code == 200, saved.text
 
-    async def _fake_generate(**_kwargs):
-        return "pong"
+    async def _fake_probe_connection(**_kwargs):
+        return {
+            "ok": True,
+            "model_hint": "gpt-5.2-codex",
+            "latency_ms": 12,
+            "error": None,
+            "details": {"source": "test"},
+        }
 
-    monkeypatch.setattr("server.openai_adapter.generate", _fake_generate)
+    monkeypatch.setattr("server.openai_adapter.probe_connection", _fake_probe_connection)
 
     resp = client.post(
         "/api/agents/codex/credentials/test",
-        json={"backend": "openai", "model": "gpt-4o-mini"},
+        json={"backend": "openai", "model": "gpt-5.2-codex"},
     )
     assert resp.status_code == 200, resp.text
     payload = resp.json()
     assert payload["ok"] is True
     assert payload["backend"] == "openai"
-    assert payload["latency_ms"] >= 0
+    assert payload["latency_ms"] == 12
+    assert payload["details"]["source"] == "test"

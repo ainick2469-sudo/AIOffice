@@ -1,0 +1,235 @@
+/* Reusable UI primitives + compatibility mappings for existing class names */
+
+* {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+html,
+body,
+#root {
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-family: var(--font-sans);
+  line-height: var(--line-normal);
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono);
+}
+
+.ui-panel,
+.panel,
+.workspace-pane,
+.workspace-main-pane,
+.workspace-side-drawer,
+.create-project-card,
+.create-recent-projects,
+.approval-modal,
+.approval-queue-panel,
+.command-palette,
+.preview-controls,
+.preview-logs,
+.agent-config-form-wrap,
+.agent-config-list,
+.projects-sidebar-item,
+.status-item,
+.task-card,
+.task-modal,
+.thread-msg {
+  background: var(--surface-0);
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-0);
+}
+
+.ui-btn,
+.refresh-btn,
+.control-btn,
+.msg-action-btn,
+.thread-close-btn,
+.workspace-tab-btn,
+.settings-tabs button,
+.app-topbar-nav button,
+.projects-sidebar-actions button,
+.task-move-btn,
+.add-room-btn,
+.layout-preset-toggle-wrap > button,
+.create-project-actions .refresh-btn {
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.ui-btn:hover,
+.refresh-btn:hover,
+.control-btn:hover,
+.msg-action-btn:hover,
+.thread-close-btn:hover,
+.workspace-tab-btn:hover,
+.settings-tabs button:hover,
+.app-topbar-nav button:hover,
+.projects-sidebar-actions button:hover,
+.task-move-btn:hover,
+.add-room-btn:hover,
+.layout-preset-toggle-wrap > button:hover,
+.create-project-actions .refresh-btn:hover {
+  background: var(--surface-2);
+  border-color: var(--border-1);
+  color: var(--text-0);
+}
+
+.ui-btn-primary,
+.control-btn.gate-btn,
+.create-submit-btn,
+.create-project-actions .refresh-btn.primary {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border-0));
+  background: var(--accent-soft);
+  color: var(--text-0);
+}
+
+.ui-btn-destructive,
+.stop-btn {
+  border-color: color-mix(in srgb, var(--danger) 52%, var(--border-0));
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.ui-btn-destructive:hover,
+.stop-btn:hover {
+  background: color-mix(in srgb, var(--danger-soft) 72%, var(--surface-1));
+  color: var(--text-0);
+}
+
+.ui-input,
+input[type='text'],
+input[type='password'],
+input[type='email'],
+input[type='number'],
+textarea,
+select {
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  color: var(--text-0);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: var(--line-normal);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+}
+
+.ui-tab,
+.workspace-tab-btn,
+.settings-tabs button,
+.app-topbar-nav button {
+  min-height: 34px;
+}
+
+.ui-tab-active,
+.workspace-tab-btn.active,
+.settings-tabs button.active,
+.app-topbar-nav button.active {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border-0));
+  background: var(--accent-soft);
+  color: var(--text-0);
+}
+
+.ui-chip,
+.pill,
+.convo-status,
+.agent-id-pill,
+.backend-pill,
+.task-branch-chip,
+.status-badge,
+.preview-status-badge {
+  border: 1px solid var(--border-0);
+  border-radius: var(--radius-pill);
+  background: var(--surface-1);
+  color: var(--text-1);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ui-section-header,
+.panel-header,
+.settings-tabs,
+.workspace-shell-header,
+.workspace-tab-row,
+.projects-sidebar-header,
+.status-header,
+.thread-header,
+.approval-queue-header {
+  border-bottom: 1px solid var(--border-0);
+}
+
+.ui-banner-error,
+.agent-config-error,
+.upload-error,
+.app-error {
+  border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--border-0));
+  background: var(--danger-soft);
+  color: color-mix(in srgb, var(--danger) 80%, var(--text-0));
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+
+.agent-config-notice {
+  border: 1px solid color-mix(in srgb, var(--success) 45%, var(--border-0));
+  background: var(--success-soft);
+  color: color-mix(in srgb, var(--success) 80%, var(--text-0));
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+
+.app-topbar-v2,
+.workspace-shell-header.calm,
+.workspace-tab-row.compact,
+.settings-tabs {
+  background: var(--surface-0);
+}
+
+.app-topbar-v2,
+.projects-sidebar,
+.workspace-shell,
+.settings-shell {
+  color: var(--text-0);
+}
+
+.message-list,
+.panel-body,
+.projects-sidebar-list {
+  min-height: 0;
+}

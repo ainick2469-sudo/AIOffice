@@ -19,10 +19,18 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function toFinitePositive(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
 export default function PaneSplit({
   children,
   ratios,
   minRatio = 0.2,
+  minSizesPx = null,
+  gutterPx = 10,
   className = '',
   onCommit,
 }) {
@@ -46,21 +54,38 @@ export default function PaneSplit({
     const onPointerMove = (event) => {
       const drag = dragRef.current;
       if (!drag) return;
-      const { index, startX, startRatios, width } = drag;
-      if (!width) return;
+      const { index, startX, startWidths, availableWidth } = drag;
+      if (!availableWidth) return;
 
-      const delta = (event.clientX - startX) / width;
-      const leftBase = startRatios[index];
-      const rightBase = startRatios[index + 1];
+      const delta = event.clientX - startX;
+      const leftBase = startWidths[index];
+      const rightBase = startWidths[index + 1];
       const pairTotal = leftBase + rightBase;
-      const min = Math.min(minRatio, pairTotal / 2);
-      const nextLeft = clamp(leftBase + delta, min, pairTotal - min);
+
+      const fallbackMin = Math.max(48, availableWidth * minRatio);
+      const leftMinRequest = Array.isArray(minSizesPx) ? toFinitePositive(minSizesPx[index]) : null;
+      const rightMinRequest = Array.isArray(minSizesPx) ? toFinitePositive(minSizesPx[index + 1]) : null;
+
+      let leftMin = leftMinRequest || fallbackMin;
+      let rightMin = rightMinRequest || fallbackMin;
+
+      if (leftMin + rightMin > pairTotal) {
+        const scale = pairTotal / (leftMin + rightMin);
+        leftMin *= scale;
+        rightMin *= scale;
+      }
+
+      const nextLeft = clamp(leftBase + delta, leftMin, pairTotal - rightMin);
       const nextRight = pairTotal - nextLeft;
 
-      const next = [...startRatios];
-      next[index] = nextLeft;
-      next[index + 1] = nextRight;
-      const normalized = normalizeRatios(next, next.length);
+      const nextWidths = [...startWidths];
+      nextWidths[index] = nextLeft;
+      nextWidths[index + 1] = nextRight;
+
+      const normalized = normalizeRatios(
+        nextWidths.map((width) => width / availableWidth),
+        nextWidths.length
+      );
       liveRef.current = normalized;
       setLiveRatios(normalized);
     };
@@ -74,24 +99,30 @@ export default function PaneSplit({
 
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
     return () => {
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
     };
-  }, [minRatio, onCommit]);
+  }, [gutterPx, minRatio, minSizesPx, onCommit]);
 
   const beginDrag = (index, event) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
-    if (!rect.width) return;
+    const availableWidth = rect.width - gutterPx * (expectedLen - 1);
+    if (!rect.width || availableWidth <= 0) return;
     const startRatios = normalizeRatios(displayRatios, expectedLen);
+    const startWidths = startRatios.map((ratio) => ratio * availableWidth);
     liveRef.current = startRatios;
     setLiveRatios(startRatios);
     dragRef.current = {
       index,
       startX: event.clientX,
-      startRatios,
-      width: rect.width,
+      startWidths,
+      availableWidth,
     };
     setIsDragging(true);
     event.preventDefault();
@@ -114,6 +145,7 @@ export default function PaneSplit({
               role="separator"
               aria-orientation="vertical"
               onPointerDown={(event) => beginDrag(index, event)}
+              style={{ width: `${gutterPx}px`, flexBasis: `${gutterPx}px` }}
               title="Drag to resize panes"
             />
           )}

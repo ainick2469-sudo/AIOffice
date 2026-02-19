@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 
 const PROVIDERS = ['openai', 'claude', 'ollama'];
 const DEFAULT_MODELS = {
-  openai: 'gpt-4o-mini',
-  claude: 'claude-sonnet-4-20250514',
+  openai: 'gpt-5.2',
+  claude: 'claude-opus-4-6',
   ollama: '',
 };
 
@@ -15,6 +15,13 @@ function emptyDraft(provider) {
     base_url: '',
     default_model: DEFAULT_MODELS[provider] || '',
   };
+}
+
+function renderProviderTestDetails(result) {
+  if (!result?.details || typeof result.details !== 'object') return null;
+  const text = JSON.stringify(result.details, null, 2);
+  if (!text || text === '{}') return null;
+  return <pre className="approval-preview" style={{ marginTop: 8 }}>{text}</pre>;
 }
 
 export default function ProviderSettings() {
@@ -133,7 +140,7 @@ export default function ProviderSettings() {
     <div className="panel agent-config-panel">
       <div className="panel-header">
         <h3>Providers</h3>
-        <button className="refresh-btn" onClick={() => loadProviders().catch(() => setError('Failed to refresh providers.'))}>
+        <button className="refresh-btn ui-btn" onClick={() => loadProviders().catch(() => setError('Failed to refresh providers.'))}>
           Refresh
         </button>
       </div>
@@ -163,6 +170,7 @@ export default function ProviderSettings() {
                   <div>
                     <label>Key Ref</label>
                     <input
+                      className="ui-input"
                       value={draft.key_ref || ''}
                       onChange={(e) => updateDraft(provider, 'key_ref', e.target.value)}
                       disabled={isOllama}
@@ -171,6 +179,7 @@ export default function ProviderSettings() {
                   <div>
                     <label>Default Model</label>
                     <input
+                      className="ui-input"
                       value={draft.default_model || ''}
                       onChange={(e) => updateDraft(provider, 'default_model', e.target.value)}
                       disabled={isOllama}
@@ -181,6 +190,7 @@ export default function ProviderSettings() {
                 <div className="agent-config-row">
                   <label>Base URL (optional)</label>
                   <input
+                    className="ui-input"
                     value={draft.base_url || ''}
                     onChange={(e) => updateDraft(provider, 'base_url', e.target.value)}
                     placeholder={
@@ -197,6 +207,7 @@ export default function ProviderSettings() {
                   <div className="agent-config-row">
                     <label>API Key (stored securely; masked after save)</label>
                     <input
+                      className="ui-input"
                       type="password"
                       value={draft.api_key || ''}
                       onChange={(e) => updateDraft(provider, 'api_key', e.target.value)}
@@ -207,14 +218,14 @@ export default function ProviderSettings() {
 
                 <div className="agent-config-actions">
                   <button
-                    className="control-btn gate-btn"
+                    className="control-btn gate-btn ui-btn ui-btn-primary"
                     onClick={() => saveProvider(provider)}
                     disabled={Boolean(saving[provider])}
                   >
                     {saving[provider] ? 'Saving...' : 'Save'}
                   </button>
                   <button
-                    className="control-btn"
+                    className="control-btn ui-btn"
                     onClick={() => testProvider(provider)}
                     disabled={Boolean(testing[provider])}
                   >
@@ -227,6 +238,7 @@ export default function ProviderSettings() {
                     {testResult.ok
                       ? `Connected in ${testResult.latency_ms || 0}ms`
                       : testResult.error || 'Connection failed'}
+                    {renderProviderTestDetails(testResult)}
                   </div>
                 )}
               </section>

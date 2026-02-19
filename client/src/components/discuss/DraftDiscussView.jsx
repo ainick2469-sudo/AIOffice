@@ -1,0 +1,257 @@
+import { useEffect, useMemo, useState } from 'react';
+import ChatRoom from '../ChatRoom';
+import SplitPane from '../layout/SplitPane';
+import DraftSummaryPanel from './DraftSummaryPanel';
+
+const PARTICIPANTS = [
+  { id: 'builder', label: 'Builder' },
+  { id: 'designer', label: 'Designer' },
+  { id: 'qa', label: 'QA' },
+];
+
+function participantsStorageKey(projectName) {
+  const safe = String(projectName || 'ai-office').trim().toLowerCase() || 'ai-office';
+  return `ai-office:draft-discuss-participants:${safe}`;
+}
+
+function ratioStorageKey(projectName) {
+  const safe = String(projectName || 'ai-office').trim().toLowerCase() || 'ai-office';
+  return `ai-office:draft-discuss-ratio:${safe}`;
+}
+
+function readParticipants(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return PARTICIPANTS.map((item) => item.id);
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return PARTICIPANTS.map((item) => item.id);
+    const allowed = new Set(PARTICIPANTS.map((item) => item.id));
+    const filtered = parsed.filter((value) => allowed.has(value));
+    return filtered.length ? filtered : PARTICIPANTS.map((item) => item.id);
+  } catch {
+    return PARTICIPANTS.map((item) => item.id);
+  }
+}
+
+function readRatio(key) {
+  try {
+    const raw = Number(localStorage.getItem(key));
+    if (Number.isFinite(raw) && raw > 0.2 && raw < 0.8) return raw;
+  } catch {
+    // ignore storage failures
+  }
+  return 0.62;
+}
+
+export default function DraftDiscussView({
+  channel = 'main',
+  projectName = 'ai-office',
+  beginnerMode = false,
+  draft,
+  onDraftChange,
+  onCreateProject,
+  onDiscardDraft,
+  onEditDraft,
+}) {
+  const participantKey = useMemo(() => participantsStorageKey(projectName), [projectName]);
+  const ratioKey = useMemo(() => ratioStorageKey(projectName), [projectName]);
+  const [participants, setParticipants] = useState(() => readParticipants(participantKey));
+  const [ratio, setRatio] = useState(() => readRatio(ratioKey));
+  const [queuedMessage, setQueuedMessage] = useState(null);
+  const [editingPrompt, setEditingPrompt] = useState(false);
+  const [promptDraft, setPromptDraft] = useState(String(draft?.text || ''));
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    setParticipants(readParticipants(participantKey));
+  }, [participantKey]);
+
+  useEffect(() => {
+    setRatio(readRatio(ratioKey));
+  }, [ratioKey]);
+
+  useEffect(() => {
+    setPromptDraft(String(draft?.text || ''));
+  }, [draft?.id, draft?.text]);
+
+  const seedMessageText = useMemo(() => {
+    const prompt = String(draft?.text || '');
+    if (!prompt || draft?.discussionSeeded) return '';
+    return [
+      'We are planning a new project.',
+      `User request: ${prompt}`,
+      'Brainstorm ideas, key mechanics, and scope. Ask clarifying questions if needed.',
+    ].join(' ');
+  }, [draft?.text, draft?.discussionSeeded]);
+
+  useEffect(() => {
+    if (!seedMessageText) return;
+    const id = `draft-seed-${draft?.createdAt || Date.now()}`;
+    setQueuedMessage({ id, text: seedMessageText });
+    onDraftChange?.({
+      discussionSeeded: true,
+    });
+  }, [seedMessageText, draft?.createdAt, onDraftChange]);
+
+  const toggleParticipant = (id) => {
+    setParticipants((prev) => {
+      const next = prev.includes(id)
+        ? prev.filter((value) => value !== id)
+        : [...prev, id];
+      const final = next.length > 0 ? next : prev;
+      try {
+        localStorage.setItem(participantKey, JSON.stringify(final));
+      } catch {
+        // ignore storage failures
+      }
+      return final;
+    });
+  };
+
+  const runBrainstorm = () => {
+    const roster = PARTICIPANTS
+      .filter((item) => participants.includes(item.id))
+      .map((item) => item.label)
+      .join(', ');
+    const text = [
+      'Draft planning session:',
+      `Participants: ${roster || 'Builder, Designer, QA'}.`,
+      `Prompt: ${String(draft?.text || '').trim()}`,
+      'Provide options, tradeoffs, scope recommendation, and 3 clarifying questions.',
+    ].join('\n');
+    setQueuedMessage({ id: `brainstorm-${Date.now()}`, text });
+  };
+
+  const savePromptEdit = () => {
+    const nextText = String(promptDraft || '');
+    onDraftChange?.({ text: nextText });
+    setEditingPrompt(false);
+  };
+
+  const resetPromptEdit = () => {
+    setPromptDraft(String(draft?.text || ''));
+    setEditingPrompt(false);
+  };
+
+  const createProject = async () => {
+    if (creating) return;
+    setCreating(true);
+    setError('');
+    try {
+      await onCreateProject?.(draft);
+    } catch (err) {
+      setError(err?.message || 'Project creation failed.');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div className="draft-discuss-view">
+      <header className="draft-discuss-head panel">
+        <div className="draft-prompt-card">
+          <div className="draft-prompt-card-top">
+            <h3>Draft Prompt</h3>
+            <div className="draft-prompt-actions">
+              {!editingPrompt ? (
+                <button type="button" className="ui-btn" onClick={() => setEditingPrompt(true)}>
+                  Edit Prompt
+                </button>
+              ) : (
+                <>
+                  <button type="button" className="ui-btn" onClick={resetPromptEdit}>
+                    Cancel
+                  </button>
+                  <button type="button" className="ui-btn ui-btn-primary" onClick={savePromptEdit}>
+                    Save Prompt
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+          {!editingPrompt ? (
+            <pre className="draft-prompt-readonly">{String(draft?.text || '')}</pre>
+          ) : (
+            <textarea
+              className="ui-input draft-prompt-editor"
+              value={promptDraft}
+              onChange={(event) => setPromptDraft(event.target.value)}
+              rows={7}
+            />
+          )}
+        </div>
+
+        <div className="draft-head-cta">
+          <button type="button" className="ui-btn ui-btn-primary" onClick={createProject} disabled={creating}>
+            {creating ? 'Creating Project...' : 'Create Project & Start Building'}
+          </button>
+          <button type="button" className="ui-btn ui-btn-ghost" onClick={() => onEditDraft?.({ text: String(draft?.text || '') })}>
+            Edit Prompt in Home
+          </button>
+          <button type="button" className="ui-btn ui-btn-destructive" onClick={onDiscardDraft}>
+            Discard Draft
+          </button>
+          {error && <div className="agent-config-error">{error}</div>}
+        </div>
+      </header>
+
+      <div className="draft-participants-strip panel">
+        <div className="draft-participants-list">
+          {PARTICIPANTS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`participant-chip ${participants.includes(item.id) ? 'active' : ''}`}
+              onClick={() => toggleParticipant(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <button type="button" className="ui-btn ui-btn-primary" onClick={runBrainstorm}>
+          Run brainstorm
+        </button>
+      </div>
+
+      <div className="draft-discuss-canvas">
+        <SplitPane
+          direction="vertical"
+          ratio={ratio}
+          defaultRatio={0.62}
+          minPrimary={420}
+          minSecondary={320}
+          onRatioChange={(nextRatio) => {
+            setRatio(nextRatio);
+            try {
+              localStorage.setItem(ratioKey, String(nextRatio));
+            } catch {
+              // ignore storage failures
+            }
+          }}
+        >
+          <section className="draft-discuss-chat">
+            <ChatRoom
+              channel={channel}
+              workspaceMode="discuss-draft"
+              beginnerMode={beginnerMode}
+              onBeginnerBrainstorm={runBrainstorm}
+              showStatusPanel={false}
+              compact
+              queuedMessage={queuedMessage}
+            />
+          </section>
+          <section className="draft-discuss-summary">
+            <DraftSummaryPanel
+              summary={draft?.summary || {}}
+              onChangeSummary={(summary) => onDraftChange?.({ summary })}
+              suggestedName={draft?.suggestedName}
+              suggestedStack={draft?.suggestedStack}
+              importQueue={draft?.importQueue || []}
+            />
+          </section>
+        </SplitPane>
+      </div>
+    </div>
+  );
+}

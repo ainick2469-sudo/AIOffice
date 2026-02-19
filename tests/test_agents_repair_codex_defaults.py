@@ -19,7 +19,7 @@ def test_agents_repair_codex_defaults_only_when_old_signature():
     assert payload["ok"] is True
     assert payload["changed"] is True
     assert payload["after"]["backend"] == "openai"
-    assert payload["after"]["model"] == "gpt-4o-mini"
+    assert payload["after"]["model"] == "gpt-5.2-codex"
 
     # Second call should no-op.
     repair_resp2 = client.post("/api/agents/repair")
@@ -27,4 +27,3 @@ def test_agents_repair_codex_defaults_only_when_old_signature():
     payload2 = repair_resp2.json()
     assert payload2["ok"] is True
     assert payload2["changed"] is False
-

@@ -2364,3 +2364,196 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-18 | Core reliability pass: provider diagnostics, no silent Ollama fallback, calmer workspace
+
+### Provider and routing reliability
+- Switched provider and credential connection tests to probe-based diagnostics instead of relying on generation:
+  - `POST /api/providers/test`
+  - `POST /api/agents/{agent_id}/credentials/test`
+- Added structured test details in API models (`details`) so UI can show concrete failures (status code, URL, timeout, parsed provider error).
+- Extended OpenAI and Claude clients/adapters with:
+  - `probe_connection(...)`
+  - `get_last_error()`
+  - richer error extraction for non-200 responses and empty payloads.
+- Hardened runtime error surfacing in `server/agent_engine.py`:
+  - OpenAI/Claude empty responses now return explicit backend error text from adapter/client state.
+  - Unknown backend values are treated as misconfiguration (explicit error), not silently routed to Ollama.
+- Strengthened Codex backend enforcement:
+  - Startup migration now upgrades any `codex` agent with `backend=ollama` to `openai/gpt-4o-mini` + `openai_default`.
+  - `/api/agents/repair` now upgrades any `codex` Ollama config (not only legacy model signature).
+  - App startup mismatch banner triggers whenever codex backend is Ollama.
+
+### Chat lock + approvals UX hardening
+- Added approval modal escape hatch in `ChatRoom`:
+  - `Not now` dismiss action.
+  - Esc now snoozes current approval instead of immediately re-opening it.
+  - snoozed approvals stay in queue and can be reopened manually from Pending list.
+- This prevents modal trap behavior while preserving approval audit flow.
+
+### Workspace/UI calmness pass
+- Refined workspace shell presets and controls:
+  - true `split`, `full-ide`, `focus` behavior
+  - split mode can collapse/show chat pane
+  - full-ide retains left/right collapse controls
+  - focus keeps preview-primary with optional chat drawer.
+- Added calmer, denser visual treatment:
+  - dark top header blending (reduced strip/shadow effect)
+  - compact tab row, breadcrumb/meta styling, toned pane surfaces
+  - compact chat mode spacing/typography adjustments in builder layouts.
+- Added lightweight virtualization for projects list rendering in sidebar.
+
+### Tests updated for new contracts
+- Updated provider test suites to patch probe path:
+  - `tests/test_provider_endpoints.py`
+  - `tests/test_agent_credentials_test_endpoint.py`
+- Updated pane-layout tests to current preset keys (`split`, `files-preview`):
+  - `tests/test_project_ui_state_pane_layout.py`
+  - `tests/test_project_ui_state_invalid_pane_layout.py`
+- Updated brainstorm test to mock Ollama availability with the stricter backend check:
+  - `tests/test_brainstorm_mode.py`
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `with-runtime.cmd client/dev-lint.cmd` PASS
+- `with-runtime.cmd client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` FAIL (no local service listening on expected smoke port in this run)
+- `with-runtime.cmd python tools/desktop_smoke.py` FAIL (`PORT_8000_READY=False`, `HEALTH_OK=False` in this run)
+
+## 2026-02-19 | Prompt #17: Codex/OpenAI key flow hardening + registry sync overrides
+
+### Backend routing and key pipeline
+- Added provider runtime resolver: `server/provider_config.py`
+  - DB settings first (`*.api_key_enc`, `*.base_url`, `*.model_default`)
+  - then provider secret vault (`provider_secrets` via key_ref)
+  - then env/.env fallback.
+  - 10s in-memory TTL cache with explicit invalidation.
+- Updated OpenAI and Claude clients to resolve runtime config through provider resolver:
+  - `server/openai_client.py`
+  - `server/claude_client.py`
+- Updated agent credential resolution path:
+  - `server/agent_engine.py` now uses unified provider resolver and emits explicit backend error events with actionable key hints.
+  - No silent OpenAI->Ollama fallback path introduced.
+
+### Codex default enforcement and registry sync
+- Added per-field override tracking for agents:
+  - new `agents.user_overrides` migration-safe column
+  - `update_agent(..., mark_override=True)` marks edited fields as user-overridden.
+- Added registry sync with override protection:
+  - startup sync in `init_db()`
+  - new API endpoint: `POST /api/agents/sync-registry?force=true|false`
+  - non-force sync updates only non-overridden fields.
+- Hardened codex migration behavior:
+  - startup migration now repairs only known legacy Ollama codex signatures when backend/model are not user-overridden.
+  - `POST /api/agents/repair` now uses legacy signature guard and sets `provider_key_ref=openai_default`.
+
+### Provider settings contract and status clarity
+- Added additive settings endpoints:
+  - `GET /api/settings/providers`
+  - `POST /api/settings/providers`
+- Added model types:
+  - `ProviderSettingsIn`, `ProviderSettingsOut`, `ProviderSettingsProviderOut`.
+- Provider status endpoints now use unified runtime resolver:
+  - `GET /api/openai/status`
+  - `GET /api/claude/status`
+  - include key source/masked key + credential availability.
+- Improved provider test errors:
+  - `POST /api/providers/test` now returns explicit hints/details for missing keys/network/base URL errors.
+- Added console observability events for provider setting updates.
+
+### UI updates for key flow and Codex visibility
+- Added Settings API Keys panel:
+  - `client/src/components/settings/ApiKeysPanel.jsx`
+  - integrated in `client/src/components/settings/SettingsShell.jsx`
+  - supports save/test for OpenAI + Claude, masked key display, fallback toggle.
+- Updated AgentConfig visibility:
+  - codex row now shows API readiness badge
+  - explicit warning banners when OpenAI/Claude keys are missing.
+- Updated codex mismatch detection in `client/src/App.jsx` to legacy signature guard (`ollama + legacy qwen`), reducing false positives.
+
+### Security cleanup
+- Sanitized local `.env` placeholders (no real key values retained in workspace file).
+- Added startup env safety warnings in `server/main.py` for placeholder or likely exposed key patterns (without printing keys).
+- Clarified startup Ollama warning text to avoid implying total outage when cloud providers are configured.
+
+### Tests
+- Added:
+  - `tests/test_settings_providers_endpoint.py`
+  - `tests/test_agents_sync_registry.py`
+- Updated:
+  - `tests/test_codex_default_migration.py`
+  - `tests/test_agent_engine_provider_key_routing.py`
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-19 | Prompt #18: GPT-5.2/Opus defaults + Responses API routing + explicit fallback behavior
+
+### Backend model defaults and runtime behavior
+- Updated registry and migrations to align defaults:
+  - Codex default model now `gpt-5.2-codex`
+  - OpenAI provider default now `gpt-5.2`
+  - Claude provider default now `claude-opus-4-6`
+- Added provider default model migration guardrails in `server/database.py` so legacy defaults (`gpt-4o-mini`, Sonnet variants) are upgraded when not explicitly overridden.
+- Implemented OpenAI Responses client (`server/openai_responses.py`) and routed GPT-5.x models through `/v1/responses` in `server/openai_client.py`.
+- Added explicit HTTP error mapping for OpenAI Responses (401/403 key invalid, 404 model unavailable, timeout/service failures).
+- Added response provenance metadata plumbing:
+  - message `meta_json` persistence in DB
+  - runtime metadata queued in `server/agent_engine.py` and saved with agent messages
+  - includes provider/model/credential_source and fallback marker.
+
+### No-silent-fallback enforcement
+- `server/agent_engine.py` now enforces explicit behavior:
+  - OpenAI/Claude failures return actionable error text with Settings path when fallback is disabled.
+  - Ollama fallback runs only when `providers.fallback_to_ollama=true`.
+  - fallback responses are explicitly labeled `(FALLBACK: OLLAMA)` and emit console events.
+
+### Settings + Agent UI updates
+- Updated Settings API key UX in `client/src/components/settings/ApiKeysPanel.jsx`:
+  - OpenAI model choices include `gpt-5.2` / `gpt-5.2-codex`
+  - Claude model choices include `claude-opus-4-6`
+  - OpenAI reasoning effort control (`low|medium|high`)
+  - improved diagnostics copy/details handling from provider tests.
+- Rebuilt `client/src/components/settings/AgentConfigDrawer.jsx` for explicit credential source control:
+  - Provider defaults vs per-agent override
+  - save/test/clear override credential flow
+  - effective runtime badge and key-missing warnings.
+- Updated legacy config defaults in:
+  - `client/src/components/AgentConfig.jsx`
+  - `client/src/components/ProviderSettings.jsx`
+  - `client/src/components/settings/ProviderCard.jsx`
+- Added chat-level runtime provenance line in `client/src/components/ChatRoom.jsx` and `client/src/App.css`.
+
+### Tests
+- Added:
+  - `tests/test_openai_responses.py` (output parsing + 401/404 mapping)
+  - `tests/test_agent_engine_no_silent_fallback.py` (fallback disabled/enabled behavior)
+- Extended:
+  - `tests/test_agent_engine_provider_key_routing.py` (agent override beats provider default)
+- Updated defaults/expectations to GPT-5.2/Opus in:
+  - `tests/test_provider_endpoints.py`
+  - `tests/test_agent_credentials_test_endpoint.py`
+  - `tests/test_agents_repair_codex_defaults.py`
+  - `tests/test_codex_default_migration.py`
+  - `tests/test_backend_unavailable_message.py`
+  - `tests/test_settings_providers_endpoint.py`
+
+### Verification
+- `with-runtime.cmd python -m pytest -q tests` PASS
+- `client/dev-lint.cmd` PASS
+- `client/dev-build.cmd` PASS
+- `with-runtime.cmd python tools/runtime_smoke.py` PASS
+- `with-runtime.cmd python tools/startup_smoke.py` PASS
+- `with-runtime.cmd python tools/desktop_smoke.py` PASS
+- `with-runtime.cmd python tools/toolchain_smoke.py` PASS
+- `with-runtime.cmd python tools/personality_smoke.py` PASS

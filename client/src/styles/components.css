@@ -1,0 +1,218 @@
+/* Shared UI primitives for a consistent surface system */
+
+html,
+body,
+#root,
+.app-v2 {
+  background: var(--bg0);
+  color: var(--textPrimary);
+  font-family: var(--font-sans);
+}
+
+* {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.btn,
+.ui-btn,
+.refresh-btn,
+.control-btn,
+.msg-action-btn,
+.thread-close-btn,
+.workspace-tab-btn,
+.settings-tabs button,
+.app-topbar-nav button,
+.projects-sidebar-actions button,
+.task-move-btn,
+.add-room-btn {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg2);
+  color: var(--textSecondary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 6px 11px;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.btn:hover,
+.ui-btn:hover,
+.refresh-btn:hover,
+.control-btn:hover,
+.msg-action-btn:hover,
+.thread-close-btn:hover,
+.workspace-tab-btn:hover,
+.settings-tabs button:hover,
+.app-topbar-nav button:hover,
+.projects-sidebar-actions button:hover,
+.task-move-btn:hover,
+.add-room-btn:hover {
+  background: color-mix(in srgb, var(--bg2) 70%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--border) 65%, var(--accent));
+  color: var(--textPrimary);
+}
+
+.btn:disabled,
+.ui-btn:disabled,
+.refresh-btn:disabled,
+.control-btn:disabled,
+.msg-action-btn:disabled,
+.thread-close-btn:disabled,
+.workspace-tab-btn:disabled,
+.settings-tabs button:disabled,
+.app-topbar-nav button:disabled,
+.projects-sidebar-actions button:disabled,
+.task-move-btn:disabled,
+.add-room-btn:disabled {
+  opacity: var(--disabledOpacity);
+  cursor: not-allowed;
+}
+
+.btn-primary,
+.ui-btn-primary,
+.control-btn.gate-btn,
+.create-submit-btn {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+  background: var(--accentSoft);
+  color: var(--textPrimary);
+}
+
+.btn-danger,
+.ui-btn-destructive,
+.stop-btn {
+  border-color: color-mix(in srgb, var(--danger) 52%, var(--border));
+  background: var(--dangerSoft);
+  color: var(--danger);
+}
+
+.btn-ghost,
+.ui-btn-ghost {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--border) 75%, transparent);
+}
+
+.input,
+.select,
+.ui-input,
+input[type='text'],
+input[type='password'],
+input[type='email'],
+input[type='number'],
+textarea,
+select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg2);
+  color: var(--textPrimary);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  line-height: var(--line-normal);
+  padding: 8px 10px;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--textMuted);
+}
+
+.chip,
+.ui-chip,
+.pill,
+.convo-status,
+.agent-id-pill,
+.backend-pill,
+.status-badge {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--bg2) 90%, transparent);
+  color: var(--textSecondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.panel,
+.workspace-pane,
+.workspace-main-pane,
+.workspace-side-drawer,
+.create-project-card,
+.create-recent-projects,
+.approval-modal,
+.approval-queue-panel,
+.command-palette,
+.agent-config-form-wrap,
+.agent-config-list,
+.projects-sidebar-item,
+.status-item,
+.task-card,
+.task-modal,
+.thread-msg {
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+}
+
+.panel-header,
+.workspace-shell-header,
+.workspace-tab-row,
+.projects-sidebar-header,
+.status-header,
+.thread-header,
+.approval-queue-header,
+.settings-tabs {
+  border-bottom: 1px solid var(--border);
+}
+
+.ui-tab,
+.workspace-tab-btn,
+.settings-tabs button,
+.app-topbar-nav button {
+  min-height: 34px;
+}
+
+.ui-tab.active,
+.ui-tab-active,
+.workspace-tab-btn.active,
+.settings-tabs button.active,
+.app-topbar-nav button.active {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+  background: var(--accentSoft);
+  color: var(--textPrimary);
+}
+
+.agent-config-error,
+.upload-error,
+.app-error {
+  border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--border));
+  background: var(--dangerSoft);
+  color: color-mix(in srgb, var(--danger) 78%, var(--textPrimary));
+}
+
+.agent-config-notice {
+  border: 1px solid color-mix(in srgb, var(--success) 46%, var(--border));
+  background: var(--successSoft);
+  color: color-mix(in srgb, var(--success) 78%, var(--textPrimary));
+}
+
+*:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--focusRing);
+}
