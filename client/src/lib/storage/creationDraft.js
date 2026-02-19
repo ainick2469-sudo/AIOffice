@@ -1,4 +1,5 @@
 const CREATION_DRAFT_KEY = 'aiOffice.creationDraft';
+const PIPELINE_STEPS = new Set(['describe', 'discuss', 'plan', 'build']);
 
 function sanitizeImportEntry(entry) {
   if (!entry || typeof entry !== 'object') return null;
@@ -37,17 +38,29 @@ export function buildCreationDraft(payload = {}) {
     ? payload.importQueue
     : importQueueRuntime.map(sanitizeImportItem).filter(Boolean);
 
+  const requestedStep = String(payload.pipelineStep || '').trim().toLowerCase();
+  const pipelineStep = PIPELINE_STEPS.has(requestedStep)
+    ? requestedStep
+    : (text ? 'discuss' : 'describe');
+
   return {
     id: payload.id || `draft-${Date.now()}`,
     text,
     createdAt: payload.createdAt || nowIso,
+    lastEditedAt: payload.lastEditedAt || payload.updatedAt || nowIso,
     updatedAt: nowIso,
+    pipelineStep,
     templateId: payload.templateId || payload.template || null,
+    templateHint: payload.templateHint || payload.templateId || payload.template || null,
     importQueue,
     importQueueRuntime,
+    attachments: importQueue,
     suggestedName: payload.suggestedName || payload.project_name || '',
     suggestedStack: payload.suggestedStack || payload.stack_choice || 'auto-detect',
     discussionSeeded: Boolean(payload.discussionSeeded),
+    specDraftMd: String(payload.specDraftMd || payload.spec_md || ''),
+    ideaBankMd: String(payload.ideaBankMd || payload.idea_bank_md || ''),
+    rawRequest: String(payload.rawRequest || text),
     summary: {
       goals: payload.summary?.goals || '',
       risks: payload.summary?.risks || '',
@@ -63,12 +76,19 @@ export function toStorageDraft(draft) {
     id: next.id,
     text: next.text,
     createdAt: next.createdAt,
+    lastEditedAt: next.lastEditedAt,
     updatedAt: next.updatedAt,
+    pipelineStep: next.pipelineStep,
     templateId: next.templateId,
+    templateHint: next.templateHint,
     importQueue: next.importQueue,
+    attachments: next.attachments,
     suggestedName: next.suggestedName,
     suggestedStack: next.suggestedStack,
     discussionSeeded: Boolean(next.discussionSeeded),
+    specDraftMd: next.specDraftMd,
+    ideaBankMd: next.ideaBankMd,
+    rawRequest: next.rawRequest,
     summary: next.summary,
   };
 }

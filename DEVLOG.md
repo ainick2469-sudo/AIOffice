@@ -1724,6 +1724,34 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
 
+## 2026-02-19 | Prompt #20: Home creation flow (Discuss -> Plan -> Build) with full-prompt capture
+
+### Home flow and draft lifecycle
+- Refactored Home creation to avoid instant Workspace navigation on submit.
+- `Create` now stores a durable creation draft and enters explicit creation mode in Home.
+- Added `CreationPipeline` UI to run the three phases:
+  - `Discuss` (brainstorm + summary)
+  - `Plan` (spec confirmation with completeness gate)
+  - `Build` (project creation only after explicit approval)
+- Startup now restores persisted creation drafts into Home instead of auto-redirecting to Workspace.
+
+### Full prompt capture and preservation
+- Hardened wizard prompt handling in `CreateProjectWizard.jsx`:
+  - controlled textarea + ref-backed submit source (prevents stale closure reads)
+  - no silent truncation, multiline preserved
+  - Ctrl+Enter advances step; Enter remains newline
+- Template selection no longer overwrites typed prompt text; template is treated as hint metadata.
+- Creation submit uses `rawRequest` when available, preserving the exact original prompt text through project creation request payload.
+
+### New UI guardrails
+- Added explicit guard when attempting to leave Home for Workspace with an uncreated draft:
+  - keep working in Home, or discard draft and continue.
+- Added "Back to Describe" and "Start Over" controls inside creation pipeline without clearing unrelated app state.
+
+### Tests
+- Updated `tests/test_project_create_from_prompt_api.py`:
+  - Added multiline prompt regression test asserting prompt text is preserved in generated spec markdown.
+
 ## 2026-02-19 | Prompt #19: Workspace split divider reliability hardening
 
 ### Reproduction note

@@ -50,6 +50,8 @@ export default function DraftDiscussView({
   draft,
   onDraftChange,
   onCreateProject,
+  onPrimaryAction = null,
+  primaryActionLabel = 'Create Project & Start Building',
   onDiscardDraft,
   onEditDraft,
 }) {
@@ -125,7 +127,11 @@ export default function DraftDiscussView({
 
   const savePromptEdit = () => {
     const nextText = String(promptDraft || '');
-    onDraftChange?.({ text: nextText });
+    onDraftChange?.({
+      text: nextText,
+      rawRequest: nextText,
+      lastEditedAt: new Date().toISOString(),
+    });
     setEditingPrompt(false);
   };
 
@@ -134,14 +140,18 @@ export default function DraftDiscussView({
     setEditingPrompt(false);
   };
 
-  const createProject = async () => {
+  const runPrimaryAction = async () => {
     if (creating) return;
     setCreating(true);
     setError('');
     try {
-      await onCreateProject?.(draft);
+      if (typeof onPrimaryAction === 'function') {
+        await onPrimaryAction(draft);
+      } else {
+        await onCreateProject?.(draft);
+      }
     } catch (err) {
-      setError(err?.message || 'Project creation failed.');
+      setError(err?.message || 'Primary action failed.');
     } finally {
       setCreating(false);
     }
@@ -183,8 +193,8 @@ export default function DraftDiscussView({
         </div>
 
         <div className="draft-head-cta">
-          <button type="button" className="ui-btn ui-btn-primary" onClick={createProject} disabled={creating}>
-            {creating ? 'Creating Project...' : 'Create Project & Start Building'}
+          <button type="button" className="ui-btn ui-btn-primary" onClick={runPrimaryAction} disabled={creating}>
+            {creating ? 'Working...' : primaryActionLabel}
           </button>
           <button type="button" className="ui-btn ui-btn-ghost" onClick={() => onEditDraft?.({ text: String(draft?.text || '') })}>
             Edit Prompt in Home

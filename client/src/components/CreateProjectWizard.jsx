@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ImportDropzone from './ImportDropzone';
 import TemplateGallery from './TemplateGallery';
 
@@ -30,6 +30,8 @@ export default function CreateProjectWizard({
   templates = [],
   onStartDraftDiscussion,
   summaryProject = null,
+  initialDraft = null,
+  onDraftUpdate = null,
 }) {
   const [step, setStep] = useState(1);
   const [prompt, setPrompt] = useState('');
@@ -41,6 +43,8 @@ export default function CreateProjectWizard({
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [draftSavedAt, setDraftSavedAt] = useState(null);
+  const promptRef = useRef('');
+  const initializedFromDraftRef = useRef('');
 
   useEffect(() => {
     try {
@@ -60,6 +64,24 @@ export default function CreateProjectWizard({
   }, []);
 
   useEffect(() => {
+    promptRef.current = prompt;
+  }, [prompt]);
+
+  useEffect(() => {
+    if (!initialDraft?.id) return;
+    if (initializedFromDraftRef.current === initialDraft.id) return;
+    initializedFromDraftRef.current = initialDraft.id;
+    setPrompt(String(initialDraft.text || ''));
+    setSelectedTemplate(String(initialDraft.templateId || ''));
+    setProjectName(String(initialDraft.suggestedName || initialDraft.project_name || ''));
+    setStackChoice(String(initialDraft.suggestedStack || initialDraft.stack_choice || 'auto-detect'));
+    setQueuedImports(Array.isArray(initialDraft.importQueueRuntime) ? initialDraft.importQueueRuntime : []);
+    setStep(1);
+    setError('');
+    setStatus('Loaded draft into Describe step.');
+  }, [initialDraft?.id, initialDraft?.text, initialDraft?.templateId, initialDraft?.suggestedName, initialDraft?.suggestedStack, initialDraft?.importQueueRuntime]);
+
+  useEffect(() => {
     if (!summaryProject?.name) return;
     const display = summaryProject.display_name || summaryProject.name;
     const stack = summaryProject.detected_kind || 'unknown';
@@ -72,6 +94,7 @@ export default function CreateProjectWizard({
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
+      const nowIso = new Date().toISOString();
       try {
         localStorage.setItem(
           DRAFT_KEY,
@@ -81,16 +104,26 @@ export default function CreateProjectWizard({
             template: selectedTemplate,
             project_name: projectName,
             stack_choice: stackChoice,
-            saved_at: new Date().toISOString(),
+            saved_at: nowIso,
           })
         );
         setDraftSavedAt(new Date());
       } catch {
         // ignore storage failures
       }
+      onDraftUpdate?.({
+        text: prompt,
+        templateId: selectedTemplate || null,
+        suggestedName: normalizeProjectName(projectName),
+        suggestedStack: stackChoice,
+        importQueueRuntime: queuedImports,
+        importQueue: queuedImports,
+        pipelineStep: 'describe',
+        lastEditedAt: nowIso,
+      });
     }, 300);
     return () => window.clearTimeout(handle);
-  }, [step, prompt, selectedTemplate, projectName, stackChoice]);
+  }, [step, prompt, selectedTemplate, projectName, stackChoice, queuedImports, onDraftUpdate]);
 
   const resolvedProjectName = useMemo(
     () => normalizeProjectName(projectName) || suggestedProjectName(prompt),
@@ -112,8 +145,37 @@ export default function CreateProjectWizard({
 
   const primaryCtaLabel = step === 1 ? 'Next: Review' : step === 2 ? 'Next: Confirm' : 'Discuss Draft';
 
+  const persistWizardDraftNow = () => {
+    const nowIso = new Date().toISOString();
+    const payload = {
+      step,
+      prompt: promptRef.current,
+      template: selectedTemplate,
+      project_name: projectName,
+      stack_choice: stackChoice,
+      saved_at: nowIso,
+    };
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(payload));
+      setDraftSavedAt(new Date());
+    } catch {
+      // ignore storage failures
+    }
+    onDraftUpdate?.({
+      text: promptRef.current,
+      templateId: selectedTemplate || null,
+      suggestedName: normalizeProjectName(projectName),
+      suggestedStack: stackChoice,
+      importQueueRuntime: queuedImports,
+      importQueue: queuedImports,
+      pipelineStep: 'describe',
+      lastEditedAt: nowIso,
+    });
+  };
+
   const clearDraft = () => {
     setPrompt('');
+    promptRef.current = '';
     setSelectedTemplate('');
     setProjectName('');
     setStackChoice('auto-detect');
@@ -130,9 +192,23 @@ export default function CreateProjectWizard({
   };
 
   const applyTemplate = (template) => {
-    setSelectedTemplate(template?.template || '');
-    if (template?.prompt) setPrompt(String(template.prompt));
+    const templateId = String(template?.template || '');
+    setSelectedTemplate(templateId);
+    if (!String(promptRef.current || '').trim() && template?.prompt) {
+      const templated = String(template.prompt);
+      setPrompt(templated);
+      promptRef.current = templated;
+    }
+    if (stackChoice === 'auto-detect' && templateId) {
+      if (templateId.includes('python')) setStackChoice('python-api');
+      else if (templateId.includes('node')) setStackChoice('node-service');
+      else if (templateId.includes('full')) setStackChoice('full-stack');
+      else setStackChoice('react-web');
+    }
     setError('');
+    setStatus(templateId
+      ? 'Template hint added. Your typed request stays unchanged.'
+      : 'Blank template selected. Your prompt text remains unchanged.');
   };
 
   const handleQueueChange = (items) => {
@@ -145,20 +221,22 @@ export default function CreateProjectWizard({
   };
 
   const gotoNext = async () => {
+    persistWizardDraftNow();
     setError('');
     if (step === 1) {
-      if (!String(prompt || '').trim()) {
+      const nextPrompt = String(promptRef.current || '');
+      if (!nextPrompt.trim()) {
         setError('Describe what you want to build before moving to review.');
         return;
       }
       if (!projectName.trim()) {
-        setProjectName(suggestedProjectName(prompt));
+        setProjectName(suggestedProjectName(nextPrompt));
       }
       setStep(2);
       return;
     }
     if (step === 2) {
-      if (!String(prompt || '').trim()) {
+      if (!String(promptRef.current || '').trim()) {
         setError('Prompt cannot be empty.');
         return;
       }
@@ -170,7 +248,9 @@ export default function CreateProjectWizard({
 
   const beginDraftDiscussion = async () => {
     if (busy) return;
-    if (!String(prompt || '').trim()) {
+    persistWizardDraftNow();
+    const currentPrompt = String(promptRef.current || '');
+    if (!currentPrompt.trim()) {
       setError('Prompt cannot be empty.');
       return;
     }
@@ -179,10 +259,15 @@ export default function CreateProjectWizard({
     setStatus('Opening draft discussion...');
     try {
       await onStartDraftDiscussion?.({
-        text: prompt,
+        text: currentPrompt,
+        rawRequest: currentPrompt,
         templateId: selectedTemplate || null,
+        templateHint: selectedTemplate || null,
         suggestedName: resolvedProjectName,
         suggestedStack: stackChoice,
+        pipelineStep: 'discuss',
+        createdAt: new Date().toISOString(),
+        lastEditedAt: new Date().toISOString(),
         importQueueRuntime: queuedImports,
         importQueue: queuedImports.map((item) => ({
           id: item.id,
@@ -243,11 +328,25 @@ export default function CreateProjectWizard({
               <label className="create-step-label">Describe what you want to build</label>
               <textarea
                 value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  promptRef.current = nextValue;
+                  setPrompt(nextValue);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && event.ctrlKey) {
+                    event.preventDefault();
+                    gotoNext();
+                  }
+                }}
                 className="ui-input create-step-prompt"
                 rows={8}
                 placeholder="What do you want to build?"
               />
+              <div className="create-prompt-meta">
+                <span>{String(prompt || '').length} characters</span>
+                <span>Enter = newline, Ctrl+Enter = continue</span>
+              </div>
               <TemplateGallery
                 templates={templates}
                 selectedTemplate={selectedTemplate}

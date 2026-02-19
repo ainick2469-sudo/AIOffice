@@ -299,9 +299,7 @@ export default function App() {
         const persistedDraft = loadCreationDraft();
         if (!cancelled) {
           setCreationDraft(persistedDraft);
-          if (persistedDraft?.text) {
-            setTopTab('workspace');
-          }
+          if (persistedDraft?.text) setTopTab('home');
         }
 
         await refreshProjects();
@@ -417,13 +415,15 @@ export default function App() {
   };
 
   const startCreationDraftDiscussion = async (payload) => {
-    const draft = buildCreationDraft(payload || {});
+    const draft = buildCreationDraft({
+      ...(payload || {}),
+      pipelineStep: 'discuss',
+      rawRequest: String(payload?.rawRequest ?? payload?.text ?? payload?.prompt ?? ''),
+    });
     saveCreationDraft(draft);
     setCreationDraft(draft);
     setLeaveDraftModalOpen(false);
-    setWorkspaceTab('chat');
-    setTopTab('workspace');
-    setActive(normalizeActiveContext({ project: 'ai-office', channel: 'main', branch: 'main', is_app_root: true }));
+    setTopTab('home');
     try {
       localStorage.setItem(officeModeStorageKey('ai-office'), 'discuss');
     } catch {
@@ -439,7 +439,8 @@ export default function App() {
 
   const createProjectFromDraft = async (overrideDraft = null) => {
     const draft = overrideDraft || creationDraft;
-    if (!draft?.text) {
+    const requestText = String(draft?.rawRequest ?? draft?.text ?? '');
+    if (!requestText.trim()) {
       throw new Error('Draft prompt is empty. Edit the prompt before creating a project.');
     }
 
@@ -456,7 +457,7 @@ export default function App() {
     let data = null;
     if (hasImportFiles) {
       const form = toImportFormData(importRuntime, {
-        text: draft.text,
+        text: requestText,
         templateId: draft.templateId,
         suggestedName: draft.suggestedName,
         suggestedStack: draft.suggestedStack,
@@ -485,7 +486,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: draft.text,
+          prompt: requestText,
           template: draft.templateId || null,
           project_name: draft.suggestedName || null,
         }),
@@ -515,11 +516,15 @@ export default function App() {
   };
 
   const openHomeTab = () => {
+    setTopTab('home');
+  };
+
+  const openWorkspaceTab = () => {
     if (creationDraft?.text) {
       setLeaveDraftModalOpen(true);
       return;
     }
-    setTopTab('home');
+    setTopTab('workspace');
   };
 
   const handleRepairCodex = async () => {
@@ -865,7 +870,7 @@ export default function App() {
             <span className="app-route-breadcrumb">{breadcrumbLabel}</span>
             <nav className="app-topbar-nav" aria-label="Primary">
               <button className={`ui-tab ${topTab === 'home' ? 'active ui-tab-active' : ''}`} onClick={openHomeTab}>Home</button>
-              <button className={`ui-tab ${topTab === 'workspace' ? 'active ui-tab-active' : ''}`} onClick={() => setTopTab('workspace')}>Workspace</button>
+              <button className={`ui-tab ${topTab === 'workspace' ? 'active ui-tab-active' : ''}`} onClick={openWorkspaceTab}>Workspace</button>
               <button className={`ui-tab ${topTab === 'settings' ? 'active ui-tab-active' : ''}`} onClick={() => setTopTab('settings')}>Settings</button>
             </nav>
           </div>
@@ -988,6 +993,10 @@ export default function App() {
             projects={sortedProjects}
             onOpenProject={openProject}
             onStartDraftDiscussion={startCreationDraftDiscussion}
+            creationDraft={creationDraft}
+            onCreationDraftChange={updateCreationDraft}
+            onCreateProjectFromDraft={createProjectFromDraft}
+            onDiscardCreationDraft={discardCreationDraft}
             onProjectDeleted={async () => refreshProjects()}
             onProjectRenamed={async () => refreshProjects()}
           />
@@ -1055,7 +1064,7 @@ export default function App() {
           <div className="workspace-handoff-modal">
             <h3>Uncreated Draft</h3>
             <p>
-              You have an uncreated project draft. Keep discussing it or discard it before leaving Workspace.
+              You have an uncreated draft. Keep working in Home, or discard it before opening Workspace.
             </p>
             <div className="workspace-handoff-actions">
               <button
@@ -1063,7 +1072,7 @@ export default function App() {
                 className="msg-action-btn ui-btn"
                 onClick={() => {
                   setLeaveDraftModalOpen(false);
-                  setTopTab('workspace');
+                  setTopTab('home');
                 }}
               >
                 Keep working
@@ -1073,10 +1082,10 @@ export default function App() {
                 className="refresh-btn ui-btn ui-btn-primary"
                 onClick={() => {
                   discardCreationDraft();
-                  setTopTab('home');
+                  setTopTab('workspace');
                 }}
               >
-                Discard Draft
+                Discard Draft & Open Workspace
               </button>
             </div>
           </div>
