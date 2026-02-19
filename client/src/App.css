@@ -5170,14 +5170,20 @@ body {
 .app-topbar-v2 {
   height: 58px;
   border-bottom: 1px solid var(--divider);
-  background: var(--panel);
-  box-shadow: none;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--panel) 94%, var(--bg0)),
+    color-mix(in srgb, var(--bg1) 82%, var(--panel))
+  );
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--divider) 80%, transparent);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   padding: 0 var(--space-3);
   backdrop-filter: blur(8px);
+  position: relative;
+  z-index: 10;
 }
 
 .app-header-left {
@@ -5248,6 +5254,57 @@ body {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+}
+
+.app-header-compact-menu {
+  display: none;
+  position: relative;
+}
+
+.app-header-compact-menu > summary {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg2) 80%, transparent);
+  color: var(--textSecondary);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.app-header-compact-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.app-header-compact-menu > summary:hover {
+  color: var(--textPrimary);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--panel2) 72%, transparent);
+}
+
+.app-header-compact-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  width: min(320px, 92vw);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  box-shadow: var(--shadow-2);
+  padding: var(--space-2);
+  display: grid;
+  gap: var(--space-2);
+  z-index: 30;
+}
+
+.app-header-compact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 12px;
 }
 
 .app-header-details .pill {

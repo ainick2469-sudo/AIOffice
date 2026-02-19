@@ -9,6 +9,37 @@ const PARTICIPANTS = [
   { id: 'qa', label: 'QA' },
 ];
 
+function summarizePrompt(prompt) {
+  const raw = String(prompt || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return 'Define the exact product outcome in one sentence.';
+  if (raw.length <= 120) return raw;
+  return `${raw.slice(0, 117).trim()}...`;
+}
+
+function buildClarifyingBullets(draft) {
+  const prompt = String(draft?.text || '').trim();
+  const summary = draft?.summary || {};
+  const stack = String(draft?.suggestedStack || '').trim();
+  const importCount = Array.isArray(draft?.importQueue) ? draft.importQueue.length : 0;
+  const bullets = [];
+
+  bullets.push(`Outcome target: ${summarizePrompt(prompt)}`);
+  bullets.push(stack && stack !== 'auto-detect'
+    ? `Preferred stack is ${stack}; confirm this is still the right default before building.`
+    : 'Confirm preferred stack or keep auto-detect for first implementation pass.');
+  bullets.push(importCount > 0
+    ? `Imported assets detected (${importCount}); align what should be reused vs rebuilt.`
+    : 'Define first milestone scope so the initial build stays small and testable.');
+  bullets.push(summary?.questions
+    ? `Open question to resolve: ${String(summary.questions).trim()}`
+    : 'Capture 1-3 unresolved questions to prevent rework during implementation.');
+  bullets.push(summary?.risks
+    ? `Primary risk: ${String(summary.risks).trim()}`
+    : 'Identify the highest execution risk and how it will be validated in preview.');
+
+  return bullets.slice(0, 5);
+}
+
 function participantsStorageKey(projectName) {
   const safe = String(projectName || 'ai-office').trim().toLowerCase() || 'ai-office';
   return `ai-office:draft-discuss-participants:${safe}`;
@@ -64,6 +95,7 @@ export default function DraftDiscussView({
   const [promptDraft, setPromptDraft] = useState(String(draft?.text || ''));
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
+  const clarifyingBullets = useMemo(() => buildClarifyingBullets(draft), [draft]);
 
   useEffect(() => {
     setParticipants(readParticipants(participantKey));
@@ -193,8 +225,19 @@ export default function DraftDiscussView({
         </div>
 
         <div className="draft-head-cta">
+          <section className="draft-intake-summary">
+            <h4>Discuss Intake Summary</h4>
+            <ul>
+              {clarifyingBullets.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </section>
           <button type="button" className="ui-btn ui-btn-primary" onClick={runPrimaryAction} disabled={creating}>
             {creating ? 'Working...' : primaryActionLabel}
+          </button>
+          <button type="button" className="ui-btn" onClick={runBrainstorm}>
+            More Ideas
           </button>
           <button type="button" className="ui-btn ui-btn-ghost" onClick={() => onEditDraft?.({ text: String(draft?.text || '') })}>
             Edit Prompt in Home

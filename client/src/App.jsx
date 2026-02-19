@@ -83,6 +83,99 @@ function toImportFormData(queueItems = [], payload = {}) {
   return form;
 }
 
+function buildSeedSpecFromDraft(draft, requestText) {
+  const raw = String(requestText || '').trim();
+  const stack = String(draft?.suggestedStack || '').trim();
+  const summary = draft?.summary || {};
+  const goalSummary = String(summary?.goals || '').trim();
+  const risks = String(summary?.risks || '').trim();
+  const questions = String(summary?.questions || '').trim();
+  const nextSteps = String(summary?.nextSteps || '').trim();
+
+  const lines = [
+    '# Build Spec',
+    '',
+    '## Problem / Goal',
+    raw ? `- Raw user request (verbatim):\n${raw}` : '- Raw user request (verbatim):\n- [ ] TBD',
+    goalSummary ? `- Goal summary: ${goalSummary}` : '- Goal summary: refine during planning.',
+    '',
+    '## Target Platform',
+    stack && stack !== 'auto-detect'
+      ? `- Preferred stack: ${stack}`
+      : '- Preferred stack: auto-detect',
+    '',
+    '## Core Loop',
+    nextSteps ? `- ${nextSteps}` : '- Discuss -> Plan -> Build -> Verify -> Iterate',
+    '',
+    '## Features',
+    '### Must',
+    '- Preserve original user intent in implementation output',
+    '### Should',
+    '- Provide clear progress and verification visibility',
+    '### Could',
+    '- Add polish after core loop is stable',
+    '',
+    '## Non-Goals',
+    '- Avoid scope expansion before the first working preview.',
+    '',
+    '## UX Notes',
+    '- Keep workflow beginner-friendly and explicit.',
+    '',
+    '## Data/State Model',
+    '- Draft captures raw request + planning summary until project creation.',
+    '',
+    '## Acceptance Criteria',
+    '- [ ] Original request remains visible verbatim in project spec/history.',
+    '- [ ] Build starts only after explicit plan approval.',
+    '',
+    '## Risks + Unknowns',
+    risks ? `- ${risks}` : '- Clarify unresolved technical constraints.',
+    questions ? `- ${questions}` : '- Confirm open questions before large code changes.',
+    '',
+  ];
+
+  return `${lines.join('\n').trim()}\n`;
+}
+
+function buildSeedIdeaBankFromDraft(draft, requestText) {
+  const raw = String(requestText || '').trim();
+  const templateHint = String(draft?.templateHint || draft?.templateId || '').trim();
+  const summary = draft?.summary || {};
+  const goals = String(summary?.goals || '').trim();
+  const questions = String(summary?.questions || '').trim();
+  const parts = ['# Idea Bank', '', '## Seed Request'];
+  if (raw) {
+    parts.push(raw);
+  }
+  if (templateHint) {
+    parts.push('', `Template hint: ${templateHint}`);
+  }
+  parts.push('', '## Discuss Notes');
+  parts.push(goals ? `- Goals: ${goals}` : '- Goals:');
+  parts.push(questions ? `- Questions: ${questions}` : '- Questions:');
+  return `${parts.join('\n').trim()}\n`;
+}
+
+async function persistDraftSeedToProjectSpec(data, draft, requestText) {
+  const projectName = String(data?.project || data?.active?.project || '').trim().toLowerCase();
+  const channelId = String(data?.channel_id || data?.channel || '').trim();
+  if (!projectName || !channelId) return;
+
+  const raw = String(requestText || '');
+  const specDraft = String(draft?.specDraftMd || '').trim() || buildSeedSpecFromDraft(draft, raw);
+  const ideaBankDraft = String(draft?.ideaBankMd || '').trim() || buildSeedIdeaBankFromDraft(draft, raw);
+
+  await fetch('/api/spec/current', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      channel: channelId,
+      spec_md: specDraft,
+      idea_bank_md: ideaBankDraft,
+    }),
+  });
+}
+
 function officeModeStorageKey(projectName) {
   const safe = String(projectName || 'ai-office').trim().toLowerCase() || 'ai-office';
   return `ai-office:workspace-office-mode:${safe}`;
@@ -170,6 +263,30 @@ export default function App() {
     : topTab === 'settings'
       ? 'Settings'
       : 'Home';
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(sidebarCollapsedKey(activeProject));
+      if (raw == null) {
+        setProjectsSidebarCollapsed(true);
+      } else {
+        setProjectsSidebarCollapsed(raw === 'true');
+      }
+    } catch {
+      setProjectsSidebarCollapsed(true);
+    }
+  }, [activeProject]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        sidebarCollapsedKey(activeProject),
+        projectsSidebarCollapsed ? 'true' : 'false'
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }, [activeProject, projectsSidebarCollapsed]);
 
   useBodyScrollLock(Boolean(leaveDraftModalOpen), 'leave-draft-modal');
 
@@ -421,9 +538,10 @@ export default function App() {
   const updateCreationDraft = (updater) => {
     setCreationDraft((prev) => {
       const base = prev || buildCreationDraft({});
-      const next = typeof updater === 'function'
+      const candidate = typeof updater === 'function'
         ? updater(base)
-        : buildCreationDraft({ ...base, ...(updater || {}) });
+        : { ...base, ...(updater || {}) };
+      const next = buildCreationDraft(candidate);
       saveCreationDraft(next);
       return next;
     });
@@ -518,6 +636,18 @@ export default function App() {
         localStorage.setItem(officeModeStorageKey(projectName), 'build');
       } catch {
         // ignore storage failures
+      }
+    }
+
+    try {
+      await persistDraftSeedToProjectSpec(data, draft, requestText);
+    } catch (seedError) {
+      if (import.meta.env?.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn('[creation] Unable to persist draft seed to spec.', {
+          project: projectName || '(unknown)',
+          message: seedError?.message || String(seedError),
+        });
       }
     }
 
@@ -1157,26 +1287,3 @@ export default function App() {
     </div>
   );
 }
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(sidebarCollapsedKey(activeProject));
-      if (raw == null) {
-        setProjectsSidebarCollapsed(true);
-      } else {
-        setProjectsSidebarCollapsed(raw === 'true');
-      }
-    } catch {
-      setProjectsSidebarCollapsed(true);
-    }
-  }, [activeProject]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        sidebarCollapsedKey(activeProject),
-        projectsSidebarCollapsed ? 'true' : 'false'
-      );
-    } catch {
-      // ignore storage failures
-    }
-  }, [activeProject, projectsSidebarCollapsed]);

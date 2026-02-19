@@ -60,6 +60,32 @@
   min-width: 240px;
 }
 
+.draft-intake-summary {
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accentSoft) 52%, var(--panel));
+  padding: 10px;
+}
+
+.draft-intake-summary h4 {
+  margin: 0;
+  font-size: 12px;
+  color: var(--textPrimary);
+}
+
+.draft-intake-summary ul {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.draft-intake-summary li {
+  color: var(--textSecondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .draft-participants-strip {
   display: flex;
   align-items: center;

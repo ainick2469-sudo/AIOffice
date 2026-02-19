@@ -297,7 +297,7 @@ export default function CreationPipeline({
           draft={draft}
           onDraftChange={onDraftChange}
           onPrimaryAction={() => setStep('plan')}
-          primaryActionLabel="Continue to Plan"
+          primaryActionLabel="Proceed to Build"
           onDiscardDraft={onDiscardDraft}
           onEditDraft={onBackToDescribe}
         />

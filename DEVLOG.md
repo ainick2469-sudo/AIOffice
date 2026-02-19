@@ -2713,3 +2713,34 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 ### Verification
 - `cd client && npm run build` PASS
 - `with-runtime.cmd python -m pytest` PASS (`95 passed`)
+
+## 2026-02-19 | Prompt #24 (V2): Chrome/theme unification + split reliability + Home draft preservation
+
+### App chrome + theme unification
+- Updated `client/src/App.css` top chrome styling to use the same dark surface tokens as workspace panels:
+  - blended topbar gradient from `--panel/--bg1`
+  - subtle divider + shadow token usage
+  - no hard light strip behavior in dark mode
+- Added explicit compact-menu styling (`.app-header-compact-menu`, popover, rows) so responsive header controls render with themed surfaces instead of browser defaults.
+- Updated `client/index.html` with dark first-paint fallback (`data-theme="dark"` + body background/text) to avoid white flash before React mounts.
+
+### Home “chat to create” message capture + discuss-first pipeline
+- Fixed `client/src/App.jsx` draft update normalization:
+  - `updateCreationDraft` now always passes through `buildCreationDraft(...)` (including functional updaters) so full prompt/raw request fields stay canonical.
+- Wired draft seed persistence into project creation:
+  - `createProjectFromDraft` now calls `persistDraftSeedToProjectSpec(...)` before draft clear/navigation.
+  - original request is preserved in seeded Spec/Idea Bank payloads.
+- Updated `client/src/components/CreationPipeline.jsx` discuss CTA label to `Proceed to Build` for the explicit discuss->plan->build handoff.
+- Enhanced `client/src/components/discuss/DraftDiscussView.jsx` with a compact auto-generated intake summary (clarifying bullets) and explicit actions:
+  - `Proceed to Build`
+  - `More Ideas`
+  - `Edit Prompt in Home`
+
+### Split/layout reliability and regression safety
+- Confirmed active workspace uses unified `SplitPane` implementation and persisted pane keys.
+- Fixed `client/src/App.jsx` structural issue where sidebar persistence `useEffect` hooks had drifted outside the component; hooks restored inside component lifecycle.
+- `Reset Layout` path remains wired to clear persisted pane-size keys (`ai-office:paneSizes:*`) for recovery from corrupted state.
+
+### Verification
+- `cd client && npm run build` PASS
+- `with-runtime.cmd python -m pytest -q tests` PASS (`95 passed`, warnings only)
