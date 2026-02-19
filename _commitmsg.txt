@@ -1,1 +1,0 @@
-ui: declutter workspace with activity bar + pinnable panes + focus mode
