@@ -39,6 +39,7 @@ const MODE_DETAILS = {
   discuss: 'Discuss mode: align scope, risks, and decisions before implementation.',
   build: 'Build mode: one primary view with optional pinned side pane for calm execution.',
 };
+const DEFAULT_PRIMARY_SECONDARY_RATIO = 0.62;
 
 const PANEL_HELP = {
   chat: {
@@ -248,6 +249,7 @@ export default function WorkspaceShell({
   const [secondaryPinnedOverrides, setSecondaryPinnedOverrides] = useState({});
   const [coachDismissedOverrides, setCoachDismissedOverrides] = useState({});
   const [refreshVersions, setRefreshVersions] = useState({});
+  const [primarySecondaryRatio, setPrimarySecondaryRatio] = useState(DEFAULT_PRIMARY_SECONDARY_RATIO);
 
   const projectLabel = projectName || 'ai-office';
   const hasCreationDraft = Boolean(creationDraft?.text);
@@ -318,6 +320,11 @@ export default function WorkspaceShell({
     && secondaryPinned !== activeView
     && PRIMARY_VIEW_IDS.includes(secondaryPinned)
   );
+  const primarySecondaryKey = `ai-office:paneSizes:${projectStorageId}:${selectedBuildLayout}:vertical:primary-secondary`;
+
+  useEffect(() => {
+    setPrimarySecondaryRatio(DEFAULT_PRIMARY_SECONDARY_RATIO);
+  }, [primarySecondaryKey]);
 
   useBodyScrollLock(Boolean(showHandoffModal), 'workspace-build-handoff-modal');
 
@@ -738,13 +745,14 @@ export default function WorkspaceShell({
               {hasPinnedSecondary ? (
                 <SplitPane
                   direction="vertical"
-                  ratio={0.62}
-                  defaultRatio={0.62}
+                  ratio={primarySecondaryRatio}
+                  defaultRatio={DEFAULT_PRIMARY_SECONDARY_RATIO}
                   minPrimary={460}
                   minSecondary={360}
-                  persistKey={`ai-office:paneSizes:${projectStorageId}:${selectedBuildLayout}:vertical:primary-secondary`}
+                  persistKey={primarySecondaryKey}
                   primaryLabel={paneMeta(activeView).title}
                   secondaryLabel={paneMeta(secondaryPinned).title}
+                  onRatioChange={setPrimarySecondaryRatio}
                 >
                   {renderPrimaryPane()}
                   {renderSecondaryPane()}
