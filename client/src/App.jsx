@@ -12,11 +12,23 @@ import {
   saveCreationDraft,
   clearCreationDraft,
 } from './lib/storage/creationDraft';
+import {
+  THEME_MODE_KEY,
+  THEME_SCHEME_KEY,
+  LEGACY_THEME_MODE_KEY,
+  LEGACY_THEME_KEY,
+  getThemeSchemeMeta,
+  nextThemeScheme,
+  normalizeThemeMode,
+  normalizeThemeScheme,
+  resolveTheme,
+} from './lib/themeCatalog';
 import useEscapeKey from './hooks/useEscapeKey';
 import useBodyScrollLock, { getBodyScrollLockSnapshot } from './hooks/useBodyScrollLock';
 import { clearAllBodyScrollLocks } from './hooks/scrollLockManager';
 import './styles/tokens.css';
 import './styles/theme.css';
+import './styles/schemes.css';
 import './styles/components.css';
 import './styles/settings.css';
 import './styles/draft-discuss.css';
@@ -248,13 +260,62 @@ function collectScrollSnapshot() {
   }).filter(Boolean);
 }
 
+function prefersLightScheme() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-color-scheme: light)').matches;
+}
+
+function readThemeMode() {
+  if (typeof window === 'undefined') return 'system';
+  try {
+    const next = localStorage.getItem(THEME_MODE_KEY);
+    if (next) return normalizeThemeMode(next);
+    const legacy = localStorage.getItem(LEGACY_THEME_MODE_KEY);
+    if (legacy) return normalizeThemeMode(legacy);
+    const legacyResolved = localStorage.getItem(LEGACY_THEME_KEY);
+    if (legacyResolved === 'dark' || legacyResolved === 'light') {
+      return legacyResolved;
+    }
+  } catch {
+    // ignore storage failures
+  }
+  return 'system';
+}
+
+function readThemeScheme() {
+  if (typeof window === 'undefined') return 'midnight';
+  try {
+    const next = localStorage.getItem(THEME_SCHEME_KEY);
+    if (next) return normalizeThemeScheme(next);
+  } catch {
+    // ignore storage failures
+  }
+  return 'midnight';
+}
+
+function applyRootThemeAttributes(resolvedTheme, scheme) {
+  if (typeof document === 'undefined') return;
+  const normalizedTheme = resolvedTheme === 'light' ? 'light' : 'dark';
+  const normalizedScheme = normalizeThemeScheme(scheme);
+  const root = document.documentElement;
+  root.setAttribute('data-theme', normalizedTheme);
+  root.setAttribute('data-scheme', normalizedScheme);
+}
+
+const INITIAL_THEME_MODE = readThemeMode();
+const INITIAL_THEME_SCHEME = readThemeScheme();
+const INITIAL_THEME = resolveTheme(INITIAL_THEME_MODE, prefersLightScheme());
+applyRootThemeAttributes(INITIAL_THEME, INITIAL_THEME_SCHEME);
+
 export default function App() {
   const initialRoute = useMemo(
     () => parseAppPathname(typeof window !== 'undefined' ? window.location.pathname : '/'),
     []
   );
-  const [theme, setTheme] = useState('dark');
-  const [themeMode, setThemeMode] = useState('dark');
+  const [themeMode, setThemeMode] = useState(INITIAL_THEME_MODE);
+  const [themeScheme, setThemeScheme] = useState(INITIAL_THEME_SCHEME);
+  const [theme, setTheme] = useState(INITIAL_THEME);
   const [topTab, setTopTab] = useState(initialRoute.topTab);
   const [createRouteDraftId, setCreateRouteDraftId] = useState(initialRoute.draftId || '');
   const [workspaceTab, setWorkspaceTab] = useState('builder');
@@ -334,71 +395,19 @@ export default function App() {
   useBodyScrollLock(Boolean(leaveDraftModalOpen), 'leave-draft-modal');
 
   useEffect(() => {
-    const storedMode = (() => {
-      try {
-        return localStorage.getItem('ai-office-theme-mode');
-      } catch {
-        return null;
-      }
-    })();
-
-    if (storedMode === 'dark' || storedMode === 'light' || storedMode === 'system') {
-      setThemeMode(storedMode);
-      if (storedMode !== 'system') {
-        setTheme(storedMode);
-      }
-      return;
-    }
-
-    const legacyTheme = (() => {
-      try {
-        return localStorage.getItem('ai-office-theme');
-      } catch {
-        return null;
-      }
-    })();
-
-    if (legacyTheme === 'dark' || legacyTheme === 'light') {
-      setThemeMode(legacyTheme);
-      setTheme(legacyTheme);
-      try {
-        localStorage.setItem('ai-office-theme-mode', legacyTheme);
-      } catch {
-        // ignore storage failures
-      }
-      return;
-    }
-
-    const prefersLight = typeof window !== 'undefined'
-      && typeof window.matchMedia === 'function'
-      && window.matchMedia('(prefers-color-scheme: light)').matches;
-    const initialMode = 'system';
-    const resolved = prefersLight ? 'light' : 'dark';
-    setThemeMode(initialMode);
-    setTheme(resolved);
-    try {
-      localStorage.setItem('ai-office-theme-mode', initialMode);
-      localStorage.setItem('ai-office-theme', resolved);
-    } catch {
-      // ignore storage failures
-    }
-  }, []);
-
-  useEffect(() => {
     const media = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
       ? window.matchMedia('(prefers-color-scheme: light)')
       : null;
 
     const applyTheme = () => {
-      const resolved = themeMode === 'system'
-        ? (media?.matches ? 'light' : 'dark')
-        : themeMode;
+      const resolved = resolveTheme(themeMode, Boolean(media?.matches));
       setTheme(resolved);
-      const root = document.documentElement;
-      root.setAttribute('data-theme', resolved);
+      applyRootThemeAttributes(resolved, themeScheme);
       try {
-        localStorage.setItem('ai-office-theme', resolved);
-        localStorage.setItem('ai-office-theme-mode', themeMode);
+        localStorage.setItem(THEME_MODE_KEY, themeMode);
+        localStorage.setItem(THEME_SCHEME_KEY, themeScheme);
+        localStorage.setItem(LEGACY_THEME_MODE_KEY, themeMode);
+        localStorage.setItem(LEGACY_THEME_KEY, resolved);
       } catch {
         // ignore storage failures
       }
@@ -414,7 +423,7 @@ export default function App() {
     }
     media.addListener(onChange);
     return () => media.removeListener(onChange);
-  }, [themeMode]);
+  }, [themeMode, themeScheme]);
 
   const navigateToTab = useCallback((nextTopTab, options = {}) => {
     const normalized = String(nextTopTab || 'home').trim().toLowerCase();
@@ -1087,20 +1096,21 @@ export default function App() {
     }
   }, true);
 
-  const cycleThemeMode = () => {
-    setThemeMode((prev) => {
-      if (prev === 'dark') return 'light';
-      if (prev === 'light') return 'system';
-      return 'dark';
-    });
+  const cycleThemeScheme = () => {
+    setThemeScheme((prev) => nextThemeScheme(prev));
   };
 
   const themeLabel = themeMode === 'system'
     ? `System (${theme === 'dark' ? 'Dark' : 'Light'})`
     : (theme === 'dark' ? 'Dark' : 'Light');
+  const schemeLabel = getThemeSchemeMeta(themeScheme).label;
 
   return (
-    <div className={`app app-v2 ${previewFocus ? 'preview-focus-enabled' : ''}`} data-theme={theme}>
+    <div
+      className={`app app-v2 ${previewFocus ? 'preview-focus-enabled' : ''}`}
+      data-theme={theme}
+      data-scheme={themeScheme}
+    >
       {!previewFocus && topTab !== 'create' && (
         <ProjectsSidebar
           projects={sortedProjects}
@@ -1140,10 +1150,12 @@ export default function App() {
               </span>
               <button
                 className="refresh-btn ui-btn app-theme-toggle"
-                onClick={cycleThemeMode}
+                onClick={cycleThemeScheme}
+                data-tooltip="Cycle color scheme"
               >
-                Theme: {themeLabel}
+                🎨 {schemeLabel}
               </button>
+              <span className="pill ui-chip">Mode: {themeLabel}</span>
               {IS_DEV && (
                 <>
                   <button
@@ -1165,10 +1177,12 @@ export default function App() {
                 <div className="app-header-compact-row"><strong>View</strong><span>{topTab}</span></div>
                 <button
                   className="refresh-btn ui-btn app-theme-toggle"
-                  onClick={cycleThemeMode}
+                  onClick={cycleThemeScheme}
+                  data-tooltip="Cycle color scheme"
                 >
-                  Theme: {themeLabel}
+                  🎨 {schemeLabel}
                 </button>
+                <span className="pill ui-chip">Mode: {themeLabel}</span>
                 {IS_DEV && (
                   <>
                     <button
@@ -1271,6 +1285,9 @@ export default function App() {
           <SettingsShell
             themeMode={themeMode}
             onThemeModeChange={setThemeMode}
+            themeScheme={themeScheme}
+            onThemeSchemeChange={setThemeScheme}
+            onCycleThemeScheme={cycleThemeScheme}
             activeProject={activeProject}
             onOpenWorkspace={() => navigateToTab('workspace')}
           />

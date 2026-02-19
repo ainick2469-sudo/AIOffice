@@ -2868,3 +2868,13 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
   - `ai-office:tasks-draft:<projectId>`
 - Added Discuss start-build guard: empty board triggers confirmation modal (`Capture first` / `Build anyway`); populated board auto-handoffs to Spec before switching to Build.
 - Added optional visible-message callback from ChatRoom so Discuss can observe agent replies and process structured brainstorm outputs without backend changes.
+## 2026-02-19 - Prompt #009 Theme Gallery + Scheme Cycling
+- Added a layered theme system: `data-theme` for light/dark and `data-scheme` for curated color schemes, applied at root and persisted per user.
+- Added theme catalog module (`midnight`, `slate`, `nord`, `ember`, `forest`, `violet`, `rose`, `sand`) with normalization and cycling helpers.
+- Added scheme token overrides in `styles/schemes.css` so accent/focus/status tokens change globally without per-component hardcoded colors.
+- Added legacy-safe theme key migration and new persistence keys:
+  - `ai-office:themeMode`
+  - `ai-office:themeScheme`
+- Updated Settings > Appearance with a Theme Gallery grid, instant apply on click, and a `Cycle Theme` action.
+- Added one-click header cycle button (`🎨`) with tooltip and compact-menu parity.
+- Updated Settings summary to show current mode + scheme and passed scheme controls through Settings shell.

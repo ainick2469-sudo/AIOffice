@@ -1,0 +1,82 @@
+/* Curated scheme overrides.
+   Base light/dark surfaces live in tokens.css.
+   These schemes only tune accent/feedback token families. */
+
+:root[data-scheme='midnight'] {
+  --accent: #5f8dff;
+  --accent2: #84a9ff;
+  --focus: rgba(95, 141, 255, 0.48);
+  --danger: #f47575;
+  --warning: #f3b559;
+  --success: #38c98f;
+}
+
+:root[data-scheme='slate'] {
+  --accent: #38b8b2;
+  --accent2: #5cc8c2;
+  --focus: rgba(56, 184, 178, 0.44);
+  --danger: #f2877a;
+  --warning: #d7a14e;
+  --success: #4dc59b;
+}
+
+:root[data-scheme='nord'] {
+  --accent: #82b4ff;
+  --accent2: #9fc5ff;
+  --focus: rgba(130, 180, 255, 0.44);
+  --danger: #e78997;
+  --warning: #d9ac66;
+  --success: #58c3ad;
+}
+
+:root[data-scheme='ember'] {
+  --accent: #ff8c4c;
+  --accent2: #ffab73;
+  --focus: rgba(255, 140, 76, 0.44);
+  --danger: #f7796b;
+  --warning: #f0b15e;
+  --success: #4dc392;
+}
+
+:root[data-scheme='forest'] {
+  --accent: #3fbf88;
+  --accent2: #68d7a3;
+  --focus: rgba(63, 191, 136, 0.44);
+  --danger: #f08076;
+  --warning: #d9a960;
+  --success: #4dcf9f;
+}
+
+:root[data-scheme='violet'] {
+  --accent: #9f7cff;
+  --accent2: #bc9fff;
+  --focus: rgba(159, 124, 255, 0.44);
+  --danger: #f07ea2;
+  --warning: #d7a45d;
+  --success: #4dc5a6;
+}
+
+:root[data-scheme='rose'] {
+  --accent: #ef6da8;
+  --accent2: #f58abc;
+  --focus: rgba(239, 109, 168, 0.44);
+  --danger: #f27488;
+  --warning: #dea458;
+  --success: #49c798;
+}
+
+:root[data-scheme='sand'] {
+  --accent: #c8872f;
+  --accent2: #dca14d;
+  --focus: rgba(200, 135, 47, 0.4);
+  --danger: #b7594d;
+  --warning: #ba7c2a;
+  --success: #2f9b6a;
+}
+
+:root[data-theme='light'][data-scheme='sand'] {
+  --accent: #b36f1d;
+  --accent2: #c2812f;
+  --focus: rgba(179, 111, 29, 0.32);
+}
+

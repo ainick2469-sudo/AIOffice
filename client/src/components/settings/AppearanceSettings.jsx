@@ -1,4 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  THEME_SCHEMES,
+  getThemeSchemeMeta,
+  nextThemeScheme,
+} from '../../lib/themeCatalog';
 
 const DENSITY_KEY = 'ai-office-ui-density';
 const FONT_SIZE_KEY = 'ai-office-ui-font-size';
@@ -6,9 +11,13 @@ const FONT_SIZE_KEY = 'ai-office-ui-font-size';
 export default function AppearanceSettings({
   themeMode,
   onThemeModeChange,
+  themeScheme,
+  onThemeSchemeChange,
+  onCycleThemeScheme,
 }) {
   const [density, setDensity] = useState(() => localStorage.getItem(DENSITY_KEY) || 'comfortable');
   const [fontSize, setFontSize] = useState(() => localStorage.getItem(FONT_SIZE_KEY) || 'm');
+  const currentScheme = useMemo(() => getThemeSchemeMeta(themeScheme), [themeScheme]);
 
   useEffect(() => {
     const next = density === 'compact' ? 'compact' : 'comfortable';
@@ -22,6 +31,14 @@ export default function AppearanceSettings({
     localStorage.setItem(FONT_SIZE_KEY, next);
   }, [fontSize]);
 
+  const cycleTheme = () => {
+    if (typeof onCycleThemeScheme === 'function') {
+      onCycleThemeScheme();
+      return;
+    }
+    onThemeSchemeChange?.(nextThemeScheme(themeScheme));
+  };
+
   return (
     <section className="settings-section-card panel">
       <header className="settings-section-head">
@@ -33,7 +50,7 @@ export default function AppearanceSettings({
 
       <div className="settings-field-grid">
         <label className="settings-field">
-          <span>Theme</span>
+          <span>Theme mode</span>
           <select
             className="ui-input"
             value={themeMode}
@@ -71,6 +88,50 @@ export default function AppearanceSettings({
         </label>
       </div>
 
+      <div className="theme-gallery-strip panel">
+        <div className="theme-gallery-head">
+          <div>
+            <strong>Theme Gallery</strong>
+            <span>Choose a curated scheme or cycle in one click.</span>
+          </div>
+          <button
+            type="button"
+            className="ui-btn"
+            onClick={cycleTheme}
+            data-tooltip="Cycle color scheme"
+          >
+            Cycle Theme
+          </button>
+        </div>
+
+        <div className="theme-gallery-grid">
+          {THEME_SCHEMES.map((scheme) => {
+            const selected = scheme.id === currentScheme.id;
+            return (
+              <button
+                key={scheme.id}
+                type="button"
+                className={`theme-gallery-card ${selected ? 'selected' : ''}`}
+                onClick={() => onThemeSchemeChange?.(scheme.id)}
+                data-tooltip={scheme.description}
+              >
+                <div className="theme-gallery-card-head">
+                  <strong>{scheme.label}</strong>
+                  {selected ? <span className="ui-chip pill is-active">Selected</span> : null}
+                </div>
+                <p>{scheme.description}</p>
+                <div className="theme-gallery-swatches">
+                  <span className="theme-swatch bg" />
+                  <span className="theme-swatch panel" />
+                  <span className="theme-swatch accent" style={{ background: scheme.accent }} />
+                  <span className="theme-swatch accent2" style={{ background: scheme.accent2 }} />
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="appearance-preview-strip panel">
         <div className="appearance-preview-head">
           <strong>Theme preview</strong>
@@ -78,7 +139,7 @@ export default function AppearanceSettings({
         </div>
         <div className="appearance-preview-body">
           <article className="appearance-preview-card">
-            <h5>Sample Panel</h5>
+            <h5>{currentScheme.label} sample panel</h5>
             <p>Primary content text with muted metadata below.</p>
             <small>Muted helper text</small>
           </article>

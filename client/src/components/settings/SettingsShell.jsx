@@ -123,6 +123,9 @@ function hasAgentBinding(agent) {
 export default function SettingsShell({
   themeMode,
   onThemeModeChange,
+  themeScheme,
+  onThemeSchemeChange,
+  onCycleThemeScheme,
   activeProject,
   onOpenWorkspace,
 }) {
@@ -454,7 +457,7 @@ export default function SettingsShell({
         </article>
         <article>
           <h5>Current theme</h5>
-          <p>{themeMode}</p>
+          <p>{themeMode} / {themeScheme}</p>
         </article>
       </div>
 
@@ -641,6 +644,9 @@ export default function SettingsShell({
           <AppearanceSettings
             themeMode={themeMode}
             onThemeModeChange={onThemeModeChange}
+            themeScheme={themeScheme}
+            onThemeSchemeChange={onThemeSchemeChange}
+            onCycleThemeScheme={onCycleThemeScheme}
           />
         )}
         {category === 'providers' && renderProviders()}
