@@ -165,8 +165,92 @@
   font-weight: 600;
 }
 
-.settings-general-actions {
+.settings-setup-checklist {
   margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg2) 72%, transparent);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-setup-checklist-head h5 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--textPrimary);
+}
+
+.settings-setup-checklist-head p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--textMuted);
+}
+
+.settings-setup-checklist-body {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-check-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel2) 76%, transparent);
+  padding: 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.settings-check-main {
+  min-width: 0;
+}
+
+.settings-check-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.settings-check-title-row strong {
+  font-size: 13px;
+  color: var(--textPrimary);
+}
+
+.settings-check-main p {
+  margin: 6px 0 0;
+  color: var(--textSecondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settings-check-action .ui-btn {
+  min-width: 148px;
+}
+
+.settings-check-status-pass {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 46%, var(--border));
+  background: var(--successSoft);
+}
+
+.settings-check-status-warn {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 44%, var(--border));
+  background: var(--warningSoft);
+}
+
+.settings-check-status-fail {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 46%, var(--border));
+  background: var(--dangerSoft);
+}
+
+.settings-general-actions {
+  margin-top: 10px;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 10px;
@@ -199,6 +283,14 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.settings-general-guidance {
+  margin-top: 12px;
+}
+
+.settings-general-guidance > summary {
+  font-weight: 600;
 }
 
 .settings-field-grid {
@@ -515,6 +607,21 @@
   font-size: 12px;
 }
 
+.settings-focus-flash {
+  animation: settings-focus-pulse 2.2s ease;
+}
+
+@keyframes settings-focus-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 48%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    border-color: var(--border);
+  }
+}
+
 .appearance-preview-strip {
   margin-top: var(--space-4);
   border: 1px solid var(--divider);
@@ -630,5 +737,17 @@
   .settings-v3-nav {
     width: auto;
     flex-basis: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .settings-check-item {
+    grid-template-columns: 1fr;
+    align-items: flex-start;
+  }
+
+  .settings-check-action .ui-btn {
+    min-width: 0;
+    width: 100%;
   }
 }

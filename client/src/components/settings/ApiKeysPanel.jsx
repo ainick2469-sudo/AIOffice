@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const PROVIDER_ORDER = ['openai', 'claude'];
 
@@ -101,6 +101,7 @@ function formatErrorSummary(result) {
 
 export default function ApiKeysPanel({
   modelCatalog,
+  focusSignal,
   onError,
   onNotice,
   onSaved,
@@ -134,6 +135,16 @@ export default function ApiKeysPanel({
   });
   const [draft, setDraft] = useState(createEmptyDraft);
   const [testResult, setTestResult] = useState({});
+  const providerRefs = useRef({});
+  const diagnosticsRef = useRef(null);
+
+  const registerProviderRef = useCallback((provider) => (node) => {
+    if (!node) {
+      delete providerRefs.current[provider];
+      return;
+    }
+    providerRefs.current[provider] = node;
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -184,6 +195,23 @@ export default function ApiKeysPanel({
       },
     }));
   }, [modelCatalog, snapshot]);
+
+  useEffect(() => {
+    const target = String(focusSignal?.target || '').trim().toLowerCase();
+    if (!target.startsWith('providers:')) return undefined;
+    const key = target.split(':')[1] || '';
+    let node = null;
+    if (key === 'diagnostics') {
+      node = diagnosticsRef.current || providerRefs.current.openai || providerRefs.current.claude;
+    } else {
+      node = providerRefs.current[key] || null;
+    }
+    if (!node) return undefined;
+    node.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    node.classList.add('settings-focus-flash');
+    const timer = window.setTimeout(() => node.classList.remove('settings-focus-flash'), 2200);
+    return () => window.clearTimeout(timer);
+  }, [focusSignal, loading]);
 
   const statusLabels = useMemo(
     () => ({
@@ -326,7 +354,7 @@ export default function ApiKeysPanel({
         <span>Allow fallback to Ollama when remote provider fails (default OFF).</span>
       </label>
 
-      <div className="settings-provider-grid">
+      <div className="settings-provider-grid" ref={diagnosticsRef} data-settings-focus="providers:diagnostics">
         {PROVIDER_ORDER.map((providerId) => {
           const meta = PROVIDER_META[providerId];
           const lastError = snapshot?.[providerId]?.last_error;
@@ -335,7 +363,12 @@ export default function ApiKeysPanel({
           const selectedOption = (optionsByProvider[providerId] || []).find((item) => item.id === selectedModel) || null;
 
           return (
-            <article key={providerId} className="settings-provider-card panel">
+            <article
+              key={providerId}
+              ref={registerProviderRef(providerId)}
+              className="settings-provider-card panel"
+              data-settings-focus={`providers:${providerId}`}
+            >
               <header className="settings-provider-head">
                 <div>
                   <h4>{meta.title}</h4>

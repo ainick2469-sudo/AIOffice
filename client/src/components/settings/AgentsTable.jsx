@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react';
+
 function matchesSearch(agent, query) {
   const needle = String(query || '').trim().toLowerCase();
   if (!needle) return true;
@@ -18,12 +20,24 @@ export default function AgentsTable({
   agents,
   providerDefaults,
   search,
+  focusSignal,
   onEditAgent,
 }) {
   const filtered = (agents || []).filter((agent) => matchesSearch(agent, search));
+  const sectionRef = useRef(null);
+
+  useEffect(() => {
+    const target = String(focusSignal?.target || '').trim().toLowerCase();
+    if (!target.startsWith('agents:')) return undefined;
+    if (!sectionRef.current) return undefined;
+    sectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
+    sectionRef.current.classList.add('settings-focus-flash');
+    const timer = window.setTimeout(() => sectionRef.current?.classList.remove('settings-focus-flash'), 2200);
+    return () => window.clearTimeout(timer);
+  }, [focusSignal]);
 
   return (
-    <section className="settings-agents-table panel">
+    <section className="settings-agents-table panel" ref={sectionRef} data-settings-focus="agents:routing">
       <header className="settings-section-head">
         <div>
           <h4>Agent runtime bindings</h4>

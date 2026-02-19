@@ -6,11 +6,14 @@ import AgentsTable from './AgentsTable';
 import AgentConfigDrawer from './AgentConfigDrawer';
 import AppearanceSettings from './AppearanceSettings';
 import AdvancedSettings from './AdvancedSettings';
+import SetupChecklist from './SetupChecklist';
 import { useBeginnerMode } from '../beginner/BeginnerModeContext';
 
 const CATEGORY_KEY = 'ai-office-settings-category';
 const DIAGNOSTICS_KEY = 'ai-office-provider-diagnostics';
+const SETTINGS_FOCUS_KEY = 'ai-office-settings-focus';
 const PROVIDER_ORDER = ['openai', 'claude', 'ollama'];
+const RECENT_TEST_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const CATEGORIES = [
   {
@@ -86,10 +89,42 @@ function saveDiagnostics(next) {
   }
 }
 
+function parseTimestamp(value) {
+  if (!value) return 0;
+  const stamp = new Date(value).getTime();
+  return Number.isFinite(stamp) ? stamp : 0;
+}
+
+function providerMapFromList(providers = []) {
+  const map = {};
+  (providers || []).forEach((provider) => {
+    const id = String(provider?.provider || '').trim().toLowerCase();
+    if (!id) return;
+    map[id] = provider;
+  });
+  return map;
+}
+
+function isOllamaReachable(row) {
+  if (!row) return false;
+  if (row?.reachable === false || row?.available === false) return false;
+  const status = String(row?.status || '').trim().toLowerCase();
+  if (['offline', 'error', 'unreachable', 'down'].includes(status)) return false;
+  if (row?.last_error) return false;
+  return true;
+}
+
+function hasAgentBinding(agent) {
+  const provider = String(agent?.provider_ref || agent?.backend || '').trim();
+  const model = String(agent?.model_id || agent?.model || '').trim();
+  return Boolean(provider && model);
+}
+
 export default function SettingsShell({
   themeMode,
   onThemeModeChange,
   activeProject,
+  onOpenWorkspace,
 }) {
   const {
     enabled: beginnerMode,
@@ -107,6 +142,7 @@ export default function SettingsShell({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [focusSignal, setFocusSignal] = useState({ target: '', token: 0 });
 
   const loadProviders = useCallback(async () => {
     const response = await fetch('/api/providers');
@@ -154,6 +190,47 @@ export default function SettingsShell({
     localStorage.setItem(CATEGORY_KEY, category);
   }, [category]);
 
+  const triggerFocus = useCallback((target) => {
+    const focusTarget = String(target || '').trim();
+    if (!focusTarget) return;
+    setFocusSignal({ target: focusTarget, token: Date.now() });
+  }, []);
+
+  const jumpToCategory = useCallback((nextCategory, focusTarget = '') => {
+    setNotice('');
+    setError('');
+    setCategory(nextCategory);
+    const nextFocus = String(focusTarget || '').trim();
+    if (!nextFocus) return;
+    try {
+      localStorage.setItem(SETTINGS_FOCUS_KEY, nextFocus);
+    } catch {
+      // ignore storage failures
+    }
+    triggerFocus(nextFocus);
+  }, [triggerFocus]);
+
+  useEffect(() => {
+    try {
+      const raw = String(localStorage.getItem(SETTINGS_FOCUS_KEY) || '').trim();
+      if (!raw) return;
+      if (!raw.startsWith(`${category}:`)) return;
+      triggerFocus(raw);
+      localStorage.removeItem(SETTINGS_FOCUS_KEY);
+    } catch {
+      // ignore storage failures
+    }
+  }, [category, triggerFocus]);
+
+  useEffect(() => {
+    if (!focusSignal?.target) return undefined;
+    const token = focusSignal.token;
+    const timer = window.setTimeout(() => {
+      setFocusSignal((prev) => (prev.token === token ? { target: '', token: prev.token } : prev));
+    }, 2600);
+    return () => window.clearTimeout(timer);
+  }, [focusSignal]);
+
   const filteredCategories = useMemo(() => {
     const scoped = CATEGORIES.filter((item) => categoryMatches(item, search));
     return scoped.length ? scoped : CATEGORIES;
@@ -174,6 +251,162 @@ export default function SettingsShell({
     });
     return map;
   }, [providers]);
+
+  const setupChecklistItems = useMemo(() => {
+    const providerMap = providerMapFromList(providers);
+    const openaiConfigured = Boolean(providerMap?.openai?.has_key);
+    const claudeConfigured = Boolean(providerMap?.claude?.has_key);
+    const ollamaConfigured = isOllamaReachable(providerMap?.ollama);
+    const cloudConfigured = openaiConfigured || claudeConfigured;
+    const providerConfiguredCount = [openaiConfigured, claudeConfigured, ollamaConfigured].filter(Boolean).length;
+    const hasAnyProviderConfigured = providerConfiguredCount > 0;
+
+    const diagnosticsEntries = Object.values(providerDiagnostics || {})
+      .filter((entry) => entry && typeof entry === 'object');
+    const hasStatusOk = diagnosticsEntries.some((entry) => {
+      const status = String(entry?.status || '').trim().toLowerCase();
+      return status === 'ok' || status === 'success' || status === 'connected';
+    });
+    const hasRecentSuccess = diagnosticsEntries.some((entry) => {
+      if (entry?.ok !== true) return false;
+      const stamp = parseTimestamp(entry?.last_test_at || entry?.last_tested_at);
+      if (!stamp) return false;
+      return Date.now() - stamp <= RECENT_TEST_WINDOW_MS;
+    });
+    const diagnosticsAreOld = diagnosticsEntries.length > 0 && !hasRecentSuccess && !hasStatusOk;
+    const diagnosticsHealthy = hasRecentSuccess || hasStatusOk;
+
+    const totalAgents = agents.length;
+    const routedAgents = agents.filter((agent) => hasAgentBinding(agent)).length;
+    const routedCoverage = totalAgents > 0 ? routedAgents / totalAgents : 0;
+
+    const hasProject = Boolean(String(activeProject || '').trim());
+    const cloudProviders = [
+      openaiConfigured ? 'OpenAI' : '',
+      claudeConfigured ? 'Claude' : '',
+    ].filter(Boolean).join(' + ');
+
+    const providerItem = (() => {
+      if (cloudConfigured) {
+        return {
+          state: 'pass',
+          detail: `Cloud provider key detected (${cloudProviders}).`,
+        };
+      }
+      if (ollamaConfigured) {
+        return {
+          state: 'warn',
+          detail: 'Only local Ollama is ready. Add at least one cloud key for best reliability.',
+        };
+      }
+      return {
+        state: 'fail',
+        detail: 'No provider key configured and Ollama is not reachable.',
+      };
+    })();
+
+    const diagnosticsItem = (() => {
+      if (!diagnosticsEntries.length) {
+        return {
+          state: 'fail',
+          detail: 'No provider tests recorded yet.',
+        };
+      }
+      if (diagnosticsHealthy && !diagnosticsAreOld) {
+        return {
+          state: 'pass',
+          detail: 'Recent provider connection success found.',
+        };
+      }
+      return {
+        state: 'warn',
+        detail: 'Provider diagnostics exist but are stale or inconclusive. Re-run tests.',
+      };
+    })();
+
+    const routingItem = (() => {
+      if (!totalAgents) {
+        return {
+          state: 'fail',
+          detail: 'No agents detected. Refresh settings and verify runtime data.',
+        };
+      }
+      if (routedCoverage >= 0.8) {
+        return {
+          state: 'pass',
+          detail: `${routedAgents}/${totalAgents} agents have provider + model bindings.`,
+        };
+      }
+      if (routedAgents > 0) {
+        return {
+          state: 'warn',
+          detail: `${routedAgents}/${totalAgents} agents are fully bound. Complete remaining bindings.`,
+        };
+      }
+      return {
+        state: 'fail',
+        detail: 'Agents are missing provider/model bindings.',
+      };
+    })();
+
+    const previewItem = (() => {
+      if (!hasProject) {
+        return {
+          state: 'fail',
+          detail: 'No active project selected yet.',
+        };
+      }
+      if (hasAnyProviderConfigured && diagnosticsHealthy) {
+        return {
+          state: 'pass',
+          detail: `Project "${activeProject}" is ready for preview startup checks.`,
+        };
+      }
+      return {
+        state: 'warn',
+        detail: 'Preview likely needs provider setup or a fresh provider test first.',
+      };
+    })();
+
+    return [
+      {
+        id: 'provider-keys',
+        title: 'Add provider keys',
+        state: providerItem.state,
+        detail: providerItem.detail,
+        actionLabel: 'Go to Providers',
+        onAction: () => jumpToCategory('providers', 'providers:openai'),
+      },
+      {
+        id: 'provider-test',
+        title: 'Test provider connection',
+        state: diagnosticsItem.state,
+        detail: diagnosticsItem.detail,
+        actionLabel: 'Open Providers > Test',
+        onAction: () => jumpToCategory('providers', 'providers:diagnostics'),
+      },
+      {
+        id: 'agent-routing',
+        title: 'Confirm agent routing',
+        state: routingItem.state,
+        detail: routingItem.detail,
+        actionLabel: 'Go to Agents',
+        onAction: () => jumpToCategory('agents', 'agents:routing'),
+      },
+      {
+        id: 'preview-ready',
+        title: 'Preview ready',
+        state: previewItem.state,
+        detail: previewItem.detail,
+        actionLabel: 'Open Workspace',
+        onAction: () => {
+          setNotice('');
+          setError('');
+          onOpenWorkspace?.();
+        },
+      },
+    ];
+  }, [activeProject, agents, jumpToCategory, onOpenWorkspace, providerDiagnostics, providers]);
 
   const updateDiagnostic = (provider, diagnostic) => {
     setProviderDiagnostics((prev) => {
@@ -225,50 +458,55 @@ export default function SettingsShell({
         </article>
       </div>
 
-      <div className="settings-general-actions">
-        <article className="settings-general-action-card">
-          <h5>Beginner Mode</h5>
-          <p>Show guided steps, contextual help, and simplified controls across Workspace.</p>
-          <div className="settings-general-action-buttons">
-            <button
-              type="button"
-              className={`ui-btn ${beginnerMode ? 'ui-btn-primary' : ''}`}
-              onClick={() => setBeginnerMode(!beginnerMode)}
-            >
-              {beginnerMode ? 'Beginner Mode On' : 'Beginner Mode Off'}
-            </button>
-          </div>
-        </article>
+      <SetupChecklist items={setupChecklistItems} />
 
-        <article className="settings-general-action-card">
-          <h5>Reset Beginner Progress</h5>
-          <p>Clear stepper progress and recommended-action history for this project.</p>
-          <div className="settings-general-action-buttons">
-            <button
-              type="button"
-              className="ui-btn"
-              onClick={() => {
-                resetProjectProgress(activeProject || 'ai-office');
-                setNotice(`Reset beginner progress for ${activeProject || 'ai-office'}.`);
-                setError('');
-              }}
-            >
-              Reset current project
-            </button>
-            <button
-              type="button"
-              className="ui-btn"
-              onClick={() => {
-                resetAllProgress();
-                setNotice('Reset beginner progress for all projects.');
-                setError('');
-              }}
-            >
-              Reset all projects
-            </button>
-          </div>
-        </article>
-      </div>
+      <details className="settings-inline-details settings-general-guidance">
+        <summary>Beginner guidance and progress reset</summary>
+        <div className="settings-general-actions">
+          <article className="settings-general-action-card">
+            <h5>Beginner Mode</h5>
+            <p>Show guided steps, contextual help, and simplified controls across Workspace.</p>
+            <div className="settings-general-action-buttons">
+              <button
+                type="button"
+                className={`ui-btn ${beginnerMode ? 'ui-btn-primary' : ''}`}
+                onClick={() => setBeginnerMode(!beginnerMode)}
+              >
+                {beginnerMode ? 'Beginner Mode On' : 'Beginner Mode Off'}
+              </button>
+            </div>
+          </article>
+
+          <article className="settings-general-action-card">
+            <h5>Reset Beginner Progress</h5>
+            <p>Clear stepper progress and recommended-action history for this project.</p>
+            <div className="settings-general-action-buttons">
+              <button
+                type="button"
+                className="ui-btn"
+                onClick={() => {
+                  resetProjectProgress(activeProject || 'ai-office');
+                  setNotice(`Reset beginner progress for ${activeProject || 'ai-office'}.`);
+                  setError('');
+                }}
+              >
+                Reset current project
+              </button>
+              <button
+                type="button"
+                className="ui-btn"
+                onClick={() => {
+                  resetAllProgress();
+                  setNotice('Reset beginner progress for all projects.');
+                  setError('');
+                }}
+              >
+                Reset all projects
+              </button>
+            </div>
+          </article>
+        </div>
+      </details>
     </section>
   );
 
@@ -276,6 +514,7 @@ export default function SettingsShell({
     <>
       <ApiKeysPanel
         modelCatalog={modelCatalog}
+        focusSignal={focusSignal}
         onSaved={async () => {
           await Promise.all([loadProviders(), loadModelCatalog()]);
         }}
@@ -298,6 +537,7 @@ export default function SettingsShell({
         agents={agents}
         providerDefaults={providerDefaults}
         search={search}
+        focusSignal={focusSignal}
         onEditAgent={(agent) => setEditingAgent(agent)}
       />
       <AgentConfigDrawer
@@ -328,6 +568,7 @@ export default function SettingsShell({
         themeMode={themeMode}
         activeProject={activeProject}
         providerDiagnostics={providerDiagnostics}
+        focusSignal={focusSignal}
         onError={(message) => {
           setError(message);
           setNotice('');

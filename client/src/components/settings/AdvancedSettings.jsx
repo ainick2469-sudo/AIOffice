@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react';
+
 function resetLayoutKeys() {
   const keys = Object.keys(localStorage);
   let removed = 0;
@@ -37,9 +39,26 @@ export default function AdvancedSettings({
   themeMode,
   activeProject,
   providerDiagnostics,
+  focusSignal,
   onNotice,
   onError,
 }) {
+  const sectionRef = useRef(null);
+  const exportButtonRef = useRef(null);
+
+  useEffect(() => {
+    const target = String(focusSignal?.target || '').trim().toLowerCase();
+    if (!target.startsWith('advanced:')) return undefined;
+    const node = target === 'advanced:diagnostics'
+      ? exportButtonRef.current || sectionRef.current
+      : sectionRef.current;
+    if (!node) return undefined;
+    node.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    node.classList.add('settings-focus-flash');
+    const timer = window.setTimeout(() => node.classList.remove('settings-focus-flash'), 2200);
+    return () => window.clearTimeout(timer);
+  }, [focusSignal]);
+
   const exportDiagnostics = async () => {
     try {
       const payload = buildDiagnostics(themeMode, activeProject, providerDiagnostics);
@@ -67,7 +86,7 @@ export default function AdvancedSettings({
   };
 
   return (
-    <section className="settings-section-card panel">
+    <section className="settings-section-card panel" ref={sectionRef} data-settings-focus="advanced:diagnostics">
       <header className="settings-section-head">
         <div>
           <h4>Advanced</h4>
@@ -76,7 +95,7 @@ export default function AdvancedSettings({
       </header>
 
       <div className="settings-advanced-actions">
-        <button type="button" className="ui-btn ui-btn-primary" onClick={exportDiagnostics}>
+        <button type="button" className="ui-btn ui-btn-primary" onClick={exportDiagnostics} ref={exportButtonRef}>
           Export diagnostics bundle
         </button>
         <button type="button" className="ui-btn ui-btn-ghost" onClick={resetLayout}>

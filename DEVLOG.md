@@ -2843,3 +2843,9 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - Refactored Preview into tabs (Preview, Logs, Advanced, Design) with a unified top bar and 1-click Start Preview command resolution.
 - Added manual URL override flow, reduced duplicate URL actions, and made iframe the primary surface while running.
 - Logs now request include_logs only when Logs tab is active and support pause/resume updates.
+
+## 2026-02-19 - Prompt #006 Settings "Fix My Setup"
+- Added a new General-tab setup checklist that derives status from existing providers, local diagnostics, agents, and active project context.
+- Added one-click jump actions (`Providers`, `Providers > Test`, `Agents`, `Workspace`) with localStorage focus targeting.
+- Implemented section highlight + auto-scroll behavior in Providers, Agents, and Advanced views for actionable routing.
+- Reduced Settings dead space by restructuring General into compact summary, checklist block, and collapsible beginner/reset controls.

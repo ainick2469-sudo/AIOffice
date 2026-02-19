@@ -1271,6 +1271,7 @@ export default function App() {
             themeMode={themeMode}
             onThemeModeChange={setThemeMode}
             activeProject={activeProject}
+            onOpenWorkspace={() => navigateToTab('workspace')}
           />
         )}
       </div>
