@@ -5830,6 +5830,44 @@ select {
   gap: var(--space-2);
 }
 
+.discuss-meeting-header {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg1) 88%, transparent);
+  padding: var(--space-2) var(--space-3);
+  display: grid;
+  gap: 4px;
+}
+
+.discuss-meeting-header h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--textPrimary);
+}
+
+.discuss-meeting-header p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--textSecondary);
+}
+
+.discuss-meeting-steps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.discuss-step-pill {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--bg2) 78%, transparent);
+  color: var(--textSecondary);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+}
+
 .discuss-toolbar {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -5846,6 +5884,7 @@ select {
   gap: var(--space-1);
   align-items: center;
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .discuss-toolbar-actions {
@@ -5854,10 +5893,23 @@ select {
   margin-left: auto;
 }
 
+.discuss-board-badge {
+  margin-left: 6px;
+}
+
 .discuss-brainstorm-hint {
   margin: 0;
   font-size: 12px;
   color: var(--textMuted);
+}
+
+.discuss-inline-notice {
+  border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accentSoft) 62%, var(--bg1));
+  color: var(--textPrimary);
+  font-size: 12px;
+  padding: 8px 10px;
 }
 
 .discuss-participants-panel {
@@ -5959,11 +6011,19 @@ select {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
 }
 
 .office-board-header h3 {
   margin: 0;
   font-size: 14px;
+}
+
+.office-board-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .office-board-subtitle {
@@ -5976,6 +6036,40 @@ select {
   margin: 0;
   font-size: 11px;
   color: var(--textMuted);
+}
+
+.office-board-warning {
+  border: 1px solid color-mix(in srgb, var(--warning) 58%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warning) 14%, var(--bg1));
+  color: var(--textPrimary);
+  font-size: 12px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.office-board-empty {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg2) 76%, transparent);
+  padding: var(--space-2);
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--textSecondary);
+}
+
+.office-board-empty strong {
+  color: var(--textPrimary);
+}
+
+.office-board-empty-actions {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .office-board-grid {
@@ -5996,9 +6090,22 @@ select {
   min-height: 84px;
 }
 
+.office-board-risks {
+  border-top: 1px solid color-mix(in srgb, var(--divider) 76%, transparent);
+  padding-top: 8px;
+}
+
+.office-board-section-toggle {
+  align-self: flex-start;
+}
+
 .office-board-footer {
   font-size: 11px;
   color: var(--textMuted);
+}
+
+.discuss-build-guard-modal p {
+  max-width: 62ch;
 }
 
 .workspace-handoff-backdrop {
@@ -6081,6 +6188,14 @@ select {
 }
 
 @media (max-width: 860px) {
+  .discuss-meeting-header {
+    padding: var(--space-2);
+  }
+
+  .discuss-meeting-steps {
+    gap: 6px;
+  }
+
   .discuss-toolbar,
   .discuss-participants-panel {
     align-items: flex-start;

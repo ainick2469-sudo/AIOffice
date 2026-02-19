@@ -768,8 +768,7 @@ export default function WorkspaceShell({
               beginnerMode={beginnerMode}
               brainstormMessage={queuedChatMessage}
               onRunBrainstorm={runDiscussBrainstorm}
-              onStartBuilding={() => setShowHandoffModal(true)}
-              onDraftRequest={handleDraftRequest}
+              onStartBuilding={beginBuildHandoff}
               chatPrefill={chatPrefill}
               onChatPrefillConsumed={consumeChatPrefill}
               onOpenTab={setView}

@@ -2857,3 +2857,14 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - Added Office Board inline guidance and content-change events so Discuss can react to board content presence without backend changes.
 - Added `ChatEmptyState` and filtered runtime-smoke artifacts from visible conversation rendering to avoid fake conversation noise.
 - Simplified compact Chat header hierarchy and protected channel title rendering so error-like channel names no longer appear as room titles.
+## 2026-02-19 - Prompt #008 Discuss as Office Meeting flow
+- Reframed Discuss as an explicit “Office Meeting” pipeline with compact step pills: Brainstorm -> Capture -> Handoff -> Build.
+- Added deterministic brainstorm prompt formatting requirements and UI-side parser for `Goals`, `Open Questions`, `Decisions`, `Next Actions`, and `Risks`.
+- Wired structured brainstorm capture so valid agent responses auto-populate Meeting Output and open the board; parse failures show a warning with `Re-run with structure`.
+- Upgraded Office Board into “Meeting Output (Office Board)” with new `Next Actions` and optional/collapsible `Risks` sections.
+- Added Office Board one-click actions: `Send to Spec`, `Send to Tasks`, and `Clear`, each with delayed tooltip guidance.
+- Implemented frontend-only handoff storage:
+  - `ai-office:spec-draft:<projectId>` (plus SpecPanel-compatible draft cache key)
+  - `ai-office:tasks-draft:<projectId>`
+- Added Discuss start-build guard: empty board triggers confirmation modal (`Capture first` / `Build anyway`); populated board auto-handoffs to Spec before switching to Build.
+- Added optional visible-message callback from ChatRoom so Discuss can observe agent replies and process structured brainstorm outputs without backend changes.

@@ -170,6 +170,7 @@ export default function ChatRoom({
   queuedMessage = null,
   onPrefillConsumed = null,
   onRequestOpenTab = null,
+  onVisibleMessagesChange = null,
   showStatusPanel = true,
   onBackToWorkspace = null,
   compact = false,
@@ -247,6 +248,10 @@ export default function ChatRoom({
     () => messages.filter((message) => !isRuntimeSmokeMessage(message)),
     [messages]
   );
+
+  useEffect(() => {
+    onVisibleMessagesChange?.(visibleMessages);
+  }, [onVisibleMessagesChange, visibleMessages]);
 
   useBodyScrollLock(
     Boolean(contextPickerOpen || specActionModal.open || activeApproval),
