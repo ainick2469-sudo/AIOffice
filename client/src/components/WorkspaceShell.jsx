@@ -109,6 +109,11 @@ function paneMeta(viewId) {
   return { icon: item.icon, title: item.label };
 }
 
+function paneStorageProjectId(value) {
+  const base = String(value || 'ai-office').trim().toLowerCase() || 'ai-office';
+  return base.replace(/[^a-z0-9-]+/g, '-');
+}
+
 function PaneFrame({
   title,
   subtitle,
@@ -198,6 +203,7 @@ export default function WorkspaceShell({
   const branchLabel = branch || 'main';
   const hasCreationDraft = Boolean(creationDraft?.text);
   const officeStorageKey = useMemo(() => officeModeKey(projectLabel), [projectLabel]);
+  const paneStorageProject = useMemo(() => paneStorageProjectId(projectLabel), [projectLabel]);
 
   const persistedOfficeMode = useMemo(() => {
     try {
@@ -235,6 +241,14 @@ export default function WorkspaceShell({
   });
 
   const selectedBuildLayout = previewFocus ? 'focus-preview' : storedBuildLayout;
+  const paneStorageKey = useCallback(
+    (splitId, orientation = 'vertical') => {
+      const safeSplitId = String(splitId || 'main').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+      const safeOrientation = String(orientation || 'vertical').trim().toLowerCase();
+      return `ai-office:paneSizes:${paneStorageProject}:${selectedBuildLayout}:${safeOrientation}:${safeSplitId}`;
+    },
+    [paneStorageProject, selectedBuildLayout]
+  );
 
   const setView = onActiveTabChange || setInternalView;
   const buildView = activeTab || internalView;
@@ -602,6 +616,9 @@ export default function WorkspaceShell({
               defaultRatio={0.64}
               minPrimary={500}
               minSecondary={360}
+              persistKey={paneStorageKey('main-preview', 'vertical')}
+              primaryLabel={paneMeta(activeView).title}
+              secondaryLabel="Preview"
               onRatioChange={(nextRatio) => updateLayout({ centerRatio: nextRatio })}
             >
               {renderMainPane()}
@@ -620,6 +637,9 @@ export default function WorkspaceShell({
               defaultRatio={0.24}
               minPrimary={340}
               minSecondary={520}
+              persistKey={paneStorageKey('chat-main', 'vertical')}
+              primaryLabel="Chat"
+              secondaryLabel={paneMeta(activeView).title}
               onRatioChange={(nextRatio) => updateLayout({ leftRatio: nextRatio })}
             >
               {renderChatPane()}
@@ -637,6 +657,9 @@ export default function WorkspaceShell({
             defaultRatio={0.24}
             minPrimary={340}
             minSecondary={760}
+            persistKey={paneStorageKey('chat-main-preview', 'vertical')}
+            primaryLabel="Chat"
+            secondaryLabel={paneMeta(activeView).title}
             onRatioChange={(nextRatio) => updateLayout({ leftRatio: nextRatio })}
           >
             {renderChatPane()}
@@ -646,6 +669,9 @@ export default function WorkspaceShell({
               defaultRatio={0.64}
               minPrimary={420}
               minSecondary={360}
+              persistKey={paneStorageKey('main-preview', 'vertical')}
+              primaryLabel={paneMeta(activeView).title}
+              secondaryLabel="Preview"
               onRatioChange={(nextRatio) => updateLayout({ centerRatio: nextRatio })}
             >
               {renderMainPane()}
@@ -674,6 +700,9 @@ export default function WorkspaceShell({
           defaultRatio={0.58}
           minPrimary={420}
           minSecondary={360}
+          persistKey={paneStorageKey('main-preview', 'vertical')}
+          primaryLabel={paneMeta(activeView).title}
+          secondaryLabel="Preview"
           onRatioChange={(nextRatio) => updateLayout({ ratio: nextRatio })}
         >
           {renderMainPane()}

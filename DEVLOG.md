@@ -1724,6 +1724,36 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
 
+## 2026-02-19 | Prompt #19: Workspace split divider reliability hardening
+
+### Reproduction note
+- Reproduced unreliable resize behavior in Split mode by inspecting the active divider path (`SplitPane.jsx`) and exercising drag across pane boundaries/preview iframe. The drag loop depended on divider-level pointer handlers only, so when capture failed or a pointer crossed high-interference surfaces (notably embedded preview iframe/overlay stacks), resize could stall or stop mid-drag. Visual affordance/z-index was also too subtle for consistent hit-testing confidence.
+
+### Fixes
+- Rebuilt the active `SplitPane` drag loop for reliability:
+  - pointer capture retained, plus window-level pointermove/up/cancel fallback handlers
+  - drag lifecycle cleanup centralized (listeners, capture release, RAF cancellation)
+  - drag-time body classes hardened (`splitpane-dragging*` + `is-resizing`)
+  - temporary iframe pointer-event suppression during drag to prevent capture interference
+  - requestAnimationFrame-based drag updates to reduce jitter under rapid pointer movement.
+- Added stronger UX feedback and hit reliability:
+  - divider remains 10px, elevated z-index, hover highlight, and clear resize cursor
+  - live drag tooltip with percentage split (`Primary: xx% | Secondary: yy%`)
+  - double-click divider reset persists immediately.
+- Added local ratio persistence at divider level:
+  - key format now follows per-project + layout preset + orientation scope:
+    - `ai-office:paneSizes:<project>:<layoutPreset>:<orientation>:<splitId>`
+  - invalid persisted values are ignored and fall back to clamped defaults.
+- Unified split implementation usage:
+  - retired unused `client/src/components/PaneSplit.jsx` so workspace uses one splitter path only.
+- Workspace composition (`WorkspaceShell.jsx`) now provides explicit persist keys + semantic labels for all active split layouts (split/full-ide variants).
+
+### How to verify manually
+- Open Workspace in `Split` and drag divider repeatedly; resizing should remain active even when cursor leaves divider.
+- Drag while preview iframe is visible; iframe should not block resizing.
+- Reload and switch projects/layout presets; previous split ratios should restore.
+- Double-click divider; ratio should reset to default for the active layout.
+
 ## 2026-02-18 - Project Display Name (Rename Support)
 
 ### Backend changes
