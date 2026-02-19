@@ -92,7 +92,7 @@ class AgentCredentialTestOut(BaseModel):
 class ProviderConfigIn(BaseModel):
     model_config = {"extra": "forbid"}
 
-    provider: Literal["openai", "claude", "ollama", "codex"]
+    provider: Literal["openai", "claude", "anthropic", "ollama", "codex"]
     key_ref: Optional[str] = Field(default=None, max_length=120)
     api_key: Optional[str] = Field(default=None, max_length=500)
     base_url: Optional[str] = Field(default=None, max_length=500)
@@ -113,7 +113,7 @@ class ProviderConfigOut(BaseModel):
 class ProviderTestIn(BaseModel):
     model_config = {"extra": "forbid"}
 
-    provider: Literal["openai", "claude", "ollama", "codex"]
+    provider: Literal["openai", "claude", "anthropic", "ollama", "codex"]
     model: Optional[str] = Field(default=None, max_length=200)
     key_ref: Optional[str] = Field(default=None, max_length=120)
     base_url: Optional[str] = Field(default=None, max_length=500)
@@ -125,7 +125,39 @@ class ProviderTestOut(BaseModel):
     model_hint: Optional[str] = None
     latency_ms: Optional[int] = None
     error: Optional[str] = None
+    error_code: Optional[Literal["PROVIDER_UNREACHABLE", "AUTH_INVALID", "QUOTA_EXCEEDED", "MODEL_UNAVAILABLE", "UNKNOWN_ERROR"]] = None
+    hint: Optional[str] = None
     details: Optional[dict] = None
+
+
+class ProviderModelOut(BaseModel):
+    id: str
+    label: str
+    capabilities: list[str] = Field(default_factory=list)
+    default: bool = False
+    legacy: bool = False
+    selected: bool = False
+    available: Optional[bool] = None
+    availability_reason: Optional[str] = None
+
+
+class ProviderModelGroupOut(BaseModel):
+    provider: str
+    title: str
+    route_provider: str
+    configured: bool = False
+    key_source: Optional[str] = None
+    key_ref: Optional[str] = None
+    base_url: Optional[str] = None
+    selected_model_id: Optional[str] = None
+    default_model_id: Optional[str] = None
+    last_tested_at: Optional[str] = None
+    last_error: Optional[str] = None
+    models: list[ProviderModelOut] = Field(default_factory=list)
+
+
+class ProviderModelCatalogOut(BaseModel):
+    providers: dict[str, ProviderModelGroupOut] = Field(default_factory=dict)
 
 
 class ProviderSettingsUpdateIn(BaseModel):

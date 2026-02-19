@@ -14,6 +14,7 @@ import useEscapeKey from './hooks/useEscapeKey';
 import useBodyScrollLock, { getBodyScrollLockSnapshot } from './hooks/useBodyScrollLock';
 import { clearAllBodyScrollLocks } from './hooks/scrollLockManager';
 import { useBeginnerMode } from './components/beginner/BeginnerModeContext';
+import './styles/tokens.css';
 import './styles/theme.css';
 import './styles/components.css';
 import './styles/settings.css';
@@ -35,6 +36,11 @@ function channelForProject(projectName) {
   const name = String(projectName || '').trim().toLowerCase();
   if (!name || name === 'ai-office') return 'main';
   return `proj-${name}`;
+}
+
+function sidebarCollapsedKey(projectName) {
+  const safe = String(projectName || 'ai-office').trim().toLowerCase() || 'ai-office';
+  return `ai-office:workspace:${safe}:sidebarCollapsed`;
 }
 
 function normalizeActiveContext(raw) {
@@ -75,6 +81,99 @@ function toImportFormData(queueItems = [], payload = {}) {
   if (projectName) form.append('project_name', projectName);
   if (stackChoice) form.append('stack_choice', stackChoice);
   return form;
+}
+
+function buildSeedSpecFromDraft(draft, requestText) {
+  const raw = String(requestText || '').trim();
+  const stack = String(draft?.suggestedStack || '').trim();
+  const summary = draft?.summary || {};
+  const goalSummary = String(summary?.goals || '').trim();
+  const risks = String(summary?.risks || '').trim();
+  const questions = String(summary?.questions || '').trim();
+  const nextSteps = String(summary?.nextSteps || '').trim();
+
+  const lines = [
+    '# Build Spec',
+    '',
+    '## Problem / Goal',
+    raw ? `- Raw user request (verbatim):\n${raw}` : '- Raw user request (verbatim):\n- [ ] TBD',
+    goalSummary ? `- Goal summary: ${goalSummary}` : '- Goal summary: refine during planning.',
+    '',
+    '## Target Platform',
+    stack && stack !== 'auto-detect'
+      ? `- Preferred stack: ${stack}`
+      : '- Preferred stack: auto-detect',
+    '',
+    '## Core Loop',
+    nextSteps ? `- ${nextSteps}` : '- Discuss -> Plan -> Build -> Verify -> Iterate',
+    '',
+    '## Features',
+    '### Must',
+    '- Preserve original user intent in implementation output',
+    '### Should',
+    '- Provide clear progress and verification visibility',
+    '### Could',
+    '- Add polish after core loop is stable',
+    '',
+    '## Non-Goals',
+    '- Avoid scope expansion before the first working preview.',
+    '',
+    '## UX Notes',
+    '- Keep workflow beginner-friendly and explicit.',
+    '',
+    '## Data/State Model',
+    '- Draft captures raw request + planning summary until project creation.',
+    '',
+    '## Acceptance Criteria',
+    '- [ ] Original request remains visible verbatim in project spec/history.',
+    '- [ ] Build starts only after explicit plan approval.',
+    '',
+    '## Risks + Unknowns',
+    risks ? `- ${risks}` : '- Clarify unresolved technical constraints.',
+    questions ? `- ${questions}` : '- Confirm open questions before large code changes.',
+    '',
+  ];
+
+  return `${lines.join('\n').trim()}\n`;
+}
+
+function buildSeedIdeaBankFromDraft(draft, requestText) {
+  const raw = String(requestText || '').trim();
+  const templateHint = String(draft?.templateHint || draft?.templateId || '').trim();
+  const summary = draft?.summary || {};
+  const goals = String(summary?.goals || '').trim();
+  const questions = String(summary?.questions || '').trim();
+  const parts = ['# Idea Bank', '', '## Seed Request'];
+  if (raw) {
+    parts.push(raw);
+  }
+  if (templateHint) {
+    parts.push('', `Template hint: ${templateHint}`);
+  }
+  parts.push('', '## Discuss Notes');
+  parts.push(goals ? `- Goals: ${goals}` : '- Goals:');
+  parts.push(questions ? `- Questions: ${questions}` : '- Questions:');
+  return `${parts.join('\n').trim()}\n`;
+}
+
+async function persistDraftSeedToProjectSpec(data, draft, requestText) {
+  const projectName = String(data?.project || data?.active?.project || '').trim().toLowerCase();
+  const channelId = String(data?.channel_id || data?.channel || '').trim();
+  if (!projectName || !channelId) return;
+
+  const raw = String(requestText || '');
+  const specDraft = String(draft?.specDraftMd || '').trim() || buildSeedSpecFromDraft(draft, raw);
+  const ideaBankDraft = String(draft?.ideaBankMd || '').trim() || buildSeedIdeaBankFromDraft(draft, raw);
+
+  await fetch('/api/spec/current', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      channel: channelId,
+      spec_md: specDraft,
+      idea_bank_md: ideaBankDraft,
+    }),
+  });
 }
 
 function officeModeStorageKey(projectName) {
@@ -129,6 +228,15 @@ export default function App() {
   const [layoutPreset, setLayoutPreset] = useState(DEFAULT_LAYOUT_PRESET);
   const [paneLayout, setPaneLayout] = useState(DEFAULT_PANE_LAYOUT);
   const [previewFocus, setPreviewFocus] = useState(false);
+  const [projectsSidebarCollapsed, setProjectsSidebarCollapsed] = useState(() => {
+    try {
+      const raw = localStorage.getItem(sidebarCollapsedKey('ai-office'));
+      if (raw == null) return true;
+      return raw === 'true';
+    } catch {
+      return true;
+    }
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [codexMismatch, setCodexMismatch] = useState(false);
@@ -155,6 +263,30 @@ export default function App() {
     : topTab === 'settings'
       ? 'Settings'
       : 'Home';
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(sidebarCollapsedKey(activeProject));
+      if (raw == null) {
+        setProjectsSidebarCollapsed(true);
+      } else {
+        setProjectsSidebarCollapsed(raw === 'true');
+      }
+    } catch {
+      setProjectsSidebarCollapsed(true);
+    }
+  }, [activeProject]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        sidebarCollapsedKey(activeProject),
+        projectsSidebarCollapsed ? 'true' : 'false'
+      );
+    } catch {
+      // ignore storage failures
+    }
+  }, [activeProject, projectsSidebarCollapsed]);
 
   useBodyScrollLock(Boolean(leaveDraftModalOpen), 'leave-draft-modal');
 
@@ -299,9 +431,7 @@ export default function App() {
         const persistedDraft = loadCreationDraft();
         if (!cancelled) {
           setCreationDraft(persistedDraft);
-          if (persistedDraft?.text) {
-            setTopTab('workspace');
-          }
+          if (persistedDraft?.text) setTopTab('home');
         }
 
         await refreshProjects();
@@ -408,22 +538,25 @@ export default function App() {
   const updateCreationDraft = (updater) => {
     setCreationDraft((prev) => {
       const base = prev || buildCreationDraft({});
-      const next = typeof updater === 'function'
+      const candidate = typeof updater === 'function'
         ? updater(base)
-        : buildCreationDraft({ ...base, ...(updater || {}) });
+        : { ...base, ...(updater || {}) };
+      const next = buildCreationDraft(candidate);
       saveCreationDraft(next);
       return next;
     });
   };
 
   const startCreationDraftDiscussion = async (payload) => {
-    const draft = buildCreationDraft(payload || {});
+    const draft = buildCreationDraft({
+      ...(payload || {}),
+      pipelineStep: 'discuss',
+      rawRequest: String(payload?.rawRequest ?? payload?.text ?? payload?.prompt ?? ''),
+    });
     saveCreationDraft(draft);
     setCreationDraft(draft);
     setLeaveDraftModalOpen(false);
-    setWorkspaceTab('chat');
-    setTopTab('workspace');
-    setActive(normalizeActiveContext({ project: 'ai-office', channel: 'main', branch: 'main', is_app_root: true }));
+    setTopTab('home');
     try {
       localStorage.setItem(officeModeStorageKey('ai-office'), 'discuss');
     } catch {
@@ -439,7 +572,8 @@ export default function App() {
 
   const createProjectFromDraft = async (overrideDraft = null) => {
     const draft = overrideDraft || creationDraft;
-    if (!draft?.text) {
+    const requestText = String(draft?.rawRequest ?? draft?.text ?? '');
+    if (!requestText.trim()) {
       throw new Error('Draft prompt is empty. Edit the prompt before creating a project.');
     }
 
@@ -456,7 +590,7 @@ export default function App() {
     let data = null;
     if (hasImportFiles) {
       const form = toImportFormData(importRuntime, {
-        text: draft.text,
+        text: requestText,
         templateId: draft.templateId,
         suggestedName: draft.suggestedName,
         suggestedStack: draft.suggestedStack,
@@ -485,7 +619,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          prompt: draft.text,
+          prompt: requestText,
           template: draft.templateId || null,
           project_name: draft.suggestedName || null,
         }),
@@ -505,6 +639,18 @@ export default function App() {
       }
     }
 
+    try {
+      await persistDraftSeedToProjectSpec(data, draft, requestText);
+    } catch (seedError) {
+      if (import.meta.env?.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn('[creation] Unable to persist draft seed to spec.', {
+          project: projectName || '(unknown)',
+          message: seedError?.message || String(seedError),
+        });
+      }
+    }
+
     clearCreationDraft();
     setCreationDraft(null);
     setLeaveDraftModalOpen(false);
@@ -515,11 +661,15 @@ export default function App() {
   };
 
   const openHomeTab = () => {
+    setTopTab('home');
+  };
+
+  const openWorkspaceTab = () => {
     if (creationDraft?.text) {
       setLeaveDraftModalOpen(true);
       return;
     }
-    setTopTab('home');
+    setTopTab('workspace');
   };
 
   const handleRepairCodex = async () => {
@@ -849,6 +999,8 @@ export default function App() {
           onOpenProject={openProject}
           onRenameProject={renameProject}
           onDeleteProject={deleteProject}
+          collapsed={projectsSidebarCollapsed}
+          onToggleCollapsed={() => setProjectsSidebarCollapsed((prev) => !prev)}
         />
       )}
 
@@ -865,7 +1017,7 @@ export default function App() {
             <span className="app-route-breadcrumb">{breadcrumbLabel}</span>
             <nav className="app-topbar-nav" aria-label="Primary">
               <button className={`ui-tab ${topTab === 'home' ? 'active ui-tab-active' : ''}`} onClick={openHomeTab}>Home</button>
-              <button className={`ui-tab ${topTab === 'workspace' ? 'active ui-tab-active' : ''}`} onClick={() => setTopTab('workspace')}>Workspace</button>
+              <button className={`ui-tab ${topTab === 'workspace' ? 'active ui-tab-active' : ''}`} onClick={openWorkspaceTab}>Workspace</button>
               <button className={`ui-tab ${topTab === 'settings' ? 'active ui-tab-active' : ''}`} onClick={() => setTopTab('settings')}>Settings</button>
             </nav>
           </div>
@@ -988,6 +1140,10 @@ export default function App() {
             projects={sortedProjects}
             onOpenProject={openProject}
             onStartDraftDiscussion={startCreationDraftDiscussion}
+            creationDraft={creationDraft}
+            onCreationDraftChange={updateCreationDraft}
+            onCreateProjectFromDraft={createProjectFromDraft}
+            onDiscardCreationDraft={discardCreationDraft}
             onProjectDeleted={async () => refreshProjects()}
             onProjectRenamed={async () => refreshProjects()}
           />
@@ -1003,6 +1159,10 @@ export default function App() {
             paneLayout={paneLayout}
             onPaneLayoutChange={handlePaneLayoutChange}
             previewFocus={previewFocus}
+            onToggleFocusMode={handlePreviewFocusToggle}
+            onOpenSettings={() => setTopTab('settings')}
+            projectSidebarCollapsed={projectsSidebarCollapsed}
+            onToggleProjectSidebar={() => setProjectsSidebarCollapsed((prev) => !prev)}
             activeTab={workspaceTab}
             onActiveTabChange={setWorkspaceTab}
             creationDraft={creationDraft}
@@ -1055,7 +1215,7 @@ export default function App() {
           <div className="workspace-handoff-modal">
             <h3>Uncreated Draft</h3>
             <p>
-              You have an uncreated project draft. Keep discussing it or discard it before leaving Workspace.
+              You have an uncreated draft. Keep working in Home, or discard it before opening Workspace.
             </p>
             <div className="workspace-handoff-actions">
               <button
@@ -1063,7 +1223,7 @@ export default function App() {
                 className="msg-action-btn ui-btn"
                 onClick={() => {
                   setLeaveDraftModalOpen(false);
-                  setTopTab('workspace');
+                  setTopTab('home');
                 }}
               >
                 Keep working
@@ -1073,10 +1233,10 @@ export default function App() {
                 className="refresh-btn ui-btn ui-btn-primary"
                 onClick={() => {
                   discardCreationDraft();
-                  setTopTab('home');
+                  setTopTab('workspace');
                 }}
               >
-                Discard Draft
+                Discard Draft & Open Workspace
               </button>
             </div>
           </div>

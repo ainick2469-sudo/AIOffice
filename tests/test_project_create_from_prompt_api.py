@@ -34,3 +34,28 @@ def test_create_project_from_prompt_creates_project_channel_spec_and_tasks():
     assert tasks.status_code == 200, tasks.text
     titles = {t.get("title") for t in tasks.json()}
     assert "Define scope" in titles
+
+
+def test_create_project_from_prompt_preserves_multiline_prompt_text():
+    client = TestClient(app)
+    name = f"proj-prompt-raw-{int(time.time())}"
+    prompt = (
+        "make me a snake game\n"
+        "with keyboard controls, scoreboard, and restart flow.\n"
+        "keep it beginner friendly."
+    )
+
+    resp = client.post(
+        "/api/projects/create_from_prompt",
+        json={"prompt": prompt, "project_name": name, "template": "python"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    channel = data.get("channel_id") or data.get("channel")
+    assert channel
+
+    spec_resp = client.get("/api/spec/current", params={"channel": channel})
+    assert spec_resp.status_code == 200, spec_resp.text
+    spec_payload = spec_resp.json()
+    spec_md = spec_payload.get("spec_md") or ""
+    assert prompt in spec_md

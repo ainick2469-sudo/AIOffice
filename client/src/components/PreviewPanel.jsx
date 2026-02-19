@@ -133,6 +133,8 @@ export default function PreviewPanel({
   const [designUnavailableReason, setDesignUnavailableReason] = useState('');
   const [selection, setSelection] = useState(null);
   const [requestText, setRequestText] = useState('');
+  const [devicePreset, setDevicePreset] = useState('desktop');
+  const [frameReloadNonce, setFrameReloadNonce] = useState(0);
   const logsRef = useRef(null);
   const iframeRef = useRef(null);
 
@@ -499,6 +501,12 @@ export default function PreviewPanel({
     window.open(previewUrl, '_blank', 'noreferrer');
   };
 
+  const frameWidth = useMemo(() => {
+    if (devicePreset === 'mobile') return 390;
+    if (devicePreset === 'tablet') return 820;
+    return null;
+  }, [devicePreset]);
+
   const applyPreset = (preset) => {
     setDraftCmd(String(preset?.command || '').trim());
     const nextPort = normalizePort(preset?.port);
@@ -681,17 +689,63 @@ export default function PreviewPanel({
                   : 'No URL yet. Start preview and watch logs for startup output.'}
               </p>
             </div>
-            <DesignModeToggle
-              enabled={designMode}
-              unavailable={!previewUrl}
-              onToggle={toggleDesignMode}
-            />
+            <div className="preview-v3-surface-actions">
+              <div className="preview-v3-device-toggle" role="group" aria-label="Preview size presets">
+                <button
+                  type="button"
+                  className={`ui-btn ${devicePreset === 'mobile' ? 'ui-btn-primary' : ''}`}
+                  onClick={() => setDevicePreset('mobile')}
+                >
+                  Mobile
+                </button>
+                <button
+                  type="button"
+                  className={`ui-btn ${devicePreset === 'tablet' ? 'ui-btn-primary' : ''}`}
+                  onClick={() => setDevicePreset('tablet')}
+                >
+                  Tablet
+                </button>
+                <button
+                  type="button"
+                  className={`ui-btn ${devicePreset === 'desktop' ? 'ui-btn-primary' : ''}`}
+                  onClick={() => setDevicePreset('desktop')}
+                >
+                  Desktop
+                </button>
+              </div>
+              <button
+                type="button"
+                className="ui-btn"
+                onClick={() => setFrameReloadNonce((prev) => prev + 1)}
+                disabled={!previewUrl}
+              >
+                Reload
+              </button>
+              <button
+                type="button"
+                className="ui-btn"
+                onClick={openExternal}
+                disabled={!previewUrl}
+              >
+                Open
+              </button>
+              <DesignModeToggle
+                enabled={designMode}
+                unavailable={!previewUrl}
+                onToggle={toggleDesignMode}
+              />
+            </div>
           </div>
 
           <div className="preview-v3-surface-grid">
             <div className="preview-v3-frame-wrap">
+              <div
+                className={`preview-v3-frame-stage preset-${devicePreset}`}
+                style={frameWidth ? { maxWidth: `${frameWidth}px` } : undefined}
+              >
               {previewUrl ? (
                 <iframe
+                  key={`${previewUrl}-${frameReloadNonce}-${devicePreset}`}
                   ref={iframeRef}
                   title="Preview"
                   className="preview-v3-iframe"
@@ -716,6 +770,7 @@ export default function PreviewPanel({
                   </span>
                 </div>
               )}
+              </div>
             </div>
 
             <SelectionInspector

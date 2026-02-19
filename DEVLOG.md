@@ -1724,6 +1724,64 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
 
+## 2026-02-19 | Prompt #20: Home creation flow (Discuss -> Plan -> Build) with full-prompt capture
+
+### Home flow and draft lifecycle
+- Refactored Home creation to avoid instant Workspace navigation on submit.
+- `Create` now stores a durable creation draft and enters explicit creation mode in Home.
+- Added `CreationPipeline` UI to run the three phases:
+  - `Discuss` (brainstorm + summary)
+  - `Plan` (spec confirmation with completeness gate)
+  - `Build` (project creation only after explicit approval)
+- Startup now restores persisted creation drafts into Home instead of auto-redirecting to Workspace.
+
+### Full prompt capture and preservation
+- Hardened wizard prompt handling in `CreateProjectWizard.jsx`:
+  - controlled textarea + ref-backed submit source (prevents stale closure reads)
+  - no silent truncation, multiline preserved
+  - Ctrl+Enter advances step; Enter remains newline
+- Template selection no longer overwrites typed prompt text; template is treated as hint metadata.
+- Creation submit uses `rawRequest` when available, preserving the exact original prompt text through project creation request payload.
+
+### New UI guardrails
+- Added explicit guard when attempting to leave Home for Workspace with an uncreated draft:
+  - keep working in Home, or discard draft and continue.
+- Added "Back to Describe" and "Start Over" controls inside creation pipeline without clearing unrelated app state.
+
+### Tests
+- Updated `tests/test_project_create_from_prompt_api.py`:
+  - Added multiline prompt regression test asserting prompt text is preserved in generated spec markdown.
+
+## 2026-02-19 | Prompt #19: Workspace split divider reliability hardening
+
+### Reproduction note
+- Reproduced unreliable resize behavior in Split mode by inspecting the active divider path (`SplitPane.jsx`) and exercising drag across pane boundaries/preview iframe. The drag loop depended on divider-level pointer handlers only, so when capture failed or a pointer crossed high-interference surfaces (notably embedded preview iframe/overlay stacks), resize could stall or stop mid-drag. Visual affordance/z-index was also too subtle for consistent hit-testing confidence.
+
+### Fixes
+- Rebuilt the active `SplitPane` drag loop for reliability:
+  - pointer capture retained, plus window-level pointermove/up/cancel fallback handlers
+  - drag lifecycle cleanup centralized (listeners, capture release, RAF cancellation)
+  - drag-time body classes hardened (`splitpane-dragging*` + `is-resizing`)
+  - temporary iframe pointer-event suppression during drag to prevent capture interference
+  - requestAnimationFrame-based drag updates to reduce jitter under rapid pointer movement.
+- Added stronger UX feedback and hit reliability:
+  - divider remains 10px, elevated z-index, hover highlight, and clear resize cursor
+  - live drag tooltip with percentage split (`Primary: xx% | Secondary: yy%`)
+  - double-click divider reset persists immediately.
+- Added local ratio persistence at divider level:
+  - key format now follows per-project + layout preset + orientation scope:
+    - `ai-office:paneSizes:<project>:<layoutPreset>:<orientation>:<splitId>`
+  - invalid persisted values are ignored and fall back to clamped defaults.
+- Unified split implementation usage:
+  - retired unused `client/src/components/PaneSplit.jsx` so workspace uses one splitter path only.
+- Workspace composition (`WorkspaceShell.jsx`) now provides explicit persist keys + semantic labels for all active split layouts (split/full-ide variants).
+
+### How to verify manually
+- Open Workspace in `Split` and drag divider repeatedly; resizing should remain active even when cursor leaves divider.
+- Drag while preview iframe is visible; iframe should not block resizing.
+- Reload and switch projects/layout presets; previous split ratios should restore.
+- Double-click divider; ratio should reset to default for the active layout.
+
 ## 2026-02-18 - Project Display Name (Rename Support)
 
 ### Backend changes
@@ -2557,3 +2615,132 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - `with-runtime.cmd python tools/desktop_smoke.py` PASS
 - `with-runtime.cmd python tools/toolchain_smoke.py` PASS
 - `with-runtime.cmd python tools/personality_smoke.py` PASS
+
+## 2026-02-19 | Prompt #21: Provider/model catalog + explicit model defaults + standardized diagnostics
+
+### Backend changes
+- Added `server/provider_models.py` as the single model catalog source:
+  - OpenAI default: `gpt-5.2` (`GPT-5.2 Thinking`)
+  - Claude default: `claude-opus-4-6` (`Claude Opus 4.6`)
+  - Codex alias catalog (`Codex (via OpenAI)`) with default `gpt-5.2-codex`
+- Extended `server/provider_config.py`:
+  - catalog-driven default model resolution
+  - new `model_catalog_snapshot()` with provider/model availability metadata
+- Extended `server/routes_api.py`:
+  - new `GET /api/settings/models`
+  - upgraded `POST /api/providers/test` with standardized error codes:
+    - `PROVIDER_UNREACHABLE`
+    - `AUTH_INVALID`
+    - `QUOTA_EXCEEDED`
+    - `MODEL_UNAVAILABLE`
+    - `UNKNOWN_ERROR`
+  - actionable `hint` field and structured details for diagnostics
+- Updated `server/database.py`:
+  - provider normalization via catalog aliases
+  - seed/migration/default-provider-model logic now driven from catalog
+- Updated `server/models.py`:
+  - provider request literals include `anthropic` alias
+  - provider test output includes `error_code` + `hint`
+  - new models for `/api/settings/models` response contract
+
+### Frontend changes
+- Settings now reads model options from backend catalog instead of hardcoded lists:
+  - `client/src/components/settings/SettingsShell.jsx`
+  - `client/src/components/settings/ApiKeysPanel.jsx`
+  - `client/src/components/settings/AgentConfigDrawer.jsx`
+- `ApiKeysPanel` now:
+  - shows friendly model labels from backend
+  - surfaces standardized test errors/hints
+  - records diagnostics payloads for export/copy
+- `AgentConfigDrawer` now:
+  - uses backend model catalog for model picker entries/labels
+  - keeps custom model support without forcing legacy defaults
+
+### Tests
+- Updated `tests/test_provider_endpoints.py`:
+  - validates `/api/settings/models` defaults and friendly labels
+  - validates provider test error-code mapping (quota example)
+
+### Verification
+- `with-runtime.cmd python -m pytest` PASS (`95 passed`)
+- `with-runtime.cmd npm --prefix client run build` PASS
+
+## 2026-02-19 | Prompt #23: Workspace de-clutter with activity bar, pinnable panes, focus mode, and sidebar collapse
+
+### Workspace shell redesign
+- Rebuilt `client/src/components/WorkspaceShell.jsx` around a calmer IDE model:
+  - primary view selected from a left activity bar
+  - optional secondary pane only when explicitly pinned and layout is `Split`
+  - `Full IDE` now behaves as primary-only (no always-on secondary clutter)
+- Added per-project workspace UI persistence in localStorage:
+  - primary view
+  - pinned secondary view
+  - focus mode mirror state
+  - split pane sizes (via split-pane persisted keys)
+- Added keyboard navigation in Build mode:
+  - `Ctrl+1..6` for Chat/Files/Git/Tasks/Spec/Preview
+  - `Ctrl+,` opens Settings
+  - `Ctrl+Shift+F` toggles Focus Mode
+- Added first-run workspace coachmark and reset-layout action.
+
+### Activity bar and sidebar
+- Updated `client/src/components/ActivityBar.jsx`:
+  - supports Settings entry
+  - shortcut hints in tooltips
+  - compact mode support.
+- Reworked `client/src/components/ProjectsSidebar.jsx`:
+  - collapse/expand behavior
+  - collapsed slim rail mode
+  - project search
+  - pin/unpin project affordance
+  - virtualization retained for expanded list.
+- Wired sidebar collapse state through `client/src/App.jsx` and persisted per project.
+
+### Preview UX in workspace
+- Updated `client/src/components/PreviewPanel.jsx` and `client/src/styles/preview.css`:
+  - added in-panel device width presets (mobile/tablet/desktop)
+  - added explicit Reload and Open controls in Live Preview header
+  - wrapped iframe in a framed stage for clearer visual hierarchy.
+
+### Styling and layout consistency
+- Added extensive workspace layout styles in `client/src/App.css` for:
+  - activity bar rail
+  - view pane headers/actions
+  - coachmark card
+  - split-pane visuals/cursor/drag feedback
+  - collapsed and expanded project sidebar modes.
+
+### Verification
+- `cd client && npm run build` PASS
+- `with-runtime.cmd python -m pytest` PASS (`95 passed`)
+
+## 2026-02-19 | Prompt #24 (V2): Chrome/theme unification + split reliability + Home draft preservation
+
+### App chrome + theme unification
+- Updated `client/src/App.css` top chrome styling to use the same dark surface tokens as workspace panels:
+  - blended topbar gradient from `--panel/--bg1`
+  - subtle divider + shadow token usage
+  - no hard light strip behavior in dark mode
+- Added explicit compact-menu styling (`.app-header-compact-menu`, popover, rows) so responsive header controls render with themed surfaces instead of browser defaults.
+- Updated `client/index.html` with dark first-paint fallback (`data-theme="dark"` + body background/text) to avoid white flash before React mounts.
+
+### Home “chat to create” message capture + discuss-first pipeline
+- Fixed `client/src/App.jsx` draft update normalization:
+  - `updateCreationDraft` now always passes through `buildCreationDraft(...)` (including functional updaters) so full prompt/raw request fields stay canonical.
+- Wired draft seed persistence into project creation:
+  - `createProjectFromDraft` now calls `persistDraftSeedToProjectSpec(...)` before draft clear/navigation.
+  - original request is preserved in seeded Spec/Idea Bank payloads.
+- Updated `client/src/components/CreationPipeline.jsx` discuss CTA label to `Proceed to Build` for the explicit discuss->plan->build handoff.
+- Enhanced `client/src/components/discuss/DraftDiscussView.jsx` with a compact auto-generated intake summary (clarifying bullets) and explicit actions:
+  - `Proceed to Build`
+  - `More Ideas`
+  - `Edit Prompt in Home`
+
+### Split/layout reliability and regression safety
+- Confirmed active workspace uses unified `SplitPane` implementation and persisted pane keys.
+- Fixed `client/src/App.jsx` structural issue where sidebar persistence `useEffect` hooks had drifted outside the component; hooks restored inside component lifecycle.
+- `Reset Layout` path remains wired to clear persisted pane-size keys (`ai-office:paneSizes:*`) for recovery from corrupted state.
+
+### Verification
+- `cd client && npm run build` PASS
+- `with-runtime.cmd python -m pytest -q tests` PASS (`95 passed`, warnings only)

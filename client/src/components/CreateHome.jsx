@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import CreateProjectWizard from './CreateProjectWizard';
+import CreationPipeline from './CreationPipeline';
 import RecentProjects from './RecentProjects';
 import templateLibrary from '../config/projectTemplates.json';
 
@@ -7,6 +8,10 @@ export default function CreateHome({
   projects = [],
   onOpenProject,
   onStartDraftDiscussion,
+  creationDraft = null,
+  onCreationDraftChange = null,
+  onCreateProjectFromDraft = null,
+  onDiscardCreationDraft = null,
   onProjectDeleted,
   onProjectRenamed,
 }) {
@@ -63,11 +68,24 @@ export default function CreateHome({
 
   return (
     <div className="create-home create-home-v3">
-      <CreateProjectWizard
-        templates={templateLibrary}
-        onStartDraftDiscussion={onStartDraftDiscussion}
-        summaryProject={summaryProject}
-      />
+      {creationDraft?.text && creationDraft?.pipelineStep !== 'describe' ? (
+        <CreationPipeline
+          draft={creationDraft}
+          channel="main"
+          onDraftChange={(patch) => onCreationDraftChange?.((prev) => ({ ...prev, ...(patch || {}) }))}
+          onBackToDescribe={() => onCreationDraftChange?.({ pipelineStep: 'describe' })}
+          onDiscardDraft={onDiscardCreationDraft}
+          onApproveAndCreate={onCreateProjectFromDraft}
+        />
+      ) : (
+        <CreateProjectWizard
+          templates={templateLibrary}
+          onStartDraftDiscussion={onStartDraftDiscussion}
+          summaryProject={summaryProject}
+          initialDraft={creationDraft}
+          onDraftUpdate={onCreationDraftChange}
+        />
+      )}
 
       <RecentProjects
         projects={recentProjects}
