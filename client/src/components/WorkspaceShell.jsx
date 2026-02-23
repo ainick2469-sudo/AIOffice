@@ -229,6 +229,7 @@ export default function WorkspaceShell({
   onDiscardCreationDraft = null,
   onEditCreationDraft = null,
   ingestionProgress = null,
+  onOpenProject = null,
 }) {
   const {
     enabled: beginnerMode,
@@ -245,6 +246,9 @@ export default function WorkspaceShell({
   const [primarySecondaryRatio, setPrimarySecondaryRatio] = useState(DEFAULT_PRIMARY_SECONDARY_RATIO);
   const [consoleOpenOverrides, setConsoleOpenOverrides] = useState({});
   const [consoleHasErrors, setConsoleHasErrors] = useState(false);
+  const [importDragActive, setImportDragActive] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importNotice, setImportNotice] = useState('');
 
   const projectLabel = projectName || 'ai-office';
   const hasCreationDraft = Boolean(creationDraft?.text);
@@ -448,10 +452,82 @@ export default function WorkspaceShell({
     setPreviewState(projectLabel, preview);
   };
 
-  const queueMessage = (text) => {
+  const queueMessage = useCallback((text) => {
     const body = String(text || '').trim();
     if (!body) return;
     setQueuedChatMessage({ id: `${Date.now()}-${Math.random()}`, text: body });
+  }, []);
+
+  const importProjectFiles = useCallback(async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length || importBusy) return;
+    setImportBusy(true);
+    setImportNotice('Importing project...');
+    try {
+      const form = new FormData();
+      const zipCandidate = files.length === 1 ? files[0] : null;
+      const isZip = zipCandidate && String(zipCandidate.name || '').toLowerCase().endsWith('.zip');
+      if (isZip) {
+        form.append('zip_file', zipCandidate, zipCandidate.name || 'project.zip');
+      } else {
+        files.forEach((file) => {
+          const name = file.webkitRelativePath || file.name || 'file';
+          form.append('files', file, name);
+        });
+      }
+
+      const response = await fetch('/api/projects/import', {
+        method: 'POST',
+        body: form,
+      });
+      const payload = response.ok ? await response.json() : await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.detail || payload?.error || 'Project import failed.');
+      }
+
+      const importedProject = String(payload?.project || '').trim();
+      const extractedCount = Number(payload?.extracted_files || 0);
+      const summary = importedProject
+        ? `Imported project '${importedProject}' with ${extractedCount} files.`
+        : `Imported project with ${extractedCount} files.`;
+      setImportNotice(summary);
+      await onOpenProject?.(payload);
+      if (importedProject) {
+        queueMessage(summary);
+      }
+    } catch (error) {
+      setImportNotice(error?.message || 'Project import failed.');
+    } finally {
+      setImportBusy(false);
+    }
+  }, [importBusy, onOpenProject, queueMessage]);
+
+  const handleWorkspaceDragEnter = (event) => {
+    if (importBusy) return;
+    if (!event.dataTransfer?.types?.includes('Files')) return;
+    event.preventDefault();
+    setImportDragActive(true);
+  };
+
+  const handleWorkspaceDragOver = (event) => {
+    if (!importDragActive || importBusy) return;
+    event.preventDefault();
+  };
+
+  const handleWorkspaceDragLeave = (event) => {
+    const target = event.currentTarget;
+    const next = event.relatedTarget;
+    if (target && next && target.contains(next)) return;
+    setImportDragActive(false);
+  };
+
+  const handleWorkspaceDrop = (event) => {
+    if (importBusy) return;
+    if (!event.dataTransfer?.files?.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setImportDragActive(false);
+    importProjectFiles(event.dataTransfer.files);
   };
 
   const runBuildLoop = () => {
@@ -591,7 +667,18 @@ export default function WorkspaceShell({
   const showQuickStartCollapsed = !beginnerMode && beginnerGuideCollapsed;
 
   return (
-    <div className={`workspace-shell workspace-office-shell ${previewFocus ? 'workspace-focus-mode' : ''}`}>
+    <div
+      className={`workspace-shell workspace-office-shell ${previewFocus ? 'workspace-focus-mode' : ''}`}
+      onDragEnter={handleWorkspaceDragEnter}
+      onDragOver={handleWorkspaceDragOver}
+      onDragLeave={handleWorkspaceDragLeave}
+      onDrop={handleWorkspaceDrop}
+    >
+      {importDragActive && !importBusy ? (
+        <div className="workspace-import-overlay">
+          Drop a zip or project files to import into AI Office
+        </div>
+      ) : null}
       <WorkspaceToolbar
         projectName={projectLabel}
         branch={branch}
@@ -679,6 +766,12 @@ export default function WorkspaceShell({
           {ingestionProgress.status === 'complete' ? ' (ready)' : ' (processing...)'}
         </div>
       )}
+
+      {importNotice ? (
+        <div className="workspace-import-banner">
+          {importBusy ? 'Importing project…' : importNotice}
+        </div>
+      ) : null}
 
       <div className="workspace-shell-body workspace-layout-canvas">
         <div className={`workspace-build-mode ${previewFocus ? 'is-focus-mode' : ''}`}>

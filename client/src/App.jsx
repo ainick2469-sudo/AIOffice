@@ -1762,6 +1762,7 @@ export default function App() {
                 ? ingestionProgress
                 : null
             }
+            onOpenProject={openProject}
           />
         )}
 

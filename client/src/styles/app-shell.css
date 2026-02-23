@@ -7445,3 +7445,32 @@ select {
 .code-copy-btn:hover {
   border-color: rgba(255, 255, 255, 0.35);
 }
+
+.workspace-shell {
+  position: relative;
+}
+
+.workspace-import-overlay {
+  position: absolute;
+  inset: 56px 18px 18px 18px;
+  z-index: 80;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg0) 76%, transparent);
+  color: var(--text0);
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.workspace-import-banner {
+  margin: 8px 16px 0;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--divider));
+  background: color-mix(in srgb, var(--panel2) 70%, transparent);
+  color: var(--text1);
+  font-size: 12px;
+}
