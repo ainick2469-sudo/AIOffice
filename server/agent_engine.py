@@ -2645,25 +2645,7 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                 agent_base_url=agent.get("base_url"),
             )
             if backend_err:
-                if not fallback_enabled:
-                    return f"{backend_err} Open Settings -> API Keys and click Test Connection."
-                response, fallback_model, fallback_err = await _try_ollama_fallback(
-                    channel=channel,
-                    project_name=active_project["project"],
-                    agent_id=agent_id or "agent",
-                    prompt=prompt,
-                    system=system,
-                    reason=backend_err,
-                    max_tokens=ollama_generation_tokens,
-                )
-                if fallback_err:
-                    return (
-                        f"{backend_err} Fallback is enabled but unavailable: {fallback_err} "
-                        "Open Settings -> API Keys and fix provider configuration."
-                    )
-                fallback_used = True
-                response_backend = "ollama"
-                response_model = fallback_model
+                return f"{backend_err} Open Settings -> API Keys and click Test Connection."
         if backend == "claude":
             if not fallback_used:
                 response = await claude_adapter.generate(
