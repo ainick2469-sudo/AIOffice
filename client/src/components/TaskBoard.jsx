@@ -139,7 +139,6 @@ export default function TaskBoard({ channel = 'main', beginnerMode = false }) {
   const [agents, setAgents] = useState({});
   const [activeProject, setActiveProject] = useState('ai-office');
   const [activeBranch, setActiveBranch] = useState('main');
-  const [showAllProjects, setShowAllProjects] = useState(false);
   const [viewMode, setViewMode] = useState('inbox');
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
   const [capture, setCapture] = useState(DEFAULT_CAPTURE);
@@ -159,9 +158,7 @@ export default function TaskBoard({ channel = 'main', beginnerMode = false }) {
 
   const load = useCallback(async () => {
     const scopedProject = (activeProject || 'ai-office').trim() || 'ai-office';
-    const tasksUrl = showAllProjects
-      ? `/api/tasks?channel=${encodeURIComponent(channel)}`
-      : `/api/tasks?channel=${encodeURIComponent(channel)}&project_name=${encodeURIComponent(scopedProject)}`;
+    const tasksUrl = `/api/tasks?channel=${encodeURIComponent(channel)}&project_name=${encodeURIComponent(scopedProject)}`;
 
     try {
       const [taskResp, agentResp] = await Promise.all([fetch(tasksUrl), fetch('/api/agents')]);
@@ -181,7 +178,7 @@ export default function TaskBoard({ channel = 'main', beginnerMode = false }) {
     } catch {
       // keep existing state on fetch failure
     }
-  }, [activeProject, channel, showAllProjects]);
+  }, [activeProject, channel]);
 
   useEffect(() => {
     const initial = setTimeout(() => {
@@ -237,7 +234,6 @@ export default function TaskBoard({ channel = 'main', beginnerMode = false }) {
       }
       const storedFilters = safeReadJSON(filtersKey, DEFAULT_FILTERS);
       setFilters(normalizeFilters(storedFilters));
-      setShowAllProjects(Boolean(storedFilters?._showAllProjects));
       setLocalMeta(safeReadJSON(localMetaKey, {}));
       setSelectedIds(new Set());
       setBulkStatus('');
@@ -251,8 +247,8 @@ export default function TaskBoard({ channel = 'main', beginnerMode = false }) {
   }, [viewMode, viewModeKey]);
 
   useEffect(() => {
-    safeWriteJSON(filtersKey, { ...filters, _showAllProjects: showAllProjects });
-  }, [filters, filtersKey, showAllProjects]);
+    safeWriteJSON(filtersKey, filters);
+  }, [filters, filtersKey]);
 
   useEffect(() => {
     safeWriteJSON(localMetaKey, localMeta);
@@ -406,12 +402,10 @@ export default function TaskBoard({ channel = 'main', beginnerMode = false }) {
     if (filters.label !== 'all') total += 1;
     if (filters.assigned_to !== 'all') total += 1;
     if (filters.branch !== 'all') total += 1;
-    if (showAllProjects) total += 1;
     return total;
-  }, [filters, showAllProjects]);
+  }, [filters]);
 
   const clearFilters = () => {
-    setShowAllProjects(false);
     setFilters(DEFAULT_FILTERS);
   };
 
@@ -682,11 +676,51 @@ export default function TaskBoard({ channel = 'main', beginnerMode = false }) {
     }
   };
 
+  const clearProjectTasks = async () => {
+    const project = String(activeProject || '').trim();
+    if (!project) return;
+    const confirmed = window.confirm(`Clear all tasks for project "${project}"?`);
+    if (!confirmed) return;
+    try {
+      const response = await fetch(`/api/tasks/clear?project=${encodeURIComponent(project)}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail || payload?.error || 'Unable to clear project tasks.');
+      }
+      setTasks([]);
+      setSelectedIds(new Set());
+      setSelectedTaskId(null);
+      setSelectedDraft(null);
+      setDrawerOpen(false);
+    } catch (err) {
+      window.alert(err?.message || 'Unable to clear project tasks.');
+    }
+  };
+
+  const clearAllTasks = async () => {
+    const confirmed = window.confirm('Clear all tasks across all projects?');
+    if (!confirmed) return;
+    try {
+      const response = await fetch('/api/tasks/clear-all', { method: 'DELETE' });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail || payload?.error || 'Unable to clear all tasks.');
+      }
+      setTasks([]);
+      setSelectedIds(new Set());
+      setSelectedTaskId(null);
+      setSelectedDraft(null);
+      setDrawerOpen(false);
+    } catch (err) {
+      window.alert(err?.message || 'Unable to clear all tasks.');
+    }
+  };
+
   return (
     <section className="panel task-board tasks-v2-shell">
       <header className="panel-header tasks-v2-header">
         <div className="tasks-v2-header-copy">
-          <h3>Tasks</h3>
+          <h3>Tasks ({filteredTasks.length})</h3>
           <p>
             Project: <strong>{activeProject}</strong> · Channel: <strong>{channel}</strong>
           </p>
@@ -718,6 +752,12 @@ export default function TaskBoard({ channel = 'main', beginnerMode = false }) {
           </div>
           <button type="button" className="ui-btn" onClick={load}>
             Refresh
+          </button>
+          <button type="button" className="ui-btn" onClick={clearProjectTasks}>
+            Clear Project Tasks
+          </button>
+          <button type="button" className="ui-btn" onClick={clearAllTasks}>
+            Clear All Tasks
           </button>
         </div>
       </header>
@@ -809,13 +849,7 @@ export default function TaskBoard({ channel = 'main', beginnerMode = false }) {
         </div>
 
         <div className="tasks-v2-filter-actions">
-          <button
-            type="button"
-            className={`ui-btn ${showAllProjects ? 'ui-btn-primary' : ''}`}
-            onClick={() => setShowAllProjects((prev) => !prev)}
-          >
-            {showAllProjects ? 'Showing all projects' : 'This project only'}
-          </button>
+          <span className="ui-chip">Scope: {activeProject}</span>
           <button type="button" className="ui-btn" onClick={clearFilters}>
             Clear filters
           </button>
