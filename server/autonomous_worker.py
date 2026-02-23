@@ -180,12 +180,20 @@ async def _verify_active_project(channel: str) -> tuple[bool, str]:
         return True, "No build/test config set; verification skipped."
 
     if build_cmd:
-        build_result = build_runner.run_build(project_name, cwd_override=cwd_override)
+        build_result = await asyncio.to_thread(
+            build_runner.run_build,
+            project_name,
+            cwd_override=cwd_override,
+        )
         await manager.broadcast(channel, {"type": "build_result", "stage": "build", "result": build_result})
         if not build_result.get("ok"):
             return False, f"Build failed: {(build_result.get('stderr') or build_result.get('error') or '')[:500]}"
     if test_cmd:
-        test_result = build_runner.run_test(project_name, cwd_override=cwd_override)
+        test_result = await asyncio.to_thread(
+            build_runner.run_test,
+            project_name,
+            cwd_override=cwd_override,
+        )
         await manager.broadcast(channel, {"type": "build_result", "stage": "test", "result": test_result})
         if not test_result.get("ok"):
             return False, f"Tests failed: {(test_result.get('stderr') or test_result.get('error') or '')[:500]}"
@@ -200,12 +208,12 @@ async def _run_prompt_with_retries(
     state: dict,
     task: dict,
 ) -> bool:
-    from .agent_engine import process_message
+    from .agent_engine import process_autonomous_prompt
 
     last_error = ""
     for attempt in range(1, MAX_STEP_RETRIES + 1):
         try:
-            await process_message(channel, prompt)
+            await process_autonomous_prompt(channel, prompt)
             return True
         except Exception as exc:  # pragma: no cover - defensive
             last_error = str(exc)

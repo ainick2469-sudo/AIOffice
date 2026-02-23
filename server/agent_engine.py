@@ -5,6 +5,7 @@ User can jump in anytime. Cap at 1000 messages.
 """
 
 import asyncio
+from collections import deque
 import logging
 import os
 import random
@@ -45,12 +46,14 @@ from . import git_tools
 from . import autonomous_worker
 from . import verification_loop
 from . import provider_config
+from . import task_decomposer
 from .observability import emit_console_event
 
 logger = logging.getLogger("ai-office.engine")
 
 CONTEXT_WINDOW = 20
 MAX_MESSAGES = 8  # Max agent messages per user message (prevents 17-agent snowball)
+MAX_BUILD_MESSAGES = 30  # Extended cap for decomposition-driven execution loops.
 MAX_FOLLOWUP_ROUNDS = 2  # Max continuation rounds after initial responses
 PAUSE_BETWEEN_AGENTS = 1.5  # seconds — feels natural
 PAUSE_BETWEEN_ROUNDS = 3.0  # seconds — breathing room
@@ -58,7 +61,7 @@ PAUSE_BETWEEN_ROUNDS = 3.0  # seconds — breathing room
 # Active conversation tracking
 _active: dict[str, bool] = {}
 _msg_count: dict[str, int] = {}
-_user_interrupt: dict[str, str] = {}
+_user_interrupt: dict[str, deque[str]] = {}
 _collab_mode: dict[str, dict] = {}
 _agent_failures: dict[str, dict[str, int]] = {}
 _channel_turn_policy: dict[str, dict] = {}
@@ -66,6 +69,8 @@ _review_mode: dict[str, bool] = {}
 _review_last_run: dict[str, float] = {}
 _sprint_tasks: dict[str, asyncio.Task] = {}
 _response_meta_queue: dict[tuple[str, str], list[dict]] = {}
+_build_loop_context: dict[str, dict] = {}
+_build_progress_cache: dict[str, tuple[int, int, Optional[int], Optional[str]]] = {}
 
 BUILD_FIX_MAX_ATTEMPTS = 3
 FAILURE_ESCALATION_THRESHOLD = 3
@@ -89,6 +94,7 @@ AGENT_NAMES = {
 }
 WAR_ROOM_AGENT_ORDER = ["builder", "reviewer", "qa", "director"]
 WAR_ROOM_AGENT_SET = set(WAR_ROOM_AGENT_ORDER)
+BUILD_LOOP_AGENT_ORDER = ["architect", "builder", "codex", "reviewer", "qa", "ops"]
 
 RISKY_SHORTCUT_TRIGGERS = (
     "skip test", "skip tests", "no tests", "without tests",
@@ -112,6 +118,18 @@ TECHNICAL_COMPLEXITY_KEYWORDS = (
     "build", "code", "design", "architecture", "implement", "fix", "test",
     "api", "database", "schema", "frontend", "backend", "deploy", "debug",
 )
+
+BUILDER_CLASS_AGENT_IDS = {"builder", "codex", "architect"}
+
+
+def _generation_max_tokens(agent_id: str, backend: str) -> int:
+    backend_norm = (backend or "").strip().lower()
+    is_builder_class = (agent_id or "").strip() in BUILDER_CLASS_AGENT_IDS
+    if backend_norm in {"openai", "claude"}:
+        return 2400 if is_builder_class else 800
+    if backend_norm == "ollama":
+        return 1600 if is_builder_class else 600
+    return 800
 
 
 def _queue_response_meta(channel: str, agent_id: str, meta: Optional[dict]) -> None:
@@ -189,6 +207,182 @@ def _get_turn_policy(channel: str) -> dict:
         channel,
         {"complexity": "medium", "max_initial_agents": 3, "max_followup_rounds": 1},
     )
+
+
+def _build_loop_state(channel: str) -> Optional[dict]:
+    state = _build_loop_context.get(channel)
+    if not state:
+        return None
+    if not state.get("active", True):
+        return None
+    return state
+
+
+def _clear_build_loop_state(channel: str) -> None:
+    _build_loop_context.pop(channel, None)
+    _build_progress_cache.pop(channel, None)
+
+
+async def _builder_panel(active_ids: Optional[set[str]] = None) -> list[str]:
+    selected_ids = set(active_ids or set())
+    if not selected_ids:
+        active_agents = await get_agents(active_only=True)
+        selected_ids = {str(agent.get("id") or "").strip() for agent in active_agents if agent.get("active")}
+    panel = [aid for aid in BUILD_LOOP_AGENT_ORDER if aid in selected_ids]
+    if not panel:
+        panel = ["builder", "codex"]
+    if "builder" not in panel:
+        panel.insert(0, "builder")
+    if "codex" not in panel:
+        panel.insert(1 if panel else 0, "codex")
+    return panel[:4]
+
+
+def _task_int_id(task: dict) -> Optional[int]:
+    try:
+        return int(task.get("id"))
+    except Exception:
+        return None
+
+
+async def _build_progress_snapshot(channel: str) -> Optional[dict]:
+    state = _build_loop_state(channel)
+    if not state:
+        return None
+
+    project_name = state.get("project_name")
+    branch_name = state.get("branch_name")
+    task_ids = {int(tid) for tid in (state.get("task_ids") or [])}
+    if not project_name or not task_ids:
+        return None
+
+    tasks = await list_tasks(channel=channel, project_name=project_name, branch=branch_name)
+    scoped = [task for task in tasks if (_task_int_id(task) in task_ids)]
+    total = len(scoped)
+    done = sum(1 for task in scoped if task.get("status") == "done")
+    pending = [task for task in scoped if task.get("status") != "done"]
+    next_task = pending[0] if pending else None
+    next_task_id = _task_int_id(next_task or {})
+    next_assignee = (next_task.get("assigned_to") or "").strip() if next_task else ""
+    next_title = (next_task.get("title") or "").strip() if next_task else ""
+    return {
+        "project": project_name,
+        "branch": branch_name or "main",
+        "total": total,
+        "done": done,
+        "pending": max(total - done, 0),
+        "next_task_id": next_task_id,
+        "next_assignee": next_assignee,
+        "next_title": next_title,
+        "task_ids": sorted(task_ids),
+    }
+
+
+async def _emit_build_progress(channel: str, *, force: bool = False) -> Optional[dict]:
+    snapshot = await _build_progress_snapshot(channel)
+    if not snapshot:
+        return None
+    state = _build_loop_state(channel)
+    if state:
+        state["next_task_id"] = snapshot.get("next_task_id")
+        state["next_assignee"] = snapshot.get("next_assignee")
+        state["next_title"] = snapshot.get("next_title")
+        state["updated_at"] = int(time.time())
+    cache_key = (
+        int(snapshot.get("done") or 0),
+        int(snapshot.get("total") or 0),
+        snapshot.get("next_task_id"),
+        snapshot.get("next_assignee"),
+    )
+    if not force and _build_progress_cache.get(channel) == cache_key:
+        return snapshot
+    _build_progress_cache[channel] = cache_key
+    await manager.broadcast(channel, {"type": "build_progress", "progress": snapshot})
+    await emit_console_event(
+        channel=channel,
+        event_type="build_progress",
+        source="agent_engine",
+        message=f"Build progress {snapshot.get('done', 0)}/{snapshot.get('total', 0)}",
+        project_name=snapshot.get("project"),
+        data=snapshot,
+    )
+    if snapshot.get("total", 0) > 0 and snapshot.get("done", 0) >= snapshot.get("total", 0):
+        await _send_system_message(channel, "Build loop tasks are complete. Ready for final verification and handoff.")
+        _clear_build_loop_state(channel)
+    return snapshot
+
+
+async def _bootstrap_build_loop(channel: str, user_message: str, active_project: dict) -> Optional[dict]:
+    project_name = (active_project.get("project") or "").strip()
+    if not project_name:
+        return None
+    branch_name = (
+        (active_project.get("branch") or "").strip()
+        or git_tools.current_branch(project_name)
+        or "main"
+    )
+    tasks = await task_decomposer.decompose_request(user_message, channel, project_name)
+    if not tasks:
+        return None
+
+    created_tasks: list[dict] = []
+    for task in tasks:
+        payload = dict(task or {})
+        payload.setdefault("branch", branch_name)
+        created = await create_task_record(payload, channel=channel, project_name=project_name)
+        if not created:
+            continue
+        created_tasks.append(created)
+        await manager.broadcast(channel, {"type": "task_created", "task": created})
+
+    if not created_tasks:
+        return None
+
+    allowed_agents = await _builder_panel()
+    first_pending = next((task for task in created_tasks if task.get("status") != "done"), None) or created_tasks[0]
+    state = {
+        "active": True,
+        "project_name": project_name,
+        "branch_name": branch_name,
+        "task_ids": [int(task["id"]) for task in created_tasks if task.get("id") is not None],
+        "allowed_agents": allowed_agents,
+        "next_task_id": _task_int_id(first_pending),
+        "next_assignee": (first_pending.get("assigned_to") or "").strip(),
+        "next_title": (first_pending.get("title") or "").strip(),
+        "seed_message": (user_message or "").strip(),
+        "created_at": int(time.time()),
+        "updated_at": int(time.time()),
+    }
+    _build_loop_context[channel] = state
+    _build_progress_cache.pop(channel, None)
+
+    summary_lines = [
+        "Build tasks decomposed and queued:",
+    ]
+    for task in created_tasks[:8]:
+        summary_lines.append(
+            f"- #{task.get('id')} [p{task.get('priority', 2)}] {task.get('title')} "
+            f"-> {(task.get('assigned_to') or 'builder')}"
+        )
+    summary_lines.append(
+        "Builder loop is active: agents should execute tasks sequentially with verification after each write."
+    )
+    await _send_system_message(channel, "\n".join(summary_lines), msg_type="task")
+
+    await emit_console_event(
+        channel=channel,
+        event_type="task_decomposition",
+        source="agent_engine",
+        message=f"Created {len(created_tasks)} tasks from user request.",
+        project_name=project_name,
+        data={
+            "channel": channel,
+            "task_ids": state["task_ids"],
+            "allowed_agents": allowed_agents,
+            "seed_message": (user_message or "")[:220],
+        },
+    )
+    return state
 
 
 # Cache project tree per root (refreshed every 60s)
@@ -402,6 +596,7 @@ async def _try_ollama_fallback(
     prompt: str,
     system: str,
     reason: str,
+    max_tokens: int,
 ) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not await ollama_client.is_available():
         return None, None, "Ollama fallback requested but Ollama is not running."
@@ -411,7 +606,7 @@ async def _try_ollama_fallback(
         prompt=prompt,
         system=system,
         temperature=0.75,
-        max_tokens=400,
+        max_tokens=max_tokens,
     )
     if not (response or "").strip():
         return None, fallback_model, "Ollama fallback returned an empty response."
@@ -2127,6 +2322,22 @@ def _build_system(
         s += "\nDo NOT suggest meetings or calls. This is async chat — coordinate HERE."
         s += "\nNEVER say 'let's schedule a call' or 'let's set up a meeting'."
 
+    build_state = _build_loop_state(channel)
+    if build_state:
+        next_title = (build_state.get("next_title") or "").strip()
+        next_assignee = (build_state.get("next_assignee") or "").strip()
+        s += "\n\n=== BUILD EXECUTION LOOP (STRICT) ==="
+        s += "\nThe channel is in active build-loop mode. Execute tasks, do not brainstorm."
+        s += "\nRequired sequence per turn: READ context -> WRITE smallest change -> VERIFY command -> REPORT result."
+        s += "\nVerification is mandatory after each write (tests/build/lint/smoke where relevant)."
+        s += "\nIf verification fails, include the failing command and exact error snippet, then patch and re-run."
+        s += "\nUse task tags while progressing work: [TASK:start] before coding, [TASK:done] only after verification passes, [TASK:blocked] with a concrete blocker."
+        s += "\nNever claim completion without tool evidence in the same response."
+        if next_title:
+            s += f"\nCurrent next task: {next_title}"
+        if next_assignee:
+            s += f"\nPreferred assignee for the next task: {next_assignee}"
+
     if is_followup:
         s += "\n\n=== FOLLOWUP RULES ==="
         s += "\nOnly speak if you have something NEW to add. A different angle, question, or concern."
@@ -2327,11 +2538,14 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
 
     try:
         started_at = time.time()
+        agent_id = agent.get("id", "")
         credential_source = "none"
         fallback_enabled = await _fallback_to_ollama_enabled()
         fallback_used = False
         response_backend = backend
         response_model = (agent.get("model") or "").strip() or None
+        remote_generation_tokens = _generation_max_tokens(agent_id, backend)
+        ollama_generation_tokens = _generation_max_tokens(agent_id, "ollama")
         if backend in {"claude", "openai"}:
             budget_state = await _api_budget_state(channel, active_project["project"])
             budget = budget_state["budget_usd"]
@@ -2356,10 +2570,11 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                 response, fallback_model, fallback_err = await _try_ollama_fallback(
                     channel=channel,
                     project_name=active_project["project"],
-                    agent_id=agent.get("id", "agent"),
+                    agent_id=agent_id or "agent",
                     prompt=prompt,
                     system=system,
                     reason=backend_err,
+                    max_tokens=ollama_generation_tokens,
                 )
                 if fallback_err:
                     return (
@@ -2375,7 +2590,7 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                     prompt=prompt,
                     system=system,
                     temperature=0.7,
-                    max_tokens=600,
+                    max_tokens=remote_generation_tokens,
                     model=agent.get("model", "claude-opus-4-6"),
                     api_key=api_key,
                     base_url=base_url,
@@ -2403,10 +2618,11 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                     response, fallback_model, fallback_err = await _try_ollama_fallback(
                         channel=channel,
                         project_name=active_project["project"],
-                        agent_id=agent.get("id", "agent"),
+                        agent_id=agent_id or "agent",
                         prompt=prompt,
                         system=system,
                         reason=detail,
+                        max_tokens=ollama_generation_tokens,
                     )
                     if not fallback_err and (response or "").strip():
                         fallback_used = True
@@ -2428,7 +2644,7 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                     prompt=prompt,
                     system=system,
                     temperature=0.7,
-                    max_tokens=600,
+                    max_tokens=remote_generation_tokens,
                     model=agent.get("model", "gpt-5.2"),
                     api_key=api_key,
                     base_url=base_url,
@@ -2456,10 +2672,11 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                     response, fallback_model, fallback_err = await _try_ollama_fallback(
                         channel=channel,
                         project_name=active_project["project"],
-                        agent_id=agent.get("id", "agent"),
+                        agent_id=agent_id or "agent",
                         prompt=prompt,
                         system=system,
                         reason=detail,
+                        max_tokens=ollama_generation_tokens,
                     )
                     if not fallback_err and (response or "").strip():
                         fallback_used = True
@@ -2486,7 +2703,7 @@ async def _generate(agent: dict, channel: str, is_followup: bool = False) -> Opt
                 prompt=prompt,
                 system=system,
                 temperature=0.75,
-                max_tokens=400,
+                max_tokens=ollama_generation_tokens,
             )
             response_model = agent["model"]
             response_backend = "ollama"
@@ -2819,8 +3036,32 @@ def _enforce_followup_constraints(agent_id: str, response: str, recent_agent_mes
     return text
 
 
-def _pick_next(last_sender: str, last_text: str, already_spoke: set) -> list[str]:
-    """Pick who talks next. Only agents who were mentioned or have a specific reason to respond."""
+def _pick_next(channel: str, last_sender: str, last_text: str, already_spoke: set) -> list[str]:
+    """Pick who talks next. Build-loop channels prioritize execution roles."""
+    build_state = _build_loop_state(channel)
+    if build_state:
+        allowed = [aid for aid in (build_state.get("allowed_agents") or BUILD_LOOP_AGENT_ORDER) if aid]
+        candidates: list[str] = []
+        for aid in _mentions(last_text):
+            if aid in allowed and aid != last_sender and aid not in already_spoke and aid not in candidates:
+                candidates.append(aid)
+        next_assignee = (build_state.get("next_assignee") or "").strip()
+        if (
+            next_assignee
+            and next_assignee in allowed
+            and next_assignee != last_sender
+            and next_assignee not in already_spoke
+            and next_assignee not in candidates
+        ):
+            candidates.insert(0, next_assignee)
+        if not candidates:
+            for aid in allowed:
+                if aid != last_sender and aid not in already_spoke and aid not in candidates:
+                    candidates.append(aid)
+                if len(candidates) >= 2:
+                    break
+        return candidates[:2]
+
     candidates = []
 
     # Mentioned agents always get to talk
@@ -2829,7 +3070,7 @@ def _pick_next(last_sender: str, last_text: str, already_spoke: set) -> list[str
             candidates.append(aid)
 
     # If someone was directly asked a question, only they respond
-    # Do NOT randomly pull from the full agent pool — that causes snowball
+    # Do NOT randomly pull from the full agent pool - that causes snowball
     if _looks_risky(last_text) and not candidates:
         for counter_voice in ("reviewer", "sage", "critic"):
             if counter_voice != last_sender and counter_voice not in already_spoke and counter_voice not in candidates:
@@ -2849,20 +3090,23 @@ def _pick_next(last_sender: str, last_text: str, already_spoke: set) -> list[str
         technical = {"builder", "reviewer", "qa", "architect", "codex", "ops"}
         creative = {"spark", "lore", "art", "uiux"}
         management = {"producer", "director", "sage", "scribe", "critic"}
-        
+
         spoke_types = set()
         for s in already_spoke:
-            if s in technical: spoke_types.add("technical")
-            if s in creative: spoke_types.add("creative")
-            if s in management: spoke_types.add("management")
-        
+            if s in technical:
+                spoke_types.add("technical")
+            if s in creative:
+                spoke_types.add("creative")
+            if s in management:
+                spoke_types.add("management")
+
         # Pick from underrepresented type
         pool = []
         if "technical" not in spoke_types:
             pool = [a for a in technical if a not in already_spoke and a != last_sender]
         elif "management" not in spoke_types:
             pool = [a for a in management if a not in already_spoke and a != last_sender]
-        
+
         if pool:
             random.shuffle(pool)
             candidates.append(pool[0])
@@ -2870,18 +3114,56 @@ def _pick_next(last_sender: str, last_text: str, already_spoke: set) -> list[str
     return candidates[:2]  # Max 2 follow-up agents per round
 
 
+def _queue_user_interrupt(channel: str, message: str) -> int:
+    queue = _user_interrupt.setdefault(channel, deque())
+    queue.append(message)
+    # Prevent unbounded growth if a channel is spammed while busy.
+    while len(queue) > 25:
+        queue.popleft()
+    return len(queue)
+
+
+def _pop_user_interrupt(channel: str) -> Optional[str]:
+    queue = _user_interrupt.get(channel)
+    if not queue:
+        return None
+    message = queue.popleft()
+    if not queue:
+        _user_interrupt.pop(channel, None)
+    return message
+
+
+def _pending_interrupts(channel: str) -> int:
+    queue = _user_interrupt.get(channel)
+    return len(queue) if queue else 0
+
+
 async def _check_interrupt(channel: str) -> bool:
     """Check if user interrupted. Returns True if interrupted."""
-    return channel in _user_interrupt
+    return _pending_interrupts(channel) > 0
 
 
 async def _handle_interrupt(channel: str, spoke_set: set) -> int:
     """Handle user interrupt: re-route and respond to new message. Returns msg count."""
-    new_msg = _user_interrupt.pop(channel)
+    new_msg = _pop_user_interrupt(channel)
+    if not new_msg:
+        return 0
     logger.info(f"⚡ User interrupt: {new_msg[:60]}")
     turn_policy = _turn_policy_for_message(new_msg)
     _channel_turn_policy[channel] = turn_policy
-    if _war_room_mode(channel):
+    build_state = _build_loop_state(channel)
+    if build_state:
+        await _emit_build_progress(channel)
+        allowed = [aid for aid in (build_state.get("allowed_agents") or BUILD_LOOP_AGENT_ORDER) if aid]
+        preferred = (build_state.get("next_assignee") or "").strip()
+        new_agents = []
+        if preferred and preferred in allowed:
+            new_agents.append(preferred)
+        for aid in allowed:
+            if aid not in new_agents:
+                new_agents.append(aid)
+        new_agents = new_agents[:4]
+    elif _war_room_mode(channel):
         active_agents = await get_agents(active_only=True)
         active_ids = {a["id"] for a in active_agents}
         new_agents = [aid for aid in WAR_ROOM_AGENT_ORDER if aid in active_ids]
@@ -2961,7 +3243,13 @@ async def _respond_agents(channel: str, agent_ids: list[str], spoke_set: set, is
     return count
 
 
-async def _conversation_loop(channel: str, initial_agents: list[str]):
+async def _conversation_loop(
+    channel: str,
+    initial_agents: list[str],
+    *,
+    max_messages: int = MAX_MESSAGES,
+    build_loop: bool = False,
+):
     """The living conversation. Agents respond, then react to each other."""
     count = 0
     _active[channel] = True
@@ -2974,18 +3262,24 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
         added = await _respond_agents(channel, initial_agents, spoke_this_convo, is_followup=False)
         count += added
         _msg_count[channel] = count
+        if build_loop:
+            await _emit_build_progress(channel, force=True)
 
         # CONTINUATION ROUNDS
         consecutive_silence = 0
         max_silence = 2
         followup_rounds = 0
 
-        while count < MAX_MESSAGES and _active.get(channel) and consecutive_silence < max_silence:
+        while count < max_messages and _active.get(channel) and consecutive_silence < max_silence:
             turn_policy = _get_turn_policy(channel)
             max_followup_rounds = int(turn_policy.get("max_followup_rounds", MAX_FOLLOWUP_ROUNDS))
             max_followup_rounds = max(0, min(MAX_FOLLOWUP_ROUNDS, max_followup_rounds))
             if followup_rounds >= max_followup_rounds:
                 break
+            if build_loop:
+                snapshot = await _emit_build_progress(channel)
+                if snapshot and snapshot.get("total", 0) > 0 and snapshot.get("pending", 0) == 0:
+                    break
             await asyncio.sleep(PAUSE_BETWEEN_ROUNDS)
 
             # Check for user interrupt
@@ -3011,21 +3305,38 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
                     next_user_message = recent2[-1]["content"]
                     turn_policy = _turn_policy_for_message(next_user_message)
                     _channel_turn_policy[channel] = turn_policy
-                    new_agents = await route(next_user_message)
-                    new_agents = new_agents[: int(turn_policy.get("max_initial_agents", 3))]
+                    if build_loop and _build_loop_state(channel):
+                        state = _build_loop_state(channel) or {}
+                        allowed = [aid for aid in (state.get("allowed_agents") or BUILD_LOOP_AGENT_ORDER) if aid]
+                        preferred = (state.get("next_assignee") or "").strip()
+                        new_agents = []
+                        if preferred and preferred in allowed:
+                            new_agents.append(preferred)
+                        for aid in allowed:
+                            if aid not in new_agents:
+                                new_agents.append(aid)
+                        new_agents = new_agents[:4] or await _builder_panel()
+                    else:
+                        new_agents = await route(next_user_message)
+                        new_agents = new_agents[: int(turn_policy.get("max_initial_agents", 3))]
                     spoke_this_convo.clear()
                     added = await _respond_agents(channel, new_agents, spoke_this_convo, is_followup=False)
                     count += added
                     _msg_count[channel] = count
+                    if build_loop:
+                        await _emit_build_progress(channel)
                     consecutive_silence = 0
                     followup_rounds = 0  # Reset for new user message
                     continue
 
             # Pick who responds next
-            next_agents = _pick_next(last["sender"], last["content"], spoke_this_convo)
+            next_agents = _pick_next(channel, last["sender"], last["content"], spoke_this_convo)
             added = await _respond_agents(channel, next_agents, spoke_this_convo, is_followup=True)
             count += added
             _msg_count[channel] = count
+
+            if build_loop:
+                await _emit_build_progress(channel)
 
             if added == 0:
                 consecutive_silence += 1
@@ -3033,7 +3344,7 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
             else:
                 consecutive_silence = 0
                 followup_rounds += 1
-                logger.info(f"Follow-up round {followup_rounds}/{MAX_FOLLOWUP_ROUNDS}")
+                logger.info(f"Follow-up round {followup_rounds}/{max_followup_rounds}")
 
             # Distill every 8 messages
             if count % 8 == 0 and count > 0:
@@ -3041,6 +3352,22 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
                     await maybe_distill(channel)
                 except Exception:
                     pass
+
+        if build_loop:
+            snapshot = await _emit_build_progress(channel, force=True)
+            if (
+                count >= max_messages
+                and snapshot
+                and snapshot.get("pending", 0) > 0
+            ):
+                await _send_system_message(
+                    channel,
+                    (
+                        f"Build loop reached the message cap ({max_messages}) with "
+                        f"{snapshot.get('pending', 0)} task(s) still pending. "
+                        "Send another build request to continue from current progress."
+                    ),
+                )
 
     except Exception as e:
         logger.error(f"Conversation loop error: {e}")
@@ -3052,6 +3379,32 @@ async def _conversation_loop(channel: str, initial_agents: list[str]):
             pass
         _active.pop(channel, None)
         _msg_count.pop(channel, None)
+
+
+async def _wait_for_channel_idle(channel: str, timeout_seconds: float = 120.0) -> bool:
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds or 0))
+    while True:
+        if not _active.get(channel) and _pending_interrupts(channel) == 0:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.1)
+
+
+async def process_autonomous_prompt(channel: str, user_message: str, timeout_seconds: float = 120.0) -> None:
+    """Run one autonomous worker prompt with explicit idle waits to avoid re-entrant loop races."""
+    if not (user_message or "").strip():
+        return
+
+    ready = await _wait_for_channel_idle(channel, timeout_seconds=timeout_seconds)
+    if not ready:
+        raise TimeoutError(f"Channel '{channel}' stayed busy before autonomous prompt dispatch.")
+
+    await process_message(channel, user_message)
+
+    settled = await _wait_for_channel_idle(channel, timeout_seconds=timeout_seconds)
+    if not settled:
+        raise TimeoutError(f"Channel '{channel}' did not settle after autonomous prompt dispatch.")
 
 
 _user_msg_count: dict[str, int] = {}  # track user messages per channel for auto-naming
@@ -3162,7 +3515,7 @@ async def process_message(channel: str, user_message: str):
     if channel in _active and _active[channel]:
         # Conversation running — interrupt it
         logger.info(f"User interrupt in #{channel}")
-        _user_interrupt[channel] = user_message
+        pending = _queue_user_interrupt(channel, user_message)
         active_project = await project_manager.get_active_project(channel)
         await emit_console_event(
             channel=channel,
@@ -3170,31 +3523,88 @@ async def process_message(channel: str, user_message: str):
             source="agent_engine",
             message="User interrupted active conversation.",
             project_name=active_project["project"],
-            data={"message": user_message[:220]},
+            data={"message": user_message[:220], "pending_interrupts": pending},
         )
         return
 
     # Start new conversation
     logger.info(f"New conversation in #{channel} ({turn_policy['complexity']})")
     mode = _war_room_mode(channel)
+    active_project = await project_manager.get_active_project(channel)
+    existing_build_state = _build_loop_state(channel)
+    if existing_build_state:
+        snapshot = await _build_progress_snapshot(channel)
+        if not snapshot or snapshot.get("pending", 0) <= 0:
+            _clear_build_loop_state(channel)
+            existing_build_state = None
+        else:
+            existing_build_state["next_task_id"] = snapshot.get("next_task_id")
+            existing_build_state["next_assignee"] = snapshot.get("next_assignee")
+            existing_build_state["next_title"] = snapshot.get("next_title")
+
+    build_state = None
+    if not mode:
+        try:
+            build_state = await _bootstrap_build_loop(channel, user_message, active_project)
+        except Exception as exc:
+            logger.warning("task decomposition failed: %s", exc)
+            await emit_console_event(
+                channel=channel,
+                event_type="task_decomposition_failed",
+                source="agent_engine",
+                message=f"Task decomposition failed: {exc}",
+                project_name=active_project["project"],
+                severity="warning",
+                data={"message": user_message[:220]},
+            )
+    if not build_state:
+        build_state = existing_build_state
+
+    run_build_loop = bool(build_state)
     if mode:
         active_agents = await get_agents(active_only=True)
         active_ids = {a["id"] for a in active_agents}
         initial_agents = [aid for aid in WAR_ROOM_AGENT_ORDER if aid in active_ids]
+        max_messages = MAX_MESSAGES
+    elif run_build_loop:
+        allowed = [aid for aid in (build_state.get("allowed_agents") or BUILD_LOOP_AGENT_ORDER) if aid]
+        preferred = (build_state.get("next_assignee") or "").strip()
+        initial_agents = []
+        if preferred and preferred in allowed:
+            initial_agents.append(preferred)
+        for aid in allowed:
+            if aid not in initial_agents:
+                initial_agents.append(aid)
+        initial_agents = initial_agents[:4]
+        max_messages = MAX_BUILD_MESSAGES
     else:
+        _clear_build_loop_state(channel)
         initial_agents = await route(user_message)
         initial_agents = initial_agents[: int(turn_policy.get("max_initial_agents", 3))]
+        max_messages = MAX_MESSAGES
     logger.info(f"Initial agents: {initial_agents}")
-    active_project = await project_manager.get_active_project(channel)
     await emit_console_event(
         channel=channel,
         event_type="router_decision",
         source="agent_engine",
         message="Router selected initial agents.",
         project_name=active_project["project"],
-        data={"message": user_message[:220], "agents": initial_agents, "turn_policy": turn_policy},
+        data={
+            "message": user_message[:220],
+            "agents": initial_agents,
+            "turn_policy": turn_policy,
+            "build_loop": run_build_loop,
+            "max_messages": max_messages,
+        },
     )
-    asyncio.create_task(_conversation_loop(channel, initial_agents))
+    asyncio.create_task(
+        _conversation_loop(
+            channel,
+            initial_agents,
+            max_messages=max_messages,
+            build_loop=run_build_loop,
+        )
+    )
 
 
 async def stop_conversation(channel: str) -> bool:
@@ -3208,10 +3618,11 @@ async def stop_conversation(channel: str) -> bool:
 
 def get_conversation_status(channel: str) -> dict:
     collab = get_collab_mode_status(channel)
+    max_messages = MAX_BUILD_MESSAGES if _build_loop_state(channel) else MAX_MESSAGES
     return {
         "active": _active.get(channel, False),
         "message_count": _msg_count.get(channel, 0),
-        "max_messages": MAX_MESSAGES,
+        "max_messages": max_messages,
         "collab_mode": collab.get("mode", "chat"),
         "collab_active": bool(collab.get("active")),
     }

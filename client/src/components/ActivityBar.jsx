@@ -1,22 +1,14 @@
 const DEFAULT_ITEMS = [
   { id: 'chat', label: 'Chat', icon: 'C', shortcut: 'Ctrl+1' },
   { id: 'files', label: 'Files', icon: 'F', shortcut: 'Ctrl+2' },
-  { id: 'git', label: 'Git', icon: 'G', shortcut: 'Ctrl+3' },
-  { id: 'tasks', label: 'Tasks', icon: 'T', shortcut: 'Ctrl+4' },
-  { id: 'spec', label: 'Spec', icon: 'S', shortcut: 'Ctrl+5' },
-  { id: 'preview', label: 'Preview', icon: 'P', shortcut: 'Ctrl+6' },
-  { id: 'settings', label: 'Settings', icon: '⚙', shortcut: 'Ctrl+,' },
+  { id: 'preview', label: 'Preview', icon: 'P', shortcut: 'Ctrl+3' },
 ];
 
 function tooltipForItem(item) {
   const base = item.shortcut ? `${item.label} (${item.shortcut})` : item.label;
   if (item.id === 'chat') return `${base}: talk to agents and run guided actions.`;
   if (item.id === 'files') return `${base}: browse and edit project files quickly.`;
-  if (item.id === 'git') return `${base}: review diffs, stage, and commit safely.`;
-  if (item.id === 'tasks') return `${base}: capture and triage build work.`;
-  if (item.id === 'spec') return `${base}: edit scope and acceptance criteria.`;
   if (item.id === 'preview') return `${base}: run and inspect the live app output.`;
-  if (item.id === 'settings') return `${base}: open app configuration and diagnostics.`;
   return base;
 }
 

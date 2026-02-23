@@ -122,20 +122,48 @@ def _detect_node(root: Path) -> Optional[dict]:
     build = "npm run build"
     test = "npm test"
     run = "npm run dev"
+    preview_cmd = "npm run dev"
+    preview_port: Optional[int] = 5173
     try:
         data = json.loads(package.read_text(encoding="utf-8"))
         scripts = (data.get("scripts") or {}) if isinstance(data, dict) else {}
+        deps = {}
+        if isinstance(data, dict):
+            deps = {
+                **(data.get("dependencies") or {}),
+                **(data.get("devDependencies") or {}),
+            }
         if "build" not in scripts:
             build = ""
         if "test" not in scripts:
             test = ""
         if "dev" not in scripts and "start" in scripts:
             run = "npm run start"
+            preview_cmd = "npm run start"
+            preview_port = 3000
         elif "dev" not in scripts and "start" not in scripts:
             run = ""
+            preview_cmd = ""
+            preview_port = None
+        if "next" in deps:
+            # Next.js defaults to port 3000 for dev/start.
+            if not preview_cmd and "dev" in scripts:
+                preview_cmd = "npm run dev"
+            preview_port = 3000
+        elif "vite" in deps:
+            if not preview_cmd and "dev" in scripts:
+                preview_cmd = "npm run dev"
+            preview_port = 5173
     except Exception:
         pass
-    return {"kind": "node", "build_cmd": build, "test_cmd": test, "run_cmd": run}
+    return {
+        "kind": "node",
+        "build_cmd": build,
+        "test_cmd": test,
+        "run_cmd": run,
+        "preview_cmd": preview_cmd,
+        "preview_port": preview_port,
+    }
 
 
 def _detect_python(root: Path) -> Optional[dict]:
@@ -146,19 +174,41 @@ def _detect_python(root: Path) -> Optional[dict]:
     if not pyproject.exists() and not req.exists() and not main_py.exists() and not app_py.exists():
         return None
     run_cmd = "python app.py" if app_py.exists() else ("python main.py" if main_py.exists() else "")
-    return {"kind": "python", "build_cmd": "", "test_cmd": "python -m pytest", "run_cmd": run_cmd}
+    preview_port = 8000 if run_cmd else None
+    return {
+        "kind": "python",
+        "build_cmd": "",
+        "test_cmd": "python -m pytest",
+        "run_cmd": run_cmd,
+        "preview_cmd": run_cmd,
+        "preview_port": preview_port,
+    }
 
 
 def _detect_rust(root: Path) -> Optional[dict]:
     if not (root / "Cargo.toml").exists():
         return None
-    return {"kind": "rust", "build_cmd": "cargo build", "test_cmd": "cargo test", "run_cmd": "cargo run"}
+    return {
+        "kind": "rust",
+        "build_cmd": "cargo build",
+        "test_cmd": "cargo test",
+        "run_cmd": "cargo run",
+        "preview_cmd": "cargo run",
+        "preview_port": None,
+    }
 
 
 def _detect_go(root: Path) -> Optional[dict]:
     if not (root / "go.mod").exists():
         return None
-    return {"kind": "go", "build_cmd": "go build ./...", "test_cmd": "go test ./...", "run_cmd": "go run ."}
+    return {
+        "kind": "go",
+        "build_cmd": "go build ./...",
+        "test_cmd": "go test ./...",
+        "run_cmd": "go run .",
+        "preview_cmd": "go run .",
+        "preview_port": None,
+    }
 
 
 def _detect_cmake(root: Path) -> Optional[dict]:
@@ -169,6 +219,8 @@ def _detect_cmake(root: Path) -> Optional[dict]:
         "build_cmd": "cmake -S . -B build && cmake --build build",
         "test_cmd": "ctest --test-dir build",
         "run_cmd": "",
+        "preview_cmd": "",
+        "preview_port": None,
     }
 
 
@@ -185,15 +237,19 @@ def detect_project_commands(project_name: str, root_override: Optional[str | Pat
                 "build_cmd": result.get("build_cmd", ""),
                 "test_cmd": result.get("test_cmd", ""),
                 "run_cmd": result.get("run_cmd", ""),
+                "preview_cmd": result.get("preview_cmd", ""),
+                "preview_port": result.get("preview_port"),
             }
 
-    merged = {"build_cmd": "", "test_cmd": "", "run_cmd": ""}
+    merged = {"build_cmd": "", "test_cmd": "", "run_cmd": "", "preview_cmd": "", "preview_port": None}
     for kind in ("node", "python", "rust", "go", "cmake"):
         if kind not in detected:
             continue
-        for key in ("build_cmd", "test_cmd", "run_cmd"):
+        for key in ("build_cmd", "test_cmd", "run_cmd", "preview_cmd"):
             if not merged[key] and detected[kind].get(key):
                 merged[key] = detected[kind][key]
+        if merged["preview_port"] is None and detected[kind].get("preview_port") is not None:
+            merged["preview_port"] = detected[kind].get("preview_port")
     return {"detected": detected, **merged}
 
 
@@ -204,9 +260,11 @@ async def detect_and_store_config(project_name: str, root_override: Optional[str
     manual = set(current.get("manual_overrides", []))
     merged = dict(current)
     merged["detected"] = detected.get("detected", {})
-    for key in ("build_cmd", "test_cmd", "run_cmd"):
+    for key in ("build_cmd", "test_cmd", "run_cmd", "preview_cmd"):
         if key not in manual and detected.get(key):
             merged[key] = detected[key]
+    if "preview_port" not in manual and detected.get("preview_port") is not None:
+        merged["preview_port"] = detected.get("preview_port")
     merged["manual_overrides"] = sorted(manual)
     merged["updated_at"] = int(time.time())
 

@@ -17,7 +17,7 @@ from . import database as db_api
 from . import runtime_manager
 from .database import get_db
 from .observability import emit_console_event
-from .policy import evaluate_tool_policy
+from .policy import evaluate_tool_policy, find_unquoted_shell_meta
 from .project_manager import APP_ROOT, get_active_project, get_sandbox_root
 from .runtime_config import build_runtime_env
 from .websocket import manager
@@ -26,62 +26,6 @@ logger = logging.getLogger("ai-office.tools")
 
 # Default sandbox root — tools cannot escape this or active project root.
 SANDBOX = APP_ROOT
-
-# Allow-listed command prefixes (exact shell operators are blocked below)
-ALLOWED_COMMAND_PREFIXES = [
-    "python -m pytest",
-    "python -m py_compile",
-    "python -c",
-    "py -3 -m pytest",
-    "py -3 -m py_compile",
-    "py -3 -c",
-    "npm install",
-    "npm ci",
-    "npm test",
-    "npm run lint",
-    "npm run build",
-    "npm run dev",
-    "npm run start",
-    "npm --prefix ",
-    "npx vite build",
-    "npx vite dev",
-    "npx --yes create-vite@latest",
-    "npx create-vite@latest",
-    "npx --yes create-next-app@latest",
-    "npx create-next-app@latest",
-    "npx create-react-app",
-    "node -v",
-    "npm -v",
-    "where node",
-    "where npm",
-    "dir ",
-    "type ",
-    "findstr ",
-    "git status",
-    "git log",
-    "git diff",
-    "ollama list",
-]
-
-# Blocked patterns (never allow)
-BLOCKED_PATTERNS = [
-    r"rm\s+-rf",
-    r"del\s+/[sS]",
-    r"format\s+",
-    r"rmdir",
-    r"reg\s+(add|delete)",
-    r"regedit",
-    r"net\s+user",
-    r"shutdown",
-    r"taskkill",
-    r"\.env",
-    r"password",
-    r"secret",
-    r"token",
-    r"api.key",
-]
-
-SHELL_META_TOKENS = ("&&", "||", ";", "|", "`", "$(", ">", "<")
 
 # Allowed file read extensions
 READABLE_EXTENSIONS = {
@@ -131,34 +75,6 @@ def canonicalize_tool_path(raw: str) -> str:
     while text.startswith(("/", "\\")):
         text = text[1:]
     return text
-
-
-def _is_command_allowed(command: str) -> bool:
-    """Check command against allowlist and blocklist."""
-    cmd_lower = command.lower().strip()
-
-    # Block shell chaining/redirection/operators. Commands should be single-step only.
-    if any(token in cmd_lower for token in SHELL_META_TOKENS):
-        return False
-
-    # Check blocklist first
-    for pattern in BLOCKED_PATTERNS:
-        if re.search(pattern, cmd_lower):
-            return False
-
-    # npm --prefix must remain constrained to build/test/dev/install workflows
-    if cmd_lower.startswith("npm --prefix "):
-        return bool(re.match(
-            r"^npm --prefix \S+ (install|ci|test|run (lint|build|dev|start))( .*)?$",
-            cmd_lower,
-        ))
-
-    # Check allowlist prefixes
-    for allowed in ALLOWED_COMMAND_PREFIXES:
-        if cmd_lower.startswith(allowed.lower()):
-            return True
-
-    return False
 
 
 def _parse_command_target(command: str, sandbox: Path) -> tuple[str, Path]:
@@ -517,6 +433,24 @@ async def tool_run_command(
             result = {"ok": False, "error": "Command parsed to empty argv"}
             await _audit_log(agent_id, "run", normalized_command,
                              output=result["error"], exit_code=-1, channel=channel)
+            return result
+        shell_meta = find_unquoted_shell_meta(normalized_command)
+        if shell_meta:
+            result = {
+                "ok": False,
+                "error": (
+                    f"Shell operator `{shell_meta}` is blocked when unquoted. "
+                    "Use structured argv `[TOOL:run]{\"cmd\":[...]}` for literal arguments."
+                ),
+            }
+            await _audit_log(
+                agent_id,
+                "run",
+                normalized_command,
+                output=result["error"],
+                exit_code=-1,
+                channel=channel,
+            )
             return result
 
     policy = await evaluate_tool_policy(

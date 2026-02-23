@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import re
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -25,6 +25,9 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger("ai-office")
+WS_INGEST_QUEUE_MAX = max(1, min(int((os.environ.get("AI_OFFICE_WS_INGEST_QUEUE_MAX") or "20").strip()), 200))
+_ws_ingest_queues: dict[str, asyncio.Queue[str]] = {}
+_ws_ingest_workers: dict[str, asyncio.Task] = {}
 
 
 def _env_key_safety_warnings() -> list[str]:
@@ -51,6 +54,84 @@ def _env_key_safety_warnings() -> list[str]:
         if re.search(r"(sk-|rk-)", value):
             warnings.append(f"{name} appears to contain a real key in .env. Rotate it and use Settings -> API Keys.")
     return warnings
+
+
+async def _reset_ws_ingest_state() -> None:
+    workers = list(_ws_ingest_workers.values())
+    for task in workers:
+        task.cancel()
+    if workers:
+        await asyncio.gather(*workers, return_exceptions=True)
+    _ws_ingest_workers.clear()
+    _ws_ingest_queues.clear()
+
+
+async def _process_ws_ingest_queue(channel: str) -> None:
+    queue = _ws_ingest_queues.get(channel)
+    if queue is None:
+        return
+    try:
+        while True:
+            content = await queue.get()
+            try:
+                await process_message(channel, content)
+            except Exception:
+                logger.exception("WS ingest worker failed for #%s", channel)
+            finally:
+                queue.task_done()
+
+            if queue.empty() and not manager._channels.get(channel):
+                break
+    except asyncio.CancelledError:
+        pass
+    finally:
+        _ws_ingest_workers.pop(channel, None)
+        q = _ws_ingest_queues.get(channel)
+        if q is not None and q.empty() and not manager._channels.get(channel):
+            _ws_ingest_queues.pop(channel, None)
+
+
+async def _ensure_ws_ingest_worker(channel: str) -> asyncio.Queue[str]:
+    queue = _ws_ingest_queues.get(channel)
+    if queue is None:
+        queue = asyncio.Queue(maxsize=WS_INGEST_QUEUE_MAX)
+        _ws_ingest_queues[channel] = queue
+
+    worker = _ws_ingest_workers.get(channel)
+    if worker is None or worker.done():
+        _ws_ingest_workers[channel] = asyncio.create_task(
+            _process_ws_ingest_queue(channel),
+            name=f"ws-ingest-{channel}",
+        )
+    return queue
+
+
+async def _enqueue_ws_message(channel: str, content: str, ws: WebSocket) -> None:
+    queue = await _ensure_ws_ingest_worker(channel)
+    if queue.full():
+        await manager.send_personal(
+            ws,
+            {
+                "type": "ingest_backpressure",
+                "channel": channel,
+                "pending": queue.qsize(),
+                "message": "Message queue is saturated; processing in order.",
+            },
+        )
+    await queue.put(content)
+
+
+async def _detach_ws_ingest_worker_if_idle(channel: str) -> None:
+    queue = _ws_ingest_queues.get(channel)
+    worker = _ws_ingest_workers.get(channel)
+    if not queue or not worker:
+        return
+    if queue.empty() and not manager._channels.get(channel):
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
+        _ws_ingest_workers.pop(channel, None)
+        _ws_ingest_queues.pop(channel, None)
 
 
 # ── Lifespan ───────────────────────────────────────────────
@@ -94,6 +175,7 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("⚠️  Ollama not reachable — local-model agents may be unavailable")
     yield
+    await _reset_ws_ingest_state()
     from . import process_manager
     shutdown = await process_manager.shutdown_all_processes()
     logger.info("✅ Process manager shutdown complete (%s stopped)", shutdown.get("stopped_count", 0))
@@ -147,11 +229,12 @@ async def websocket_endpoint(ws: WebSocket, channel: str):
 
             logger.info(f"[#{channel}] user: {msg.content[:80]}")
 
-            # Route to agents and generate responses (non-blocking)
-            asyncio.create_task(process_message(channel, msg.content))
+            # Route to agents using bounded per-channel ingestion queue to avoid task storms.
+            await _enqueue_ws_message(channel, msg.content, ws)
 
     except WebSocketDisconnect:
         manager.disconnect(ws)
+        await _detach_ws_ingest_worker_if_idle(channel)
         logger.info(f"WS disconnected: #{channel}")
 
 

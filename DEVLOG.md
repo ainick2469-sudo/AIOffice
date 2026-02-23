@@ -2931,3 +2931,32 @@ C:\Users\nickb\AppData\Local\Programs\Python\Python312\python.exe app.py
 - Before/After first-10s request pressure (dev startup meter + endpoint audit):
   - Before: ~48 requests / 10s under cold start stress path.
   - After: 3 startup API requests on Home boot (`/api/projects`, `/api/projects/active/main`, `/api/providers`) and no Home polling interval by default.
+
+## 2026-02-22 - Round 4 Phase 0 hardening (db verify + policy unification + token budgets)
+- Added explicit schema verification in `server/database.py`:
+  - Parses table DDL fragments from `SCHEMA`
+  - Creates any missing required tables individually
+  - Verifies required tables before and after migrations with a high-signal log (`Database: X/26 tables verified`)
+  - Raises runtime errors with missing/failed table names instead of silently continuing.
+- Unified command authorization to `server/policy.py` as the single authority:
+  - Removed duplicate allow/block command lists and stale `_is_command_allowed` logic from `server/tool_gateway.py`
+  - Added quote-aware shell-meta detection (`find_unquoted_shell_meta`) to block only unquoted chaining/redirection operators.
+- Expanded SAFE-mode command patterns in `server/policy.py` for practical local dev workflows (python/py/pytest/pip/npm/npx/mkdir/cat/echo/local curl) while retaining blocked-pattern guards.
+- Increased generation token budgets in `server/agent_engine.py`:
+  - builder/codex/architect: OpenAI/Claude 2400, Ollama 1600
+  - other roles: OpenAI/Claude 800, Ollama 600
+  - applied to direct backend calls and Ollama fallback path.
+- Added coverage in `tests/test_policy_command_shape.py` for quote-aware shell parsing and SAFE-mode practical command allowance after approval.
+
+## 2026-02-23 - Round 4 workspace simplification + console integration
+- Simplified workspace information architecture to a calmer default:
+  - Activity bar now defaults to three primary views (`Chat`, `Files`, `Preview`).
+  - Advanced views (`Spec`, `Tasks`, `Git`) moved behind workspace actions while remaining directly reachable.
+  - Removed the Discuss/Build mode switch from the workspace toolbar.
+- Rebuilt `client/src/components/WorkspaceShell.jsx` around one primary build surface with optional split secondary pane.
+- Integrated `client/src/components/ConsolePanel.jsx` into workspace as a collapsible bottom dock:
+  - Open/closed state persists per project.
+  - A lightweight probe (`/api/console/events/{channel}?limit=20`) auto-opens the dock when error/critical events are detected.
+- Added first-message quick-start affordances to empty chat:
+  - `client/src/components/chat/ChatEmptyState.jsx` now exposes starter prompt chips.
+  - `client/src/components/ChatRoom.jsx` pre-fills and focuses the composer from starter chips.

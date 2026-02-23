@@ -4,6 +4,7 @@ import json
 import os
 import re
 import logging
+from pathlib import Path
 from typing import Optional
 from .tool_gateway import (
     tool_read_file,
@@ -23,9 +24,35 @@ from .websocket import manager
 from . import web_search
 from . import skills_loader
 from . import project_manager
+from . import build_runner
 from .observability import emit_console_event
 
 logger = logging.getLogger("ai-office.toolexec")
+
+BUILD_CONFIG_TRIGGER_FILES = {
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "go.mod",
+    "cargo.toml",
+    "cmakelists.txt",
+    "vite.config.ts",
+    "vite.config.js",
+    "next.config.js",
+    "next.config.ts",
+}
+
+
+def _should_refresh_build_config(path_value: str) -> bool:
+    normalized = str(path_value or "").strip().replace("\\", "/").lower()
+    if not normalized:
+        return False
+    filename = Path(normalized).name.lower()
+    return filename in BUILD_CONFIG_TRIGGER_FILES
 
 
 def _approval_wait_seconds() -> int:
@@ -572,14 +599,8 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                             )
                         continue
                 else:
-                    # Trusted mode may write immediately on first call.
-                    result = preview if preview.get("ok") else await tool_write_file(
-                        agent_id,
-                        call["path"],
-                        call["content"],
-                        approved=True,
-                        channel=channel,
-                    )
+                    # Trusted mode may write immediately on first call; policy denials should not re-run.
+                    result = preview
 
                 if result.get("action") == "written" or result.get("ok"):
                     diff = preview.get("diff", "")
@@ -588,6 +609,17 @@ async def execute_tool_calls(agent_id: str, calls: list[dict], channel: str) -> 
                     if len(diff) > 1500:
                         diff = diff[:1500] + "\n... (truncated)"
                     msg = f"✅ **Wrote `{call['path']}`** ({result.get('size', 0)} chars)\n```diff\n{diff}\n```"
+                    if _should_refresh_build_config(call.get("path", "")):
+                        try:
+                            refreshed = await build_runner.detect_and_store_config(
+                                project_name,
+                                root_override=active_project.get("path"),
+                            )
+                            detected = refreshed.get("detected") or {}
+                            detected_stacks = ", ".join(sorted(detected.keys())) or "none"
+                            msg += f"\nBuild config refreshed (detected stacks: {detected_stacks})."
+                        except Exception as exc:
+                            logger.warning("build config refresh failed after manifest write: %s", exc)
                     path_lower = call["path"].replace("\\", "/").lower()
                     if path_lower.startswith("tools/") and path_lower.endswith(".py"):
                         compile_cmd = f"python -m py_compile {call['path']}"

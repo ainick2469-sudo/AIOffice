@@ -163,3 +163,81 @@ def test_verification_loop_escalates_after_repeated_failure(monkeypatch):
     assert result["stage"] == "build"
     assert state["entered_war_room"] == 1
     assert state["escalated"] == 1
+
+
+def test_verification_loop_offloads_build_and_test_with_to_thread(monkeypatch):
+    calls: list[str] = []
+
+    async def fake_active_project(_channel):
+        return {"project": "verify-threaded-proj", "path": "."}
+
+    def fake_run_build(_project, **_kwargs):
+        return {"ok": True, "exit_code": 0, "stdout": "build ok", "command": "npm run build"}
+
+    def fake_run_test(_project, **_kwargs):
+        return {"ok": True, "exit_code": 0, "stdout": "test ok", "command": "npm test"}
+
+    async def fake_to_thread(func, *args, **kwargs):
+        calls.append(func.__name__)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(verification_loop.project_manager, "get_active_project", fake_active_project)
+    monkeypatch.setattr(
+        verification_loop.build_runner,
+        "get_build_config",
+        lambda _project: {"build_cmd": "npm run build", "test_cmd": "npm test"},
+    )
+    monkeypatch.setattr(verification_loop.build_runner, "run_build", fake_run_build)
+    monkeypatch.setattr(verification_loop.build_runner, "run_test", fake_run_test)
+    monkeypatch.setattr(verification_loop.asyncio, "to_thread", fake_to_thread)
+
+    async def noop_db(**_kwargs):
+        return None
+
+    async def noop_broadcast(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(verification_loop.db, "log_build_result", noop_db)
+    monkeypatch.setattr(verification_loop.db, "log_console_event", noop_db)
+    monkeypatch.setattr(verification_loop.manager, "broadcast", noop_broadcast)
+
+    async def send_system_message(_channel, _message, _msg_type):
+        return None
+
+    async def generate_fix_response(_agent, _channel):
+        return "unused"
+
+    async def send_agent_message(_agent, _channel, _content):
+        return None
+
+    def reset_agent_failure(_channel, _agent_id):
+        return None
+
+    async def maybe_escalate(_channel, _agent_id, _reason, _context):
+        return False
+
+    async def enter_war_room(_channel, _issue, _trigger):
+        return None
+
+    async def exit_war_room(_channel, _reason, _resolved_by):
+        return None
+
+    result = _run(
+        verification_loop.run_post_write_verification(
+            agent=_agent(),
+            channel="main",
+            max_attempts=1,
+            format_result=lambda stage, payload: f"{stage}:{payload.get('ok')}",
+            send_system_message=send_system_message,
+            generate_fix_response=generate_fix_response,
+            send_agent_message=send_agent_message,
+            reset_agent_failure=reset_agent_failure,
+            maybe_escalate_to_nova=maybe_escalate,
+            enter_war_room=enter_war_room,
+            exit_war_room=exit_war_room,
+            war_room_active=lambda _channel: False,
+        )
+    )
+
+    assert result["ok"] is True
+    assert calls == ["fake_run_build", "fake_run_test"]

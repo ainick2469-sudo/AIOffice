@@ -3,34 +3,26 @@ import MoreMenu from './ui/MoreMenu';
 export default function WorkspaceToolbar({
   projectName = 'ai-office',
   branch = 'main',
-  officeMode = 'discuss',
-  hasCreationDraft = false,
   layoutPreset = 'split',
   layoutOptions = [],
   projectSidebarCollapsed = false,
   previewFocus = false,
   beginnerMode = false,
-  onSetOfficeMode = null,
-  onRequestBuildStart = null,
+  consoleOpen = false,
+  consoleHasErrors = false,
   onToggleProjectSidebar = null,
   onToggleFocusMode = null,
   onToggleBeginnerMode = null,
   onLayoutPresetChange = null,
   onResetLayout = null,
   onRunBuildLoop = null,
+  onOpenSpec = null,
+  onOpenTasks = null,
+  onOpenGit = null,
+  onOpenPreview = null,
+  onToggleConsole = null,
 }) {
   const branchLabel = String(branch || 'main').trim() || 'main';
-  const isBuildMode = officeMode === 'build';
-
-  const handleBuildModeClick = () => {
-    if (hasCreationDraft) return;
-    if (isBuildMode) return;
-    if (typeof onRequestBuildStart === 'function') {
-      onRequestBuildStart();
-      return;
-    }
-    onSetOfficeMode?.('build');
-  };
 
   return (
     <header className="workspace-toolbar">
@@ -40,24 +32,8 @@ export default function WorkspaceToolbar({
       </div>
 
       <div className="workspace-toolbar-center">
-        <div className="office-mode-switch" role="tablist" aria-label="Workspace modes">
-          <button
-            type="button"
-            className={`mode-chip ${officeMode === 'discuss' ? 'active' : ''}`}
-            onClick={() => onSetOfficeMode?.('discuss')}
-            data-tooltip="Discuss ideas with your agent team before coding. Use Brainstorm + Office Board to capture goals/questions."
-          >
-            Discuss
-          </button>
-          <button
-            type="button"
-            className={`mode-chip ${officeMode === 'build' ? 'active' : ''}`}
-            onClick={handleBuildModeClick}
-            disabled={hasCreationDraft}
-            data-tooltip="Work on files/spec/tasks/preview. No silent changes: verify with build/tests."
-          >
-            Build
-          </button>
+        <div className="workspace-toolbar-flow" data-tooltip="Primary flow: coordinate in Chat, edit in Files, validate in Preview.">
+          Workflow: Chat to Files to Preview
         </div>
       </div>
 
@@ -81,8 +57,52 @@ export default function WorkspaceToolbar({
 
         <MoreMenu
           label="Workspace actions"
-          triggerTooltip="Advanced workspace controls: layout, beginner mode, preview focus, and build loop."
+          triggerTooltip="Open advanced workspace controls."
         >
+          <div className="workspace-more-menu-section">
+            <h4>Views</h4>
+            <button
+              type="button"
+              className="ui-btn"
+              onClick={onOpenSpec}
+              data-tooltip="Open Spec in the main workspace pane."
+            >
+              Open Spec
+            </button>
+            <button
+              type="button"
+              className="ui-btn"
+              onClick={onOpenTasks}
+              data-tooltip="Open Tasks to triage and track implementation work."
+            >
+              Open Tasks
+            </button>
+            <button
+              type="button"
+              className="ui-btn"
+              onClick={onOpenGit}
+              data-tooltip="Open Git to inspect diffs and commit safely."
+            >
+              Open Git
+            </button>
+            <button
+              type="button"
+              className={`ui-btn ${consoleOpen ? 'ui-btn-primary' : ''}`}
+              onClick={onToggleConsole}
+              data-tooltip="Toggle the console output panel."
+            >
+              Console: {consoleOpen ? 'Open' : 'Closed'}{consoleHasErrors ? ' (errors)' : ''}
+            </button>
+            <button
+              type="button"
+              className="ui-btn"
+              onClick={onOpenPreview}
+              data-tooltip="Switch to Preview and inspect the running app."
+            >
+              Open Preview
+            </button>
+          </div>
+
           <div className="workspace-more-menu-section">
             <h4 data-tooltip="Choose a layout. Split shows a secondary pinned pane.">Layout</h4>
             <label className="workspace-more-layout-row">
@@ -140,7 +160,6 @@ export default function WorkspaceToolbar({
               type="button"
               className="ui-btn ui-btn-primary"
               onClick={onRunBuildLoop}
-              disabled={hasCreationDraft || !isBuildMode}
               data-tooltip="Ask the agents to execute the next build step, then verify with checks and report changes."
             >
               Run Build Loop

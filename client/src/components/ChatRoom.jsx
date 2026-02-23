@@ -230,6 +230,7 @@ export default function ChatRoom({
   const lastQueuedMessageIdRef = useRef(null);
   const nearBottomRef = useRef(true);
   const prevMessageCountRef = useRef(0);
+  const composerRef = useRef(null);
   const draftScope = useMemo(
     () => ({
       project: activeProject?.project || 'ai-office',
@@ -821,6 +822,17 @@ export default function ChatRoom({
     const ok = await copyToClipboard(msg?.content || '');
     if (!ok) return;
     setChatNotice('Message copied.');
+  };
+
+  const loadStarterPrompt = (text) => {
+    const next = String(text || '').trim();
+    if (!next) return;
+    setInput(next);
+    window.requestAnimationFrame(() => {
+      composerRef.current?.focus?.();
+      const length = next.length;
+      composerRef.current?.setSelectionRange?.(length, length);
+    });
   };
 
   const getSender = (msg) => {
@@ -1570,6 +1582,7 @@ export default function ChatRoom({
                 onRequestOpenTab?.('settings');
                 window.dispatchEvent(new CustomEvent('workspace:open-tab', { detail: { tab: 'settings' } }));
               }}
+              onUseStarter={loadStarterPrompt}
             />
           )}
 
@@ -1809,6 +1822,7 @@ export default function ChatRoom({
         </button>
 
         <textarea
+          ref={composerRef}
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={(event) => {

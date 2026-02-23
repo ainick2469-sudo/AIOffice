@@ -2158,6 +2158,23 @@ async def list_tasks(
     return await db.list_tasks(status=status, branch=branch, channel=channel, project_name=project_name)
 
 
+@router.delete("/tasks/clear")
+async def clear_tasks_for_project(
+    project: str = Query(..., description="Project name to clear tasks for"),
+):
+    normalized_project = str(project or "").strip().lower()
+    if not normalized_project:
+        raise HTTPException(400, "project is required")
+    deleted = await db.clear_tasks_for_project(normalized_project)
+    return {"ok": True, "project": normalized_project, "deleted": deleted}
+
+
+@router.delete("/tasks/clear-all")
+async def clear_all_tasks():
+    deleted = await db.clear_all_tasks()
+    return {"ok": True, "deleted": deleted}
+
+
 @router.get("/tasks/{task_id}")
 async def get_task(task_id: int):
     task = await db.get_task(task_id)
@@ -2318,6 +2335,46 @@ async def memory_erase(body: MemoryEraseIn):
 async def get_agent_memory(agent_id: str, limit: int = 50):
     from .memory import read_all_memory_for_agent
     return read_all_memory_for_agent(agent_id, limit=limit)
+
+
+@router.delete("/memory/project/{name}")
+async def clear_memory_for_project(name: str):
+    from .memory import erase_project_memory
+
+    project = str(name or "").strip().lower()
+    if not project:
+        raise HTTPException(400, "project name is required")
+    return erase_project_memory(project)
+
+
+@router.delete("/memory/agent/{agent_id}")
+async def clear_memory_for_agent(agent_id: str, project: Optional[str] = Query(default=None)):
+    from .memory import erase_agent_memory
+
+    agent = str(agent_id or "").strip()
+    if not agent:
+        raise HTTPException(400, "agent_id is required")
+    project_name = str(project or "").strip().lower() or None
+    result = erase_agent_memory(agent, project_name=project_name)
+    if not result.get("ok"):
+        raise HTTPException(400, result.get("error") or "Unable to erase agent memory.")
+    return result
+
+
+@router.delete("/memory/all")
+async def clear_memory_all():
+    from .memory import erase_all_memory
+
+    return erase_all_memory()
+
+
+@router.post("/system/reset")
+async def system_reset():
+    from .memory import erase_all_memory
+
+    runtime = await db.reset_runtime_state()
+    memory_result = erase_all_memory()
+    return {"ok": True, "runtime": runtime, "memory": memory_result}
 
 
 @router.get("/audit")

@@ -427,3 +427,83 @@ def erase_memory(project_name: Optional[str], scopes: list[str]) -> dict:
         "removed": removed,
         "stats": get_memory_stats(project),
     }
+
+
+def erase_project_memory(project_name: Optional[str]) -> dict:
+    """Erase all memory banks for one project."""
+    project = _project_name(project_name)
+    return erase_memory(project, ["facts", "decisions", "daily", "agent_logs", "index"])
+
+
+def erase_agent_memory(agent_id: str, project_name: Optional[str] = None) -> dict:
+    """Erase memory for one agent within a project."""
+    project = _project_name(project_name)
+    agent = (agent_id or "").strip()
+    if not agent:
+        return {"ok": False, "error": "agent_id is required", "project": project}
+
+    _ensure_dirs(project)
+    removed_file = 0
+    removed_rows = 0
+
+    path = _agent_file(project, agent)
+    if path.exists():
+        path.unlink(missing_ok=True)
+        removed_file = 1
+
+    try:
+        conn = sqlite3.connect(str(INDEX_DB))
+        try:
+            cursor = conn.execute(
+                "DELETE FROM memory_entries WHERE project_name = ? AND agent_id = ?",
+                (project, agent),
+            )
+            removed_rows += int(cursor.rowcount or 0)
+            try:
+                fts_rows = conn.execute(
+                    "SELECT rowid FROM memory_fts WHERE project_name = ? AND agent_id = ?",
+                    (project, agent),
+                ).fetchall()
+                if fts_rows:
+                    conn.executemany("DELETE FROM memory_fts WHERE rowid = ?", [(row[0],) for row in fts_rows])
+            except Exception:
+                pass
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.exception("Failed to erase agent memory index rows for %s/%s", project, agent)
+
+    return {
+        "ok": True,
+        "project": project,
+        "agent_id": agent,
+        "removed": {
+            "agent_log_file": removed_file,
+            "index_rows": removed_rows,
+        },
+        "stats": get_memory_stats(project),
+    }
+
+
+def erase_all_memory() -> dict:
+    """Erase all project memory banks and FTS index."""
+    projects_removed = 0
+    if PROJECTS_DIR.exists():
+        projects_removed = len([p for p in PROJECTS_DIR.iterdir() if p.is_dir()])
+        shutil.rmtree(PROJECTS_DIR, ignore_errors=True)
+
+    index_removed = 0
+    if INDEX_DB.exists():
+        INDEX_DB.unlink(missing_ok=True)
+        index_removed = 1
+
+    _ensure_dirs(DEFAULT_PROJECT)
+    return {
+        "ok": True,
+        "removed": {
+            "projects": projects_removed,
+            "index": index_removed,
+        },
+        "stats": get_memory_stats(DEFAULT_PROJECT),
+    }

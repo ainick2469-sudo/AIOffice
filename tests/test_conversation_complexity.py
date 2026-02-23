@@ -37,7 +37,14 @@ def test_process_message_limits_initial_agent_count(monkeypatch):
     async def fake_route(_message: str):
         return ["builder", "reviewer", "qa", "architect", "critic", "spark"]
 
-    async def fake_conversation_loop(channel: str, initial_agents: list[str]):
+    async def fake_conversation_loop(
+        channel: str,
+        initial_agents: list[str],
+        *,
+        max_messages: int = engine.MAX_MESSAGES,
+        build_loop: bool = False,
+    ):
+        _ = (max_messages, build_loop)
         captured[channel] = list(initial_agents)
 
     monkeypatch.setattr(engine, "route", fake_route)

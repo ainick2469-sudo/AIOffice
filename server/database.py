@@ -2,6 +2,7 @@
 
 import aiosqlite
 import json
+import logging
 import os
 import tempfile
 import re
@@ -42,6 +43,9 @@ TASK_STATUSES = {"backlog", "in_progress", "review", "done", "blocked"}
 VALID_AUTONOMY_MODES = {"SAFE", "TRUSTED", "ELEVATED"}
 VALID_PERMISSION_MODES = {"locked", "ask", "trusted"}
 DEFAULT_PERMISSION_SCOPES = ["read", "search", "run", "write", "task"]
+TABLE_VERIFICATION_TARGET = 26
+
+logger = logging.getLogger("ai-office.db")
 
 
 def _task_title_key(value: Optional[str]) -> str:
@@ -321,6 +325,52 @@ CREATE TABLE IF NOT EXISTS console_events (
 """
 
 
+def _schema_table_statements() -> dict[str, str]:
+    statements: dict[str, str] = {}
+    for fragment in SCHEMA.split(";"):
+        statement = fragment.strip()
+        if not statement:
+            continue
+        match = re.match(r"CREATE TABLE IF NOT EXISTS\s+([A-Za-z0-9_]+)\s*\(", statement, flags=re.IGNORECASE)
+        if not match:
+            continue
+        statements[match.group(1)] = statement + ";"
+    return statements
+
+
+SCHEMA_TABLE_STATEMENTS = _schema_table_statements()
+REQUIRED_USER_TABLES = tuple(sorted(SCHEMA_TABLE_STATEMENTS.keys()))
+
+
+async def _existing_tables(db: aiosqlite.Connection) -> set[str]:
+    rows = await db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    return {str(row["name"]) for row in await rows.fetchall()}
+
+
+async def _ensure_schema_tables(db: aiosqlite.Connection):
+    existing = await _existing_tables(db)
+    missing = [name for name in REQUIRED_USER_TABLES if name not in existing]
+    for table_name in missing:
+        statement = SCHEMA_TABLE_STATEMENTS.get(table_name)
+        if not statement:
+            raise RuntimeError(f"Schema fragment missing for required table: {table_name}")
+        try:
+            await db.execute(statement)
+        except Exception as exc:
+            raise RuntimeError(f"Failed creating required table '{table_name}': {exc}") from exc
+
+
+async def _verify_required_tables(db: aiosqlite.Connection, *, stage: str):
+    existing = await _existing_tables(db)
+    missing = [name for name in REQUIRED_USER_TABLES if name not in existing]
+    verified_count = len(REQUIRED_USER_TABLES) - len(missing)
+    if "sqlite_sequence" in existing:
+        verified_count += 1
+    logger.info("Database: %s/%s tables verified (%s).", verified_count, TABLE_VERIFICATION_TARGET, stage)
+    if missing:
+        raise RuntimeError(f"Database table verification failed ({stage}). Missing: {', '.join(sorted(missing))}")
+
+
 async def get_db() -> aiosqlite.Connection:
     """Get a database connection."""
     testing = (os.environ.get("AI_OFFICE_TESTING") or "").strip() == "1"
@@ -343,7 +393,10 @@ async def init_db():
     db = await get_db()
     try:
         await db.executescript(SCHEMA)
+        await _ensure_schema_tables(db)
+        await _verify_required_tables(db, stage="pre-migration")
         await _run_migrations(db)
+        await _verify_required_tables(db, stage="post-migration")
         await _seed_agents(db)
         await _sync_agents_from_registry_db(db, force=False)
         await _seed_provider_configs(db)
@@ -1127,6 +1180,31 @@ async def clear_tasks_for_scope(*, channel: str, project_name: Optional[str] = N
         await db.close()
 
 
+async def clear_tasks_for_project(project_name: str) -> int:
+    """Delete all tasks for a specific project across channels."""
+    project = (project_name or "").strip()
+    if not project:
+        return 0
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM tasks WHERE project_name = ?", (project,))
+        await db.commit()
+        return int(cursor.rowcount or 0)
+    finally:
+        await db.close()
+
+
+async def clear_all_tasks() -> int:
+    """Delete all tasks across all channels and projects."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("DELETE FROM tasks")
+        await db.commit()
+        return int(cursor.rowcount or 0)
+    finally:
+        await db.close()
+
+
 async def clear_approval_requests_for_scope(*, channel: str, project_name: Optional[str] = None) -> int:
     """Delete approval requests for a channel, optionally limited to a project."""
     channel_id = (channel or "main").strip() or "main"
@@ -1142,6 +1220,47 @@ async def clear_approval_requests_for_scope(*, channel: str, project_name: Optio
             cursor = await db.execute("DELETE FROM approval_requests WHERE channel = ?", (channel_id,))
         await db.commit()
         return int(cursor.rowcount or 0)
+    finally:
+        await db.close()
+
+
+async def reset_runtime_state() -> dict:
+    """Clear runtime artifacts while preserving agents/providers/settings."""
+    runtime_tables = (
+        "messages",
+        "message_reactions",
+        "tasks",
+        "decisions",
+        "tool_logs",
+        "build_results",
+        "approval_requests",
+        "managed_processes",
+        "console_events",
+        "creation_drafts",
+        "channel_names",
+        "channel_projects",
+        "channel_branches",
+    )
+    deleted: dict[str, int] = {}
+    db = await get_db()
+    try:
+        table_rows = await db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        existing = {str(row["name"]) for row in await table_rows.fetchall()}
+
+        for table in runtime_tables:
+            if table not in existing:
+                continue
+            cursor = await db.execute(f"DELETE FROM {table}")
+            deleted[table] = int(cursor.rowcount or 0)
+
+        if "channels" in existing:
+            channel_cursor = await db.execute("DELETE FROM channels WHERE id != ?", ("main",))
+            deleted["channels"] = int(channel_cursor.rowcount or 0)
+
+        # Ensure the main channel always exists after reset.
+        await _seed_channels(db)
+        await db.commit()
+        return {"ok": True, "deleted": deleted}
     finally:
         await db.close()
 

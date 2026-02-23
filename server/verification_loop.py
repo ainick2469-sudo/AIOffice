@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Awaitable, Callable
 
 from . import build_runner, database as db, project_manager
@@ -78,7 +79,11 @@ async def run_post_write_verification(
 
     build_passed = False
     for attempt in range(1, max_attempts + 1):
-        build_result = build_runner.run_build(project_name, cwd_override=active.get("path"))
+        build_result = await asyncio.to_thread(
+            build_runner.run_build,
+            project_name,
+            cwd_override=active.get("path"),
+        )
         await _record_stage(
             agent_id=agent["id"],
             channel=channel,
@@ -129,7 +134,11 @@ async def run_post_write_verification(
         return {"ok": True, "stage": "build"}
 
     for attempt in range(1, max_attempts + 1):
-        test_result = build_runner.run_test(project_name, cwd_override=active.get("path"))
+        test_result = await asyncio.to_thread(
+            build_runner.run_test,
+            project_name,
+            cwd_override=active.get("path"),
+        )
         await _record_stage(
             agent_id=agent["id"],
             channel=channel,

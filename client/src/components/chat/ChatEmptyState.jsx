@@ -3,11 +3,31 @@ export default function ChatEmptyState({
   onRunBrainstorm = null,
   onOpenSpec = null,
   onOpenSettings = null,
+  onUseStarter = null,
 }) {
+  const starters = [
+    'Build a simple todo app with login and dashboard.',
+    'Create a FastAPI backend with health checks and tests.',
+    'Set up a React app with a polished landing page and preview.',
+  ];
+
   return (
     <div className={`empty-chat chat-empty-state ${isDiscussMode ? 'beginner-empty-card' : ''}`}>
       <h4>Start here</h4>
       <p>Start by describing what you want to build.</p>
+      <div className="chat-empty-starters">
+        {starters.map((starter) => (
+          <button
+            key={starter}
+            type="button"
+            className="ui-btn"
+            onClick={() => onUseStarter?.(starter)}
+            data-tooltip="Use this as your first prompt, then tailor details for your project."
+          >
+            {starter}
+          </button>
+        ))}
+      </div>
       <div className="beginner-empty-actions">
         {isDiscussMode ? (
           <button

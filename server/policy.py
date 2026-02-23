@@ -23,31 +23,39 @@ BLOCKED_PATTERNS = (
     r"\breg(?:edit)?\b",
     r"\bnet\s+user\b",
     r"\bpowershell\s+-enc(?:odedcommand)?\b",
-    r"\bcurl\s+https?://",
     r"\bwget\s+https?://",
 )
 
 # Structured command templates by autonomy mode.
 _SAFE_PATTERNS = (
+    r"^python(\.exe)?(\s+.+)?$",
+    r"^py(\s+-3)?(\s+.+)?$",
     r"^python -m py_compile(\s+.+)?$",
     r"^python -m pytest(\s+.+)?$",
+    r"^py -m pytest(\s+.+)?$",
+    r"^py -3 -m pytest(\s+.+)?$",
+    r"^pytest(\s+.+)?$",
+    r"^pip install(\s+.+)?$",
+    r"^python -m pip install(\s+.+)?$",
+    r"^npm (install|ci|test|start)(\s+.+)?$",
     r"^npm test(\s+.+)?$",
     r"^npm run (build|lint|test)(\s+.+)?$",
-    r"^node -v$",
-    r"^npm -v$",
+    r"^npm run (dev|start|build|lint|test)(\s+.+)?$",
+    r"^node(\s+.+)?$",
+    r"^npx(\s+.+)?$",
+    r"^npm -v(\s+.+)?$",
     r"^where (node|npm|python|git)$",
     r"^git (status|log|diff)(\s+.+)?$",
     r"^dir(\s+.+)?$",
     r"^type(\s+.+)?$",
+    r"^cat(\s+.+)?$",
+    r"^echo(\s+.+)?$",
+    r"^mkdir(\s+.+)?$",
     r"^findstr(\s+.+)?$",
+    r"^curl(\.exe)?\s+https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(/[^\s]*)?(\s+.+)?$",
 )
 
 _TRUSTED_EXTRA_PATTERNS = (
-    r"^python(\s+.+)?$",
-    r"^pip install(\s+.+)?$",
-    r"^npm (install|ci)(\s+.+)?$",
-    r"^npm run (dev|start|build|lint|test)(\s+.+)?$",
-    r"^mkdir(\s+.+)?$",
     r"^copy(\s+.+)?$",
     r"^move(\s+.+)?$",
     r"^uvicorn(\s+.+)?$",
@@ -79,17 +87,60 @@ def _mode_patterns(mode: str) -> tuple[str, ...]:
     return _SAFE_PATTERNS + _TRUSTED_EXTRA_PATTERNS + _ELEVATED_EXTRA_PATTERNS
 
 
+def find_unquoted_shell_meta(command: str) -> str | None:
+    """Return the first dangerous shell token found outside quotes."""
+    text = command or ""
+    in_single = False
+    in_double = False
+    escaped = False
+    i = 0
+    # Longest token first so `&&` is detected before `&`.
+    ordered_tokens = sorted(SHELL_META_TOKENS, key=len, reverse=True)
+    while i < len(text):
+        ch = text[i]
+        if escaped:
+            escaped = False
+            i += 1
+            continue
+        if ch == "\\" and not in_single:
+            escaped = True
+            i += 1
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            i += 1
+            continue
+        if ch == '"' and not in_single:
+            in_double = not in_double
+            i += 1
+            continue
+        if not in_single and not in_double:
+            for token in ordered_tokens:
+                if text.startswith(token, i):
+                    return token
+        i += 1
+    return None
+
+
 def _is_command_shape_safe(command: str, *, structured: bool = False) -> tuple[bool, str]:
     normalized = (command or "").strip().lower()
     if not normalized:
         return False, "Command is empty."
     # Only treat shell tokens as dangerous when we're executing a legacy shell-string command.
     # For argv-based exec calls, these tokens are passed as literal arguments.
-    if not structured and any(token in normalized for token in SHELL_META_TOKENS):
+    if not structured:
+        shell_meta = find_unquoted_shell_meta(command or "")
+        if shell_meta:
+            return (
+                False,
+                f"Shell operator `{shell_meta}` is blocked when unquoted. "
+                "Use `[TOOL:start_process]` for long-running servers, "
+                "or `[TOOL:run] {\"cmd\":[...],\"cwd\":\"...\"}` for structured argv execution.",
+            )
+    if normalized.startswith("curl ") and "localhost" not in normalized and "127.0.0.1" not in normalized and "0.0.0.0" not in normalized:
         return (
             False,
-            "Shell chaining/redirection is blocked. Use `[TOOL:start_process]` for long-running servers, "
-            "or `[TOOL:run] {\"cmd\":[...],\"cwd\":\"...\"}` for structured argv execution.",
+            "Only local curl targets are allowed (localhost/127.0.0.1/0.0.0.0).",
         )
     for pattern in BLOCKED_PATTERNS:
         if re.search(pattern, normalized):
