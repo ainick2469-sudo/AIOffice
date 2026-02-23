@@ -1,0 +1,12 @@
+{
+  "name": "python-project",
+  "entrypoint": "tools.py",
+  "tools": [
+    {
+      "name": "scaffold_python_project",
+      "function": "scaffold_python_project",
+      "description": "Create a minimal Python app + tests starter in the active project.",
+      "permissions": ["write"]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "web-scaffold",
+  "entrypoint": "tools.py",
+  "tools": [
+    {
+      "name": "scaffold_web_project",
+      "function": "scaffold_web_project",
+      "description": "Create a basic HTML/CSS/JS web scaffold in the active project.",
+      "permissions": ["write"]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "react-app",
+  "entrypoint": "tools.py",
+  "tools": [
+    {
+      "name": "scaffold_react_app",
+      "function": "scaffold_react_app",
+      "description": "Create a minimal Vite + React starter in the active project.",
+      "permissions": ["write"]
+    }
+  ]
+}
