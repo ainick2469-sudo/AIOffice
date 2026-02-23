@@ -391,6 +391,80 @@ async def _bootstrap_build_loop(channel: str, user_message: str, active_project:
     return state
 
 
+def _auto_project_slug_from_request(message: str) -> str:
+    lower = (message or "").strip().lower()
+    if not lower:
+        return "new-project"
+    lower = re.sub(r"[^a-z0-9\s-]+", " ", lower)
+    tokens = [part for part in re.split(r"[\s-]+", lower) if part]
+    ignored = {
+        "a", "an", "the", "please", "make", "build", "create", "implement",
+        "for", "me", "app", "project", "to", "and", "with", "that", "this",
+        "game", "code", "start", "go", "it", "in",
+    }
+    picked = [token for token in tokens if token not in ignored][:4]
+    if not picked:
+        picked = tokens[:2]
+    slug = "-".join(picked).strip("-")
+    slug = re.sub(r"-{2,}", "-", slug)
+    if not slug:
+        slug = "new-project"
+    return slug[:50]
+
+
+async def _ensure_isolated_build_project(channel: str, user_message: str, active_project: dict) -> dict:
+    project_name = (active_project.get("project") or "").strip().lower()
+    is_app_root = bool(active_project.get("is_app_root"))
+    if project_name != "ai-office" or not is_app_root:
+        return active_project
+
+    if not task_decomposer._looks_action_request(user_message):
+        return active_project
+
+    base_name = _auto_project_slug_from_request(user_message)
+    candidate = base_name
+    created_name: Optional[str] = None
+    switched: Optional[dict] = None
+
+    for attempt in range(1, 21):
+        if attempt > 1:
+            suffix = f"-{attempt}"
+            candidate = f"{base_name[: max(1, 50 - len(suffix))]}{suffix}"
+        try:
+            await project_manager.create_project(candidate)
+            created_name = candidate
+            switched = await project_manager.switch_project(channel, candidate)
+            break
+        except ValueError as exc:
+            message = str(exc).lower()
+            if "already exists" in message or "invalid project name" in message:
+                continue
+            logger.warning("Project isolation failed for #%s: %s", channel, exc)
+            return active_project
+        except Exception as exc:
+            logger.warning("Project isolation failed for #%s: %s", channel, exc)
+            return active_project
+
+    if not switched or not created_name:
+        return active_project
+
+    notice = f"📁 Created project '{created_name}' — all files will be saved there."
+    await _send_system_message(channel, notice)
+    await emit_console_event(
+        channel=channel,
+        event_type="project_isolation",
+        source="agent_engine",
+        message="Auto-created isolated project for build request.",
+        project_name=created_name,
+        data={
+            "channel": channel,
+            "seed_message": (user_message or "")[:220],
+            "project": created_name,
+        },
+    )
+    return switched
+
+
 # Cache project tree per root (refreshed every 60s)
 _project_tree_cache: dict[str, dict] = {}
 
@@ -3537,6 +3611,8 @@ async def process_message(channel: str, user_message: str):
     logger.info(f"New conversation in #{channel} ({turn_policy['complexity']})")
     mode = _war_room_mode(channel)
     active_project = await project_manager.get_active_project(channel)
+    if not mode:
+        active_project = await _ensure_isolated_build_project(channel, user_message, active_project)
     existing_build_state = _build_loop_state(channel)
     if existing_build_state:
         snapshot = await _build_progress_snapshot(channel)
