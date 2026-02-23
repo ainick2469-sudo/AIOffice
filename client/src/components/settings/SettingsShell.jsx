@@ -4,53 +4,31 @@ import SettingsNav from './SettingsNav';
 import ApiKeysPanel from './ApiKeysPanel';
 import AgentsTable from './AgentsTable';
 import AgentConfigDrawer from './AgentConfigDrawer';
-import AppearanceSettings from './AppearanceSettings';
 import AdvancedSettings from './AdvancedSettings';
-import SetupChecklist from './SetupChecklist';
 import { useBeginnerMode } from '../beginner/BeginnerModeContext';
 
 const CATEGORY_KEY = 'ai-office-settings-category';
 const DIAGNOSTICS_KEY = 'ai-office-provider-diagnostics';
 const SETTINGS_FOCUS_KEY = 'ai-office-settings-focus';
-const PROVIDER_ORDER = ['openai', 'claude', 'ollama'];
-const RECENT_TEST_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const CATEGORIES = [
   {
-    id: 'general',
-    label: 'General',
-    description: 'Overview, status, and quick orientation.',
-    keywords: ['overview', 'status', 'summary'],
-  },
-  {
-    id: 'appearance',
-    label: 'Appearance',
-    description: 'Theme, density, and font controls.',
-    keywords: ['theme', 'density', 'font'],
-  },
-  {
     id: 'providers',
-    label: 'Providers',
-    description: 'API keys, base URLs, models, diagnostics.',
-    keywords: ['openai', 'claude', 'ollama', 'keys', 'diagnostics'],
+    label: 'API Keys',
+    description: 'Provider keys, model defaults, and connection tests.',
+    keywords: ['openai', 'claude', 'ollama', 'providers', 'keys', 'models'],
   },
   {
     id: 'agents',
     label: 'Agents',
-    description: 'Per-agent runtime bindings and model routing.',
-    keywords: ['agent', 'provider', 'model', 'key'],
+    description: 'Per-agent model bindings and credential source.',
+    keywords: ['agents', 'routing', 'model', 'provider'],
   },
   {
-    id: 'advanced',
-    label: 'Advanced',
-    description: 'Export diagnostics and reset local layout state.',
-    keywords: ['diagnostics', 'layout', 'reset'],
-  },
-  {
-    id: 'about',
-    label: 'About',
-    description: 'Version notes and how settings apply.',
-    keywords: ['about', 'version', 'help'],
+    id: 'system',
+    label: 'System',
+    description: 'Reset tools, diagnostics, and runtime controls.',
+    keywords: ['reset', 'diagnostics', 'advanced', 'memory', 'about'],
   },
 ];
 
@@ -62,11 +40,7 @@ function matchesSearch(text, query) {
 }
 
 function categoryMatches(category, query) {
-  const blob = [
-    category.label,
-    category.description,
-    ...(category.keywords || []),
-  ].join(' ');
+  const blob = [category.label, category.description, ...(category.keywords || [])].join(' ');
   return matchesSearch(blob, query);
 }
 
@@ -87,31 +61,6 @@ function saveDiagnostics(next) {
   } catch {
     // ignore storage failures
   }
-}
-
-function parseTimestamp(value) {
-  if (!value) return 0;
-  const stamp = new Date(value).getTime();
-  return Number.isFinite(stamp) ? stamp : 0;
-}
-
-function providerMapFromList(providers = []) {
-  const map = {};
-  (providers || []).forEach((provider) => {
-    const id = String(provider?.provider || '').trim().toLowerCase();
-    if (!id) return;
-    map[id] = provider;
-  });
-  return map;
-}
-
-function isOllamaReachable(row) {
-  if (!row) return false;
-  if (row?.reachable === false || row?.available === false) return false;
-  const status = String(row?.status || '').trim().toLowerCase();
-  if (['offline', 'error', 'unreachable', 'down'].includes(status)) return false;
-  if (row?.last_error) return false;
-  return true;
 }
 
 function hasAgentBinding(agent) {
@@ -135,7 +84,8 @@ export default function SettingsShell({
     resetProjectProgress,
     resetAllProgress,
   } = useBeginnerMode();
-  const [category, setCategory] = useState(() => localStorage.getItem(CATEGORY_KEY) || 'general');
+
+  const [category, setCategory] = useState(() => localStorage.getItem(CATEGORY_KEY) || 'providers');
   const [search, setSearch] = useState('');
   const [providers, setProviders] = useState([]);
   const [modelCatalog, setModelCatalog] = useState({ providers: {} });
@@ -234,17 +184,6 @@ export default function SettingsShell({
     return () => window.clearTimeout(timer);
   }, [focusSignal]);
 
-  const filteredCategories = useMemo(() => {
-    const scoped = CATEGORIES.filter((item) => categoryMatches(item, search));
-    return scoped.length ? scoped : CATEGORIES;
-  }, [search]);
-
-  useEffect(() => {
-    if (!filteredCategories.some((item) => item.id === category)) {
-      setCategory(filteredCategories[0]?.id || 'general');
-    }
-  }, [filteredCategories, category]);
-
   const providerDefaults = useMemo(() => {
     const map = {};
     providers.forEach((row) => {
@@ -255,161 +194,42 @@ export default function SettingsShell({
     return map;
   }, [providers]);
 
-  const setupChecklistItems = useMemo(() => {
-    const providerMap = providerMapFromList(providers);
-    const openaiConfigured = Boolean(providerMap?.openai?.has_key);
-    const claudeConfigured = Boolean(providerMap?.claude?.has_key);
-    const ollamaConfigured = isOllamaReachable(providerMap?.ollama);
-    const cloudConfigured = openaiConfigured || claudeConfigured;
-    const providerConfiguredCount = [openaiConfigured, claudeConfigured, ollamaConfigured].filter(Boolean).length;
-    const hasAnyProviderConfigured = providerConfiguredCount > 0;
+  const hasCloudKeys = useMemo(
+    () => providers.some((row) => ['openai', 'claude'].includes(String(row?.provider || '').toLowerCase()) && row?.has_key),
+    [providers]
+  );
 
-    const diagnosticsEntries = Object.values(providerDiagnostics || {})
-      .filter((entry) => entry && typeof entry === 'object');
-    const hasStatusOk = diagnosticsEntries.some((entry) => {
-      const status = String(entry?.status || '').trim().toLowerCase();
-      return status === 'ok' || status === 'success' || status === 'connected';
-    });
-    const hasRecentSuccess = diagnosticsEntries.some((entry) => {
-      if (entry?.ok !== true) return false;
-      const stamp = parseTimestamp(entry?.last_test_at || entry?.last_tested_at);
-      if (!stamp) return false;
-      return Date.now() - stamp <= RECENT_TEST_WINDOW_MS;
-    });
-    const diagnosticsAreOld = diagnosticsEntries.length > 0 && !hasRecentSuccess && !hasStatusOk;
-    const diagnosticsHealthy = hasRecentSuccess || hasStatusOk;
+  const firstRunSetup = !hasCloudKeys;
 
-    const totalAgents = agents.length;
-    const routedAgents = agents.filter((agent) => hasAgentBinding(agent)).length;
-    const routedCoverage = totalAgents > 0 ? routedAgents / totalAgents : 0;
+  useEffect(() => {
+    if (firstRunSetup && category !== 'providers') {
+      setCategory('providers');
+    }
+  }, [firstRunSetup, category]);
 
-    const hasProject = Boolean(String(activeProject || '').trim());
-    const cloudProviders = [
-      openaiConfigured ? 'OpenAI' : '',
-      claudeConfigured ? 'Claude' : '',
-    ].filter(Boolean).join(' + ');
+  const diagnosticsSummary = useMemo(() => {
+    const entries = Object.entries(providerDiagnostics || {});
+    if (!entries.length) return 'No provider diagnostics yet.';
+    const ok = entries.filter(([, value]) => value?.ok === true).length;
+    return `${ok}/${entries.length} provider diagnostics passing.`;
+  }, [providerDiagnostics]);
 
-    const providerItem = (() => {
-      if (cloudConfigured) {
-        return {
-          state: 'pass',
-          detail: `Cloud provider key detected (${cloudProviders}).`,
-        };
-      }
-      if (ollamaConfigured) {
-        return {
-          state: 'warn',
-          detail: 'Only local Ollama is ready. Add at least one cloud key for best reliability.',
-        };
-      }
-      return {
-        state: 'fail',
-        detail: 'No provider key configured and Ollama is not reachable.',
-      };
-    })();
+  const routingSummary = useMemo(() => {
+    if (!agents.length) return 'No agents loaded.';
+    const routed = agents.filter((agent) => hasAgentBinding(agent)).length;
+    return `${routed}/${agents.length} agents have provider/model bindings.`;
+  }, [agents]);
 
-    const diagnosticsItem = (() => {
-      if (!diagnosticsEntries.length) {
-        return {
-          state: 'fail',
-          detail: 'No provider tests recorded yet.',
-        };
-      }
-      if (diagnosticsHealthy && !diagnosticsAreOld) {
-        return {
-          state: 'pass',
-          detail: 'Recent provider connection success found.',
-        };
-      }
-      return {
-        state: 'warn',
-        detail: 'Provider diagnostics exist but are stale or inconclusive. Re-run tests.',
-      };
-    })();
+  const filteredCategories = useMemo(() => {
+    const scoped = CATEGORIES.filter((item) => categoryMatches(item, search));
+    return scoped.length ? scoped : CATEGORIES;
+  }, [search]);
 
-    const routingItem = (() => {
-      if (!totalAgents) {
-        return {
-          state: 'fail',
-          detail: 'No agents detected. Refresh settings and verify runtime data.',
-        };
-      }
-      if (routedCoverage >= 0.8) {
-        return {
-          state: 'pass',
-          detail: `${routedAgents}/${totalAgents} agents have provider + model bindings.`,
-        };
-      }
-      if (routedAgents > 0) {
-        return {
-          state: 'warn',
-          detail: `${routedAgents}/${totalAgents} agents are fully bound. Complete remaining bindings.`,
-        };
-      }
-      return {
-        state: 'fail',
-        detail: 'Agents are missing provider/model bindings.',
-      };
-    })();
-
-    const previewItem = (() => {
-      if (!hasProject) {
-        return {
-          state: 'fail',
-          detail: 'No active project selected yet.',
-        };
-      }
-      if (hasAnyProviderConfigured && diagnosticsHealthy) {
-        return {
-          state: 'pass',
-          detail: `Project "${activeProject}" is ready for preview startup checks.`,
-        };
-      }
-      return {
-        state: 'warn',
-        detail: 'Preview likely needs provider setup or a fresh provider test first.',
-      };
-    })();
-
-    return [
-      {
-        id: 'provider-keys',
-        title: 'Add provider keys',
-        state: providerItem.state,
-        detail: providerItem.detail,
-        actionLabel: 'Go to Providers',
-        onAction: () => jumpToCategory('providers', 'providers:openai'),
-      },
-      {
-        id: 'provider-test',
-        title: 'Test provider connection',
-        state: diagnosticsItem.state,
-        detail: diagnosticsItem.detail,
-        actionLabel: 'Open Providers > Test',
-        onAction: () => jumpToCategory('providers', 'providers:diagnostics'),
-      },
-      {
-        id: 'agent-routing',
-        title: 'Confirm agent routing',
-        state: routingItem.state,
-        detail: routingItem.detail,
-        actionLabel: 'Go to Agents',
-        onAction: () => jumpToCategory('agents', 'agents:routing'),
-      },
-      {
-        id: 'preview-ready',
-        title: 'Preview ready',
-        state: previewItem.state,
-        detail: previewItem.detail,
-        actionLabel: 'Open Workspace',
-        onAction: () => {
-          setNotice('');
-          setError('');
-          onOpenWorkspace?.();
-        },
-      },
-    ];
-  }, [activeProject, agents, jumpToCategory, onOpenWorkspace, providerDiagnostics, providers]);
+  useEffect(() => {
+    if (!filteredCategories.some((item) => item.id === category)) {
+      setCategory(filteredCategories[0]?.id || 'providers');
+    }
+  }, [filteredCategories, category]);
 
   const updateDiagnostic = (provider, diagnostic) => {
     setProviderDiagnostics((prev) => {
@@ -425,101 +245,50 @@ export default function SettingsShell({
     });
   };
 
-  const clearMessages = () => {
-    if (notice) setNotice('');
-    if (error) setError('');
-  };
-
-  const renderGeneral = () => (
-    <section className="settings-section-card panel">
-      <header className="settings-section-head">
-        <div>
-          <h4>General</h4>
-          <p>Quick summary of your runtime configuration and what to fix first.</p>
-        </div>
-        <button type="button" className="ui-btn" onClick={refreshAll} disabled={loading}>
-          {loading ? 'Refreshing...' : 'Refresh'}
-        </button>
-      </header>
-
-      <div className="settings-general-grid">
-        <article>
-          <h5>Providers configured</h5>
-          <p>{providers.filter((item) => item?.has_key || item?.provider === 'ollama').length} of {PROVIDER_ORDER.length}</p>
-        </article>
-        <article>
-          <h5>Agents available</h5>
-          <p>{agents.length}</p>
-        </article>
-        <article>
-          <h5>Active project</h5>
-          <p>{activeProject || 'ai-office'}</p>
-        </article>
-        <article>
-          <h5>Current theme</h5>
-          <p>{themeMode} / {themeScheme}</p>
-        </article>
-      </div>
-
-      <SetupChecklist items={setupChecklistItems} />
-
-      <details className="settings-inline-details settings-general-guidance">
-        <summary>Beginner guidance and progress reset</summary>
-        <div className="settings-general-actions">
-          <article className="settings-general-action-card">
-            <h5>Beginner Mode</h5>
-            <p>Show guided steps, contextual help, and simplified controls across Workspace.</p>
-            <div className="settings-general-action-buttons">
-              <button
-                type="button"
-                className={`ui-btn ${beginnerMode ? 'ui-btn-primary' : ''}`}
-                onClick={() => setBeginnerMode(!beginnerMode)}
-              >
-                {beginnerMode ? 'Beginner Mode On' : 'Beginner Mode Off'}
-              </button>
-            </div>
-          </article>
-
-          <article className="settings-general-action-card">
-            <h5>Reset Beginner Progress</h5>
-            <p>Clear stepper progress and recommended-action history for this project.</p>
-            <div className="settings-general-action-buttons">
-              <button
-                type="button"
-                className="ui-btn"
-                onClick={() => {
-                  resetProjectProgress(activeProject || 'ai-office');
-                  setNotice(`Reset beginner progress for ${activeProject || 'ai-office'}.`);
-                  setError('');
-                }}
-              >
-                Reset current project
-              </button>
-              <button
-                type="button"
-                className="ui-btn"
-                onClick={() => {
-                  resetAllProgress();
-                  setNotice('Reset beginner progress for all projects.');
-                  setError('');
-                }}
-              >
-                Reset all projects
-              </button>
-            </div>
-          </article>
-        </div>
-      </details>
-    </section>
-  );
-
   const renderProviders = () => (
     <>
+      <section className="settings-section-card panel">
+        <header className="settings-section-head">
+          <div>
+            <h4>{firstRunSetup ? 'Initial Setup' : 'API Keys'}</h4>
+            <p>
+              {firstRunSetup
+                ? 'Add at least one cloud key to unlock full capability.'
+                : 'Manage provider keys, defaults, and connection tests.'}
+            </p>
+          </div>
+          <button type="button" className="ui-btn" onClick={refreshAll} disabled={loading}>
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </header>
+        <div className="settings-general-grid">
+          <article>
+            <h5>Cloud keys</h5>
+            <p>{hasCloudKeys ? 'Configured' : 'Missing'}</p>
+          </article>
+          <article>
+            <h5>Diagnostics</h5>
+            <p>{diagnosticsSummary}</p>
+          </article>
+          <article>
+            <h5>Agent routing</h5>
+            <p>{routingSummary}</p>
+          </article>
+          <article>
+            <h5>Next</h5>
+            <p>{hasCloudKeys ? 'Bind agents and start building.' : 'Save and test your provider keys.'}</p>
+          </article>
+        </div>
+      </section>
+
       <ApiKeysPanel
         modelCatalog={modelCatalog}
         focusSignal={focusSignal}
         onSaved={async () => {
           await Promise.all([loadProviders(), loadModelCatalog()]);
+          if (!hasCloudKeys) {
+            setNotice('Provider keys saved. You can now configure agent routing.');
+          }
         }}
         onDiagnosticUpdate={updateDiagnostic}
         onError={(message) => {
@@ -565,8 +334,65 @@ export default function SettingsShell({
     </>
   );
 
-  const renderAdvanced = () => (
+  const renderSystem = () => (
     <>
+      <section className="settings-section-card panel">
+        <header className="settings-section-head">
+          <div>
+            <h4>System</h4>
+            <p>Reset tools, advanced diagnostics, and runtime controls.</p>
+          </div>
+          <button type="button" className="ui-btn" onClick={() => onOpenWorkspace?.()}>
+            Open Workspace
+          </button>
+        </header>
+
+        <div className="settings-general-actions">
+          <article className="settings-general-action-card">
+            <h5>Beginner Mode</h5>
+            <p>Show or hide guided UI hints.</p>
+            <div className="settings-general-action-buttons">
+              <button
+                type="button"
+                className={`ui-btn ${beginnerMode ? 'ui-btn-primary' : ''}`}
+                onClick={() => setBeginnerMode(!beginnerMode)}
+              >
+                {beginnerMode ? 'Beginner Mode On' : 'Beginner Mode Off'}
+              </button>
+            </div>
+          </article>
+
+          <article className="settings-general-action-card">
+            <h5>Progress reset</h5>
+            <p>Clear guided progress indicators without deleting projects.</p>
+            <div className="settings-general-action-buttons">
+              <button
+                type="button"
+                className="ui-btn"
+                onClick={() => {
+                  resetProjectProgress(activeProject || 'ai-office');
+                  setNotice(`Reset beginner progress for ${activeProject || 'ai-office'}.`);
+                  setError('');
+                }}
+              >
+                Reset current project
+              </button>
+              <button
+                type="button"
+                className="ui-btn"
+                onClick={() => {
+                  resetAllProgress();
+                  setNotice('Reset beginner progress for all projects.');
+                  setError('');
+                }}
+              >
+                Reset all projects
+              </button>
+            </div>
+          </article>
+        </div>
+      </section>
+
       <AdvancedSettings
         themeMode={themeMode}
         activeProject={activeProject}
@@ -585,29 +411,49 @@ export default function SettingsShell({
       <details className="settings-inline-details settings-controls-wrap">
         <summary>Legacy controls</summary>
         <p>
-          Existing advanced operations are still available here. This section is collapsed by default to keep Settings clean.
+          Existing advanced operations remain available here.
+          Theme mode and scheme now live in the top app bar.
         </p>
         <Controls />
       </details>
+
+      <section className="settings-section-card panel">
+        <header className="settings-section-head">
+          <div>
+            <h4>About</h4>
+            <p>How settings affect runtime behavior.</p>
+          </div>
+        </header>
+        <ul className="settings-about-list">
+          <li>API Keys configure provider defaults and test diagnostics.</li>
+          <li>Agents define per-role provider/model routing.</li>
+          <li>System contains reset and diagnostics tools.</li>
+        </ul>
+      </section>
     </>
   );
 
-  const renderAbout = () => (
-    <section className="settings-section-card panel">
-      <header className="settings-section-head">
-        <div>
-          <h4>About</h4>
-          <p>How these settings affect runtime behavior.</p>
-        </div>
-      </header>
-      <ul className="settings-about-list">
-        <li>Provider cards save model/key-reference/base URL using existing API endpoints.</li>
-        <li>Agent runtime binds provider + model + key source per agent.</li>
-        <li>Appearance options are local UI preferences and do not touch backend state.</li>
-        <li>Advanced export creates a local JSON diagnostics report for sharing errors.</li>
-      </ul>
-    </section>
-  );
+  if (firstRunSetup) {
+    return (
+      <div className="settings-v3-shell">
+        <section className="settings-v3-content">
+          {error ? (
+            <div className="settings-v3-banner agent-config-error">
+              <strong>Settings error</strong>
+              <p>{error}</p>
+            </div>
+          ) : null}
+          {notice ? (
+            <div className="settings-v3-banner agent-config-notice">
+              <strong>Update</strong>
+              <p>{notice}</p>
+            </div>
+          ) : null}
+          {renderProviders()}
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="settings-v3-shell">
@@ -615,12 +461,14 @@ export default function SettingsShell({
         categories={filteredCategories}
         selectedCategory={category}
         onSelectCategory={(next) => {
-          clearMessages();
+          setNotice('');
+          setError('');
           setCategory(next);
         }}
         search={search}
         onSearchChange={(value) => {
-          clearMessages();
+          setNotice('');
+          setError('');
           setSearch(value);
         }}
       />
@@ -639,20 +487,19 @@ export default function SettingsShell({
           </div>
         ) : null}
 
-        {category === 'general' && renderGeneral()}
-        {category === 'appearance' && (
-          <AppearanceSettings
-            themeMode={themeMode}
-            onThemeModeChange={onThemeModeChange}
-            themeScheme={themeScheme}
-            onThemeSchemeChange={onThemeSchemeChange}
-            onCycleThemeScheme={onCycleThemeScheme}
-          />
-        )}
         {category === 'providers' && renderProviders()}
         {category === 'agents' && renderAgents()}
-        {category === 'advanced' && renderAdvanced()}
-        {category === 'about' && renderAbout()}
+        {category === 'system' && renderSystem()}
+
+        {category !== 'providers' && !hasCloudKeys ? (
+          <div className="settings-v3-banner agent-config-error">
+            <strong>Setup incomplete</strong>
+            <p>Add at least one cloud provider key in API Keys before running agent workflows.</p>
+            <button type="button" className="ui-btn" onClick={() => jumpToCategory('providers', 'providers:openai')}>
+              Go to API Keys
+            </button>
+          </div>
+        ) : null}
       </section>
     </div>
   );
