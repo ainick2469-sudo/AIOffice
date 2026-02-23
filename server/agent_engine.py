@@ -338,7 +338,13 @@ async def _bootstrap_build_loop(channel: str, user_message: str, active_project:
     if not created_tasks:
         return None
 
-    allowed_agents = await _builder_panel()
+    available_builder_panel = await _builder_panel()
+    allowed_agents = [aid for aid in available_builder_panel if aid in {"builder", "codex"}]
+    if "builder" not in allowed_agents:
+        allowed_agents.insert(0, "builder")
+    if "codex" not in allowed_agents:
+        allowed_agents.append("codex")
+    allowed_agents = allowed_agents[:2]
     first_pending = next((task for task in created_tasks if task.get("status") != "done"), None) or created_tasks[0]
     state = {
         "active": True,

@@ -48,7 +48,11 @@ def test_process_message_limits_initial_agent_count(monkeypatch):
         captured[channel] = list(initial_agents)
 
     monkeypatch.setattr(engine, "route", fake_route)
+    async def fake_bootstrap(_channel: str, _user_message: str, _active_project: dict):
+        return None
+
     monkeypatch.setattr(engine, "_conversation_loop", fake_conversation_loop)
+    monkeypatch.setattr(engine, "_bootstrap_build_loop", fake_bootstrap)
 
     async def scenario():
         await init_db()

@@ -127,6 +127,7 @@ def test_process_message_bootstraps_build_loop(monkeypatch):
         state = engine._build_loop_state(channel)
         assert state is not None
         assert len(state.get("task_ids") or []) == len(created_tasks)
+        assert state.get("allowed_agents") == ["builder", "codex"]
     finally:
         engine._active.pop(channel, None)
         engine._msg_count.pop(channel, None)
