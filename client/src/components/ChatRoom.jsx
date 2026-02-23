@@ -1597,6 +1597,17 @@ export default function ChatRoom({
                 key={msg.id}
                 className={`message ${getMsgClass(msg)} ${inOpenThread ? 'message-in-thread' : ''}`}
               >
+                <div className="msg-hover-actions">
+                  <button
+                    className="msg-icon-btn"
+                    type="button"
+                    onClick={() => copyMessage(msg)}
+                    data-tooltip="Copy message"
+                    aria-label="Copy message"
+                  >
+                    Copy
+                  </button>
+                </div>
                 {parent && (
                   <button className="msg-parent-preview" onClick={() => openThread(parent)}>
                     Replying to {getSender(parent).name}: {summarize(parent.content, 70)}

@@ -14,11 +14,42 @@ function normalizeLanguage(lang) {
   return value;
 }
 
+async function copyToClipboard(text) {
+  const value = String(text || '');
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = value;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'absolute';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      textarea.remove();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
 function ExecutableCodeBlock({ lang, code, props }) {
   const normalized = normalizeLanguage(lang || 'text');
   const runnable = RUNNABLE.has(normalized);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  const copyCode = async () => {
+    const ok = await copyToClipboard(code);
+    if (!ok) return;
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
 
   const runCode = () => {
     if (!runnable || running) return;
@@ -39,6 +70,9 @@ function ExecutableCodeBlock({ lang, code, props }) {
     <div className="code-block-wrapper">
       <div className="code-block-tools">
         {lang && <span className="code-lang">{lang}</span>}
+        <button className="code-copy-btn" onClick={copyCode}>
+          {copied ? 'Copied' : 'Copy Code'}
+        </button>
         {runnable && (
           <button className="code-run-btn" onClick={runCode} disabled={running}>
             {running ? 'Running...' : 'Run'}
