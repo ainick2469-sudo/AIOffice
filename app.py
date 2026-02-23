@@ -1,11 +1,13 @@
 """AI Office desktop launcher with optional system tray controls."""
 
+import argparse
 import os
 import sys
 import time
 import threading
 import logging
 import subprocess
+import socket
 from pathlib import Path
 
 from server.runtime_config import APP_ROOT, build_runtime_env
@@ -26,10 +28,54 @@ SYSTEM_ROOT = os.environ.get("SystemRoot", r"C:\Windows")
 CMD_EXE = str(Path(SYSTEM_ROOT) / "System32" / "cmd.exe")
 RUNTIME_WRAPPER = APP_ROOT / "with-runtime.cmd"
 CLIENT_BUILD_CMD = APP_ROOT / "client" / "dev-build.cmd"
+DEFAULT_BACKEND_PORT = 8000
+PORT_WAIT_SECONDS = 15
+MAX_PORT_FALLBACK_ATTEMPTS = 10
 
 
 def _build_runtime_env():
     return build_runtime_env(os.environ.copy())
+
+
+def _can_bind_port(host: str, port: int) -> bool:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+
+
+def resolve_backend_port(preferred_port: int = DEFAULT_BACKEND_PORT) -> int:
+    host = "127.0.0.1"
+    port = int(preferred_port or DEFAULT_BACKEND_PORT)
+    if port <= 0:
+        port = DEFAULT_BACKEND_PORT
+
+    for attempt in range(PORT_WAIT_SECONDS + 1):
+        if _can_bind_port(host, port):
+            if attempt > 0:
+                logger.info("Port %s became available after %ss wait.", port, attempt)
+            return port
+        if attempt < PORT_WAIT_SECONDS:
+            logger.warning("Port %s unavailable. Waiting for release (%ss/%ss)...", port, attempt + 1, PORT_WAIT_SECONDS)
+            time.sleep(1)
+
+    for offset in range(1, MAX_PORT_FALLBACK_ATTEMPTS + 1):
+        candidate = port + offset
+        if _can_bind_port(host, candidate):
+            logger.warning("Port %s still unavailable. Falling back to %s.", port, candidate)
+            return candidate
+
+    raise RuntimeError(
+        f"No available backend port found starting at {port} "
+        f"(checked {MAX_PORT_FALLBACK_ATTEMPTS + 1} ports)."
+    )
 
 
 def check_build():
@@ -50,7 +96,7 @@ def check_build():
         logger.info("Frontend built successfully")
 
 
-def start_server():
+def start_server(port: int):
     """Start FastAPI server in a thread."""
     import uvicorn
 
@@ -64,13 +110,13 @@ def start_server():
     uvicorn.run(
         "server.main:app",
         host="127.0.0.1",
-        port=8000,
+        port=int(port),
         log_level="info",
         reload=False,  # No reload in production
     )
 
 
-def wait_for_server(url="http://127.0.0.1:8000/api/health", timeout=30):
+def wait_for_server(url: str, timeout: int = 45):
     """Wait for the server to be ready."""
     import urllib.request
 
@@ -347,18 +393,28 @@ class DesktopWindowApi:
 
 def main():
     """Launch AI Office desktop app."""
+    parser = argparse.ArgumentParser(description="AI Office desktop app")
+    parser.add_argument("--port", type=int, default=DEFAULT_BACKEND_PORT, help="Preferred backend port")
+    args, _unknown = parser.parse_known_args()
+
+    preferred_port = int(args.port or DEFAULT_BACKEND_PORT)
+    selected_port = resolve_backend_port(preferred_port)
+    backend_base_url = f"http://127.0.0.1:{selected_port}"
+    backend_health_url = f"{backend_base_url}/api/health"
+
     logger.info("Starting AI Office Desktop...")
+    logger.info("Backend port selected: %s", selected_port)
 
     # Step 1: Check frontend build
     check_build()
 
     # Step 2: Start backend server in background thread
-    server_thread = threading.Thread(target=start_server, daemon=True)
+    server_thread = threading.Thread(target=start_server, args=(selected_port,), daemon=True)
     server_thread.start()
 
     # Step 3: Wait for server to be ready
-    logger.info("Waiting for server...")
-    if not wait_for_server():
+    logger.info("Waiting for server at %s ...", backend_health_url)
+    if not wait_for_server(url=backend_health_url, timeout=45):
         logger.error("Server failed to start.")
         sys.exit(1)
     logger.info("Server ready.")
@@ -373,7 +429,7 @@ def main():
 
         window_kwargs = {
             "title": "AI Office",
-            "url": "http://127.0.0.1:8000",
+            "url": backend_base_url,
             "width": 1400,
             "height": 900,
             "min_size": (800, 600),

@@ -1,5 +1,6 @@
 """AI Office launcher (desktop-only)."""
 
+import argparse
 import os
 import subprocess
 import sys
@@ -13,9 +14,18 @@ RUNTIME_WRAPPER = APP_ROOT / "with-runtime.cmd"
 
 
 def main():
+    parser = argparse.ArgumentParser(description="AI Office desktop launcher")
+    parser.add_argument("--port", type=int, default=None, help="Preferred backend port")
+    args, passthrough = parser.parse_known_args()
+
     print("AI Office starting in desktop mode...")
+    cmd = [CMD_EXE, "/c", str(RUNTIME_WRAPPER), sys.executable, "app.py"]
+    if isinstance(args.port, int) and args.port > 0:
+        cmd.extend(["--port", str(args.port)])
+    if passthrough:
+        cmd.extend(passthrough)
     rc = subprocess.call(
-        [CMD_EXE, "/c", str(RUNTIME_WRAPPER), sys.executable, "app.py"],
+        cmd,
         cwd=str(APP_ROOT),
         env=build_runtime_env(),
     )
